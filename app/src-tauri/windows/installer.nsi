@@ -34,6 +34,72 @@ ${StrLoc}
 
 {{#if installer_hooks}}
 !include "{{installer_hooks}}"
+
+; Obelisk: the previous install folder, whatever publisher name it was installed under (the registry key the
+; stock template uses is named after the publisher, which changed). Result in $R9 ("" when none).
+!macro ObeliskPreviousDir
+  ReadRegStr $R9 SHCTX "${MANUPRODUCTKEY}" ""
+  ${If} $R9 == ""
+    ReadRegStr $R9 SHCTX "${UNINSTKEY}" "InstallLocation"
+    StrCpy $R8 $R9 1
+    ${If} $R8 == '"'
+      StrCpy $R9 $R9 "" 1
+      StrCpy $R9 $R9 -1
+    ${EndIf}
+  ${EndIf}
+  ${If} $R9 == ""
+    ReadRegStr $R9 SHCTX "Software\Obelisk\${PRODUCTNAME}" ""
+  ${EndIf}
+!macroend
+
+; Obelisk: close a running Obelisk before its files are replaced or removed. Unlike the stock check, a process
+; that won't close (an AI chat's MCP helper from an older version, started inside another app's sandbox) doesn't
+; stop the install: its file gets moved aside instead (ObeliskMoveAside), which Windows allows for running programs.
+!macro ObeliskCloseApp executablePath
+  !define CloseID ${__LINE__}
+  nsis_tauri_utils::StrReplace "$(appRunningOkKill)" "{{product_name}}" "${PRODUCTNAME}"
+  Pop $R2
+  !insertmacro RestartManager_StartSession $R0
+  ${If} $R0 != ""
+    !insertmacro RestartManager_RegisterFile $R0 "${executablePath}"
+    ${If} $0 = 0
+      System::Call 'RSTRTMGR::RmGetList(p R0, *i .r1, *i .r2, p 0, *i .r3) i .r0'
+      ${If} $0 = ${ERROR_MORE_DATA}
+        IfSilent close_kill_${CloseID} 0
+        ${If} $PassiveMode != 1
+          MessageBox MB_OKCANCEL $R2 IDOK close_kill_${CloseID}
+          !insertmacro RestartManager_EndSession $R0
+          Abort
+        ${EndIf}
+        close_kill_${CloseID}:
+        System::Call 'RSTRTMGR::RmShutdown(p R0, i ${RmForceShutdown}, p 0) i .r0'
+      ${EndIf}
+    ${EndIf}
+    !insertmacro RestartManager_EndSession $R0
+  ${EndIf}
+  !undef CloseID
+!macroend
+
+; Obelisk: a file still held open by a program started from it can't be deleted or overwritten, but it can be
+; renamed. The renamed copy goes at the next restart, or when Obelisk next starts (mcp.rs sweeps "*.old-*").
+!macro ObeliskMoveAside file
+  ${If} ${FileExists} "${file}"
+    Delete "${file}"
+    ${If} ${FileExists} "${file}"
+      System::Call 'kernel32::GetTickCount() i .R8'
+      Rename "${file}" "${file}.old-$R8"
+      Delete /REBOOTOK "${file}.old-$R8"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Obelisk: the files an install puts in its folder (the MCP helper is made by Obelisk itself at start).
+!macro ObeliskClearFolder dir
+  !insertmacro ObeliskMoveAside "${dir}\${MAINBINARYNAME}.exe"
+  !insertmacro ObeliskMoveAside "${dir}\obelisk-mcp.exe"
+  !insertmacro ObeliskMoveAside "${dir}\WebView2Loader.dll"
+  Delete "${dir}\obelisk-mcp.exe.part"
+!macroend
 {{/if}}
 
 !define WEBVIEW2APPGUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -185,6 +251,7 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 ; 4. Custom page to ask user if he wants to reinstall/uninstall
 ;    only if a previous installation was detected
 Var ReinstallPageCheck
+Var CleanInstall
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
   ; Uninstall previous WiX installation if exists.
@@ -235,15 +302,15 @@ Function PageReinstall
   Pop $R0
   ; Reinstalling the same version
   ${If} $R0 = 0
-    StrCpy $R1 "$(alreadyInstalledLong)"
-    StrCpy $R2 "$(addOrReinstall)"
-    StrCpy $R3 "$(uninstallApp)"
+    StrCpy $R1 "This version of Obelisk is already installed. Your modpacks, accounts and sharing identity stay either way."
+    StrCpy $R2 "Repair: install it again and keep your settings (recommended)"
+    StrCpy $R3 "Clean install: start over with fresh settings and caches"
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(chooseMaintenanceOption)"
   ; Upgrading
   ${ElseIf} $R0 = 1
-    StrCpy $R1 "$(olderOrUnknownVersionInstalled)"
-    StrCpy $R2 "$(uninstallBeforeInstalling)"
-    StrCpy $R3 "$(dontUninstall)"
+    StrCpy $R1 "An older Obelisk is installed. Your modpacks, accounts and sharing identity stay either way."
+    StrCpy $R2 "Upgrade: keep your settings (recommended)"
+    StrCpy $R3 "Clean install: start over with fresh settings and caches"
     !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(choowHowToInstall)"
   ; Downgrading
   ${ElseIf} $R0 = -1
@@ -325,18 +392,20 @@ Function PageLeaveReinstall
   ; $R1 holds the radio buttons state:
   ;   1 => first choice was selected
   ;   0 => second choice was selected
-  ${If} $R0 = 0 ; Same version, proceed
-    ${If} $R1 = 1              ; User chose to add/reinstall
-      Goto reinst_done
-    ${Else}                    ; User chose to uninstall
-      Goto reinst_uninstall
-    ${EndIf}
-  ${ElseIf} $R0 = 1 ; Upgrading
-    ${If} $R1 = 1              ; User chose to uninstall
-      Goto reinst_uninstall
+  ; Obelisk: same version or upgrading, the first choice keeps the settings, the second starts them over. Neither
+  ; runs the old uninstaller (an older one gave up when a chat's MCP helper held its files): the install replaces
+  ; the files itself, and Obelisk resets its own data for a clean install (cleanup.rs).
+  ; A quiet install (/P, /S: the updater, scripts) shows no choice, so it always keeps the settings; only a
+  ; person ticking Clean install starts them over.
+  ${If} $R0 >= 0
+    ${If} $R1 = 1
+    ${OrIf} $PassiveMode = 1
+    ${OrIf} ${Silent}
+      StrCpy $CleanInstall 0
     ${Else}
-      Goto reinst_done         ; User chose NOT to uninstall
+      StrCpy $CleanInstall 1
     ${EndIf}
+    Goto reinst_done
   ${ElseIf} $R0 = -1 ; Downgrading
     ${If} $R1 = 1              ; User chose to uninstall
       Goto reinst_uninstall
@@ -353,7 +422,8 @@ Function PageLeaveReinstall
       ReadRegStr $R1 HKLM "$R6" "UninstallString"
       ExecWait '$R1' $0
     ${Else}
-      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+      !insertmacro ObeliskPreviousDir
+      StrCpy $4 $R9
       ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
@@ -510,15 +580,17 @@ Function un.ConfirmShow ; Add add a `Delete app data` check box
   ${EndIf}
   IntOp $5 100 * $2
   IntOp $6 400 * $2
-  IntOp $7 25 * $2
+  IntOp $7 40 * $2
   IntOp $4 $4 / 96
   IntOp $5 $5 / 96
   IntOp $6 $6 / 96
   IntOp $7 $7 / 96
-  System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(deleteAppData)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
+  IntOp $8 ${__NSD_CheckBox_STYLE} | 0x2000 ; BS_MULTILINE: the label wraps
+  System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "Keep my data: modpacks, instances and settings (untick to remove everything; modpacks go to the Recycle Bin)", i r8, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
   Pop $DeleteAppDataCheckbox
-  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $1
-  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $1 1
+  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $0
+  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $0 1
+  SendMessage $DeleteAppDataCheckbox ${BM_SETCHECK} ${BST_CHECKED} 0
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
 Function un.ConfirmLeave
@@ -713,7 +785,18 @@ Section Install
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro ObeliskCloseApp "$INSTDIR\${MAINBINARYNAME}.exe"
+  !insertmacro ObeliskClearFolder "$INSTDIR"
+
+  ; Obelisk: moving to a new folder leaves nothing behind in the old one.
+  ${If} $PrevInstDir != ""
+  ${AndIf} $PrevInstDir != $INSTDIR
+  ${AndIf} ${FileExists} "$PrevInstDir\${MAINBINARYNAME}.exe"
+    !insertmacro ObeliskCloseApp "$PrevInstDir\${MAINBINARYNAME}.exe"
+    !insertmacro ObeliskClearFolder "$PrevInstDir"
+    Delete "$PrevInstDir\uninstall.exe"
+    RMDir "$PrevInstDir"
+  ${EndIf}
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -745,6 +828,11 @@ Section Install
     WriteRegStr SHCTX "Software\Classes\\{{protocol}}\DefaultIcon" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0"
     WriteRegStr SHCTX "Software\Classes\\{{protocol}}\shell\open\command" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
   {{/each}}
+
+  ; Obelisk: a clean install resets Obelisk's own settings and caches (modpacks, accounts and keys stay).
+  ${If} $CleanInstall = 1
+    ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --reset-data'
+  ${EndIf}
 
   ; Create uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -850,7 +938,19 @@ Section Uninstall
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro ObeliskCloseApp "$INSTDIR\${MAINBINARYNAME}.exe"
+
+  ; Obelisk: what it left behind, done by Obelisk itself (cleanup.rs) while its program is still here. "Keep my
+  ; data" (ticked by default) keeps modpacks and settings; unticked, everything goes, modpacks to the Recycle Bin.
+  ${If} $UpdateMode <> 1
+    ${If} $DeleteAppDataCheckboxState = 1
+      ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --uninstall-cleanup --keep-data'
+    ${Else}
+      ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --uninstall-cleanup'
+    ${EndIf}
+  ${EndIf}
+  !insertmacro ObeliskClearFolder "$INSTDIR"
+  Delete "$INSTDIR\*.old-*"
 
   ; Delete the app directory and its content from disk
   ; Copy main executable
@@ -936,10 +1036,8 @@ Section Uninstall
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
   ${EndIf}
 
-  ; Delete app data if the checkbox is selected
-  ; and if not updating
-  ${If} $DeleteAppDataCheckboxState = 1
-  ${AndIf} $UpdateMode <> 1
+  ; Obelisk: the installer's own registry entries go with the program; the data (kept or not) is cleanup.rs's.
+  ${If} $UpdateMode <> 1
     ; Clear the install location $INSTDIR from registry
     DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
     DeleteRegKey /ifempty SHCTX "${MANUKEY}"
@@ -950,8 +1048,7 @@ Section Uninstall
     DeleteRegKey /ifempty HKCU "${MANUKEY}"
 
     SetShellVarContext current
-    RmDir /r "$APPDATA\${BUNDLEID}"
-    RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+    RmDir "$APPDATA\${BUNDLEID}"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
@@ -965,10 +1062,12 @@ Section Uninstall
   ${EndIf}
 SectionEnd
 
+Var PrevInstDir
 Function RestorePreviousInstallLocation
-  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-  StrCmp $4 "" +2 0
-    StrCpy $INSTDIR $4
+  !insertmacro ObeliskPreviousDir
+  StrCpy $PrevInstDir $R9
+  StrCmp $R9 "" +2 0
+    StrCpy $INSTDIR $R9
 FunctionEnd
 
 Function Skip

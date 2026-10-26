@@ -5,6 +5,7 @@ pub mod configs;
 pub mod crash;
 pub mod curseforge;
 pub mod dupes;
+pub mod guard;
 pub mod instdir;
 pub mod packcode;
 pub mod lightning;

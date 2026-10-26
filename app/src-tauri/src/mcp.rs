@@ -149,7 +149,10 @@ pub fn serve() {
 /// own config file directly: the Claude desktop app has no `claude` command on PATH.
 #[tauri::command]
 pub async fn ai_connect(assistant: String) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    // The helper program next to obelisk.exe (so connected chats never hold the app itself open), or the app.
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    let helper = me.with_file_name("obelisk-mcp.exe");
+    let exe = if helper.is_file() { helper } else { me }.to_string_lossy().into_owned();
     let home = std::path::PathBuf::from(std::env::var("USERPROFILE").map_err(|e| e.to_string())?);
     match assistant.as_str() {
         // Claude Code (also the desktop app's Code tab): user-scope servers live in ~/.claude.json.
@@ -199,4 +202,33 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     let tmp = path.with_extension("obelisk-tmp");
     std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// The assistants' MCP helper is a copy of this program named obelisk-mcp.exe, so connected chats never hold
+/// obelisk.exe itself open: Windows can't replace a running program's file, which used to make updates and
+/// uninstalls fail while a chat was connected. Brought up to date at every start; a copy still in use is
+/// renamed aside (Windows allows that) and swept up at a later start.
+pub fn refresh_helper() {
+    let Ok(me) = std::env::current_exe() else { return };
+    let Some(dir) = me.parent() else { return };
+    let helper = dir.join("obelisk-mcp.exe");
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.starts_with("obelisk-mcp.exe.old-") || n.starts_with("obelisk.exe.old") || n.starts_with("WebView2Loader.dll.old-") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    let same = std::fs::metadata(&helper).is_ok_and(|h| std::fs::metadata(&me).is_ok_and(|m| m.len() == h.len()))
+        && std::fs::read(&helper).ok() == std::fs::read(&me).ok();
+    if same {
+        return;
+    }
+    if helper.exists() && std::fs::remove_file(&helper).is_err() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = std::fs::rename(&helper, dir.join(format!("obelisk-mcp.exe.old-{stamp}")));
+    }
+    let tmp = dir.join("obelisk-mcp.exe.part");
+    if std::fs::copy(&me, &tmp).is_ok() {
+        let _ = std::fs::rename(&tmp, &helper);
+    }
 }

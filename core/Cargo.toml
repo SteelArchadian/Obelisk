@@ -17,8 +17,8 @@ sha2 = "0.10"
 sha1 = "0.10"
 iroh = "1.4"
 iroh-dns = "1.4"
+tempfile = "3"
 tokio = { version = "1", features = ["time", "sync", "io-util", "macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 keyring = { version = "3", features = ["windows-native"] }
-tempfile = "3"

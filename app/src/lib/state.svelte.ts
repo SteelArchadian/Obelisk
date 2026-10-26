@@ -44,7 +44,7 @@ export const app = $state({
   /** Import-by-code dialog: the code typed so far, or null when closed. */
   packImport: null as string | null,
   /** Live share codes per profile, so reopening Share shows the running one. */
-  packCodes: {} as Record<string, { code: string; expiresMs: number; files: number; custom: number }>,
+  packCodes: {} as Record<string, { code: string; expiresMs: number; files: number; custom: number; private?: number }>,
   /** Incoming changes from friends, per shared profile (for badges). */
   shareIncoming: {} as Record<string, number>,
   settingsSection: "general",

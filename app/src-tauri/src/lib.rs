@@ -1,5 +1,6 @@
 use obelisk_core as prism;
 mod bridge;
+mod cleanup;
 mod control;
 mod datadir;
 mod devrun;
@@ -14,6 +15,15 @@ pub fn build_id() -> &'static str {
 /// `obelisk.exe --mcp`: serve AI assistants over stdio (see mcp.rs).
 pub fn mcp_serve() {
     mcp::serve()
+}
+
+/// `obelisk.exe --reset-data` (the installer's clean install) and `--uninstall-cleanup` (the uninstaller); see cleanup.rs.
+pub fn reset_data() {
+    cleanup::reset_data()
+}
+
+pub fn uninstall_cleanup(keep_data: bool) -> Result<(), String> {
+    cleanup::uninstall(keep_data)
 }
 
 use prism::{ContentItem, Instance, World};
@@ -397,9 +407,9 @@ async fn pack_code_start(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>,
     let mr = mr.inner().clone();
     let (g, n) = (game.clone(), name.clone());
     let manifest = blocking(move || prism::packcode::manifest(&g, &n, Some(&mr), cf_client().as_ref())).await?;
-    let (files, custom) = (manifest.files.len(), manifest.files.iter().filter(|f| f.custom).count());
+    let (files, custom, private) = (manifest.files.len(), manifest.files.iter().filter(|f| f.custom).count(), manifest.private.len());
     let (code, expires) = share_net(&app, &net).await?.offer(&game, manifest).await?;
-    Ok(serde_json::json!({ "code": code, "expiresMs": expires * 1000, "files": files, "custom": custom }))
+    Ok(serde_json::json!({ "code": code, "expiresMs": expires * 1000, "files": files, "custom": custom, "private": private }))
 }
 
 #[tauri::command]
@@ -412,17 +422,19 @@ async fn pack_code_stop(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, 
 #[tauri::command]
 async fn pack_code_preview(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<prism::share_net::PackPreview, String> {
     let code = prism::packcode::normalize(&code)?;
-    share_net(&app, &net).await?.preview(&code).await
+    let cf = cf_client().map(std::sync::Arc::new);
+    share_net(&app, &net).await?.preview(&code, cf).await
 }
 
 /// Install a code's pack as a new profile; `with_custom` takes the files no site vouches for too.
-/// Progress goes out as "pack-import" events ({done, total, file}). Returns the new profile's id.
+/// Progress goes out as "pack-import" events ({done, total, file}). Returns the new profile and what was left out.
 #[tauri::command]
-async fn pack_code_import(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String, with_custom: bool) -> Result<String, String> {
+async fn pack_code_import(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String, with_custom: bool) -> Result<prism::share_net::ImportReport, String> {
     use tauri::Emitter;
     let code = prism::packcode::normalize(&code)?;
     let a = app.clone();
-    share_net(&app, &net).await?.import(&code, with_custom, move |p| { let _ = a.emit("pack-import", p); }).await
+    let cf = cf_client().map(std::sync::Arc::new);
+    share_net(&app, &net).await?.import(&code, with_custom, cf, move |p| { let _ = a.emit("pack-import", p); }).await
 }
 
 /// Share → Export as zip: the whole pack zipped into Downloads, then shown in Explorer.
@@ -1092,6 +1104,22 @@ async fn open_prism() -> Result<(), String> {
 /// Hand a modpack (URL or local .zip/.mrpack) to Prism's importer.
 #[tauri::command]
 async fn import_pack(source: String) -> Result<(), String> {
+    // A pack file from anywhere is opened and scanned first, like a share code's custom files.
+    let path = std::path::PathBuf::from(&source);
+    if path.is_file() {
+        let p = path.clone();
+        blocking(move || {
+            let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+            let found = prism::guard::inspect(&p.to_string_lossy(), &bytes);
+            if !found.serious.is_empty() {
+                return Err(format!("Not importing this pack: it {}.", found.serious.join("; ")));
+            }
+            if let prism::guard::Scan::Threat(t) = prism::guard::defender_scan(&p) {
+                return Err(format!("Not importing this pack: Windows Defender found a threat ({t})."));
+            }
+            Ok(())
+        }).await?;
+    }
     std::process::Command::new(prism::launcher_exe())
         .args(["--import", &source])
         .spawn()
@@ -1576,6 +1604,9 @@ pub fn run() {
             }
             // Local control API for the user's Minecraft chats (see control.rs).
             control::start(app.handle().clone());
+            if !sandboxed() {
+                std::thread::spawn(mcp::refresh_helper);
+            }
             selfupdate::watch(app.handle().clone(), || !control::busy() && running_java().is_empty());
             app.manage(std::sync::Arc::new(prism::modrinth::Client::new()?));
             // Shared packs: pull friends' changes every minute while Obelisk runs (only once a pack is shared).

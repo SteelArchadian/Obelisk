@@ -8,8 +8,11 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
 
-  type PackFile = { path: string; size: number; custom: boolean };
-  type Preview = { name: string; files: number; bytes: number; known: number; custom: PackFile[] };
+  type Findings = { serious: string[]; notes: string[] };
+  type Checked = { path: string; size: number; findings: Findings };
+  type Scan = { result: "clean" } | { result: "threat" | "unavailable"; detail: string };
+  type Preview = { name: string; files: number; bytes: number; known: number; custom: Checked[]; refused: Checked[]; scan: Scan };
+  type Report = { id: string; leftOut: string[]; scan: Scan };
 
   let code = $state(app.packImport ?? "");
   let stage = $state<"enter" | "looking" | "custom" | "installing">("enter");
@@ -34,7 +37,7 @@
     stage = "looking";
     try {
       preview = await invoke<Preview>("pack_code_preview", { code });
-      if (preview.custom.length) stage = "custom";
+      if (preview.custom.length || preview.refused.length || preview.scan.result !== "clean") stage = "custom";
       else install(false);
     } catch (e) { toast(String(e)); stage = "enter"; }
   }
@@ -54,11 +57,13 @@
     done = total = 0;
     const un = await listen<{ done: number; total: number; file: string }>("pack-import", (e) => { ({ done, total, file: current } = e.payload); });
     try {
-      await invoke<string>("pack_code_import", { code, withCustom });
+      const r = await invoke<Report>("pack_code_import", { code, withCustom });
       await syncInstances();
-      toast(`${preview?.name ?? "The pack"} is installed. It's in your Library.`);
+      const out = r.leftOut.length ? ` ${r.leftOut.length} ${r.leftOut.length === 1 ? "file was" : "files were"} left out.` : "";
+      const scan = r.scan.result === "unavailable" ? " Windows Defender couldn't scan it; your own antivirus should." : "";
+      toast(`${preview?.name ?? "The pack"} is installed. It's in your Library.${out}${scan}`);
       close();
-    } catch (e) { toast(String(e)); stage = preview?.custom.length ? "custom" : "enter"; }
+    } catch (e) { toast(String(e)); stage = "enter"; }
     finally { un(); }
   }
 </script>
@@ -80,19 +85,48 @@
       </div>
       <button class="link small" disabled={stage === "looking"} onclick={fromFile}>Or import a .zip / .mrpack file…</button>
     {:else if stage === "custom" && preview}
-      <div class="warn">
-        <b>{preview.name} has {preview.custom.length} custom {preview.custom.length === 1 ? "file" : "files"}.</b>
-        <p class="small">Modrinth and CurseForge vouch for {preview.known} of its {preview.files} files. These come only from your friend's PC, so nobody has checked them. Take them only if you trust who sent the code.</p>
-        <ul class="small">
-          {#each preview.custom.slice(0, 40) as f}<li><span>{f.path}</span><span class="muted">{mb(f.size)}</span></li>{/each}
-          {#if preview.custom.length > 40}<li class="muted">…and {preview.custom.length - 40} more</li>{/if}
-        </ul>
-      </div>
-      <div class="row">
-        <span class="spacer"></span>
-        <button class="ghost" onclick={() => install(false)}>Only known files</button>
-        <button class="primary danger" onclick={() => install(true)}>Include custom files</button>
-      </div>
+      {#if preview.scan.result === "threat"}
+        <div class="warn">
+          <b>Windows Defender found a threat in {preview.name}.</b>
+          <p class="small">{preview.scan.detail}</p>
+          <p class="small">Obelisk won't install this pack. Let whoever sent the code know: their PC may be infected.</p>
+        </div>
+        <div class="row"><span class="spacer"></span><button class="ghost" onclick={close}>Close</button></div>
+      {:else}
+        {#if preview.refused.length}
+          <div class="warn">
+            <b>{preview.refused.length} {preview.refused.length === 1 ? "file" : "files"} won't be installed.</b>
+            <p class="small">Obelisk never takes Windows programs or scripts from another PC, or code that shows signs of malware.</p>
+            <ul class="small">
+              {#each preview.refused.slice(0, 20) as f}<li class="col"><span>{f.path}</span><span class="why">{f.findings.serious.join("; ")}</span></li>{/each}
+            </ul>
+          </div>
+        {/if}
+        {#if preview.custom.length}
+          <div class="warn soft">
+            <b>{preview.name} has {preview.custom.length} custom {preview.custom.length === 1 ? "file" : "files"}.</b>
+            <p class="small">Modrinth and CurseForge vouch for {preview.known} of its {preview.files} files. These come only from your friend's PC. Obelisk opened them and found no signs of malware{preview.scan.result === "clean" ? ", and Windows Defender found nothing" : ""}, but no site has reviewed them. Take them only if you trust who sent the code.</p>
+            {#if preview.scan.result === "unavailable"}<p class="small">Windows Defender couldn't scan them ({preview.scan.detail}).</p>{/if}
+            <ul class="small">
+              {#each preview.custom.slice(0, 40) as f}
+                <li class="col"><span class="line"><span>{f.path}</span><span class="muted">{mb(f.size)}</span></span>
+                  {#if f.findings.notes.length}<span class="muted">{f.findings.notes.join("; ")}</span>{/if}</li>
+              {/each}
+              {#if preview.custom.length > 40}<li class="muted">…and {preview.custom.length - 40} more</li>{/if}
+            </ul>
+          </div>
+        {/if}
+        <div class="row">
+          <span class="spacer"></span>
+          {#if preview.custom.length}
+            <button class="ghost" onclick={() => install(false)}>Only known files</button>
+            <button class="primary danger" onclick={() => install(true)}>Include custom files</button>
+          {:else}
+            <button class="ghost" onclick={close}>Cancel</button>
+            <button class="primary" onclick={() => install(false)}>Install the rest</button>
+          {/if}
+        </div>
+      {/if}
     {:else}
       <p>Installing {preview?.name ?? "the pack"}…</p>
       <div class="bar"><i style:width="{total ? (done / total) * 100 : 0}%"></i></div>
@@ -116,6 +150,10 @@
   .go:disabled { opacity: 0.7; }
   .warn { border: 1px solid var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
   .warn b { color: var(--danger); }
+  .warn.soft { border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
+  li.col { flex-direction: column; gap: 1px; }
+  .line { display: flex; justify-content: space-between; gap: 12px; }
+  .why { color: var(--danger); }
   ul { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
   li { display: flex; justify-content: space-between; gap: 12px; }
   li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

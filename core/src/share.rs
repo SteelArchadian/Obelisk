@@ -105,7 +105,7 @@ pub fn allowed(path: &str) -> bool {
     if path == history::PACK_FILE {
         return true;
     }
-    if path.contains("..") || path.contains('\\') || path.contains(':') || path.starts_with('/') {
+    if path.contains("..") || path.contains('\\') || path.contains(':') || path.starts_with('/') || crate::guard::blocked(path) {
         return false;
     }
     let first = path.split('/').next().unwrap_or("");
@@ -277,6 +277,7 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     if let Some(missing) = todo.iter().find(|c| !missing_blobs(game, c).is_empty()) {
         return Err(format!("Still downloading the files for {}'s changes. Try again in a moment.", missing.author_name));
     }
+    vet_incoming(game, &todo)?;
     let who: Vec<&str> = todo.iter().map(|c| c.author_name.as_str()).collect::<HashSet<_>>().into_iter().collect();
     history::create(game, "safety", &format!("Before applying changes from {}", who.join(", ")), true)?;
 
@@ -316,6 +317,35 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     out.conflicts.dedup();
     save_state(game, &st)?;
     Ok(out)
+}
+
+/// Friends' files are checked before they land, the same way as a share code's custom files: code is opened
+/// and refused on signs of malware (guard.rs), and Windows Defender scans everything that would arrive.
+fn vet_incoming(game: &Path, todo: &[Changeset]) -> Result<(), String> {
+    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    for cs in todo {
+        for e in &cs.entries {
+            let Some(hash) = &e.hash else { continue };
+            if !allowed(&e.path) {
+                return Err(format!("{}'s changes include {}, which Obelisk never accepts from another PC.", cs.author_name, e.path));
+            }
+            let blob = blob_path(game, hash).ok_or("invalid file id")?;
+            let bytes = fs::read(&blob).map_err(|err| format!("{}: {err}", e.path))?;
+            if crate::guard::risky(&e.path) {
+                let f = crate::guard::inspect(&e.path, &bytes);
+                if !f.serious.is_empty() {
+                    return Err(format!("Not applying {}'s changes: {} {}.", cs.author_name, e.path, f.serious.join(", ")));
+                }
+            }
+            let to = dir.path().join(&e.path);
+            if let Some(d) = to.parent() { fs::create_dir_all(d).map_err(|e| e.to_string())? }
+            fs::write(&to, &bytes).map_err(|e| e.to_string())?;
+        }
+    }
+    if let crate::guard::Scan::Threat(t) = crate::guard::defender_scan(dir.path()) {
+        return Err(format!("Not applying these changes: Windows Defender found a threat in them ({t})."));
+    }
+    Ok(())
 }
 
 /// Don't apply a friend's changeset (keep my version). It won't be offered again.

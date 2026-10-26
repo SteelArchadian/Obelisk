@@ -146,6 +146,9 @@ pub struct Manifest {
     /// mmc-pack.json (loader and Minecraft version).
     pub pack: String,
     pub files: Vec<PackFile>,
+    /// Config files kept on the sharer's PC because they seem to hold a secret (never sent).
+    #[serde(skip)]
+    pub private: Vec<String>,
 }
 
 /// Folders whose files are game content that sites host.
@@ -169,6 +172,13 @@ pub fn manifest(game: &Path, name: &str, mr: Option<&modrinth::Client>, cf: Opti
         .filter(|f| f.path != "options.txt" && !f.path.starts_with("@instance/"))
         .map(|f| PackFile { path: f.path, size: f.size, sha1: f.hash, ..Default::default() })
         .collect();
+    // The sharer's secrets (bot tokens, webhooks, passwords in configs) don't leave this PC.
+    let mut private = Vec::new();
+    files.retain(|f| {
+        let secret = fs::read(game.join(&f.path)).is_ok_and(|b| crate::guard::holds_secret(&f.path, &b));
+        if secret { private.push(f.path.clone()) }
+        !secret
+    });
     let content = |p: &str| CONTENT.contains(&p.split('/').next().unwrap_or("")) && !p.contains("/.index/");
     // Modrinth: exact SHA-1.
     if let Some(mr) = mr {
@@ -201,13 +211,13 @@ pub fn manifest(game: &Path, name: &str, mr: Option<&modrinth::Client>, cf: Opti
     for f in files.iter_mut() {
         f.custom = f.site.is_empty() && (content(&f.path) || is_code(&f.path));
     }
-    Ok(Manifest { v: 1, name: name.to_string(), pack, files })
+    Ok(Manifest { v: 1, name: name.to_string(), pack, files, private })
 }
 
 /// A path from someone else's list, made safe: only inside the pack folders a backup tracks.
 pub fn safe_path(p: &str) -> Option<&str> {
     let first = p.split('/').next().unwrap_or("");
-    let ok = !p.contains("..") && !p.contains('\\') && !p.contains(':') && !p.starts_with('/')
+    let ok = !p.contains("..") && !p.contains('\\') && !p.contains(':') && !p.starts_with('/') && !crate::guard::blocked(p)
         && history::TRACKED.contains(&first) && p.len() > first.len() + 1;
     ok.then_some(p)
 }
@@ -232,11 +242,14 @@ fn sha1_of(bytes: &[u8]) -> String {
     crate::sha1_hex(bytes)
 }
 
+/// A download address on Modrinth's or CurseForge's own file servers (the only ones a pack list may point at).
+pub fn site_url_ok(url: &str) -> bool {
+    ["https://cdn.modrinth.com/", "https://edge.forgecdn.net/", "https://mediafilez.forgecdn.net/"].iter().any(|h| url.starts_with(h))
+}
+
 /// Download one file from its site. None = not on a site, or the download failed/didn't match.
 pub fn from_site(f: &PackFile) -> Option<Vec<u8>> {
-    let ok_host = f.url.starts_with("https://cdn.modrinth.com/") || f.url.starts_with("https://edge.forgecdn.net/")
-        || f.url.starts_with("https://mediafilez.forgecdn.net/");
-    if f.url.is_empty() || !ok_host { return None }
+    if !site_url_ok(&f.url) { return None }
     let resp = agent().ok()?.get(&f.url).call().ok()?;
     let mut bytes = Vec::with_capacity(f.size as usize);
     resp.into_reader().take(f.size + 1).read_to_end(&mut bytes).ok()?;
@@ -297,6 +310,11 @@ pub fn export_zip(game: &Path, name: &str, out: &Path, mut progress: impl FnMut(
         }
         let total = list.len();
         for (n, (rel, path)) in list.iter().enumerate() {
+            // The sharer's secrets stay home (see guard::holds_secret).
+            if fs::read(path).is_ok_and(|b| crate::guard::holds_secret(rel, &b)) {
+                progress(n + 1, total);
+                continue;
+            }
             let mut f = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             z.start_file(format!("minecraft/{rel}"), opts).map_err(|e| e.to_string())?;
             std::io::copy(&mut f, &mut z).map_err(|e| format!("{}: {e}", path.display()))?;

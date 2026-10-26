@@ -67,6 +67,7 @@
           <button class="ghost" onclick={copy}>Copy</button>
         </div>
         <p class="small">Expires in <b>{clock}</b> · {live.files} files{#if live.custom} · {live.custom} custom{/if}</p>
+        {#if live.private}<p class="muted small">{live.private} config {live.private === 1 ? "file stays" : "files stay"} on your PC: {live.private === 1 ? "it seems" : "they seem"} to hold a password, token or webhook.</p>{/if}
         <p class="muted small">Keep Obelisk open until they're done: the files come from your PC, or from Modrinth and CurseForge where those have them.</p>
         <div class="row"><span class="spacer"></span><button class="ghost" onclick={stopCode}>Stop sharing</button></div>
       </section>
