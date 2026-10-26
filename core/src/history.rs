@@ -417,10 +417,11 @@ pub fn create(game: &Path, kind: &str, label: &str, only_if_changed: bool) -> Re
     if only_if_changed && last.is_some() && changes.is_empty() {
         return Ok(None);
     }
-    for f in &files {
+    for (i, f) in files.iter().enumerate() {
         if let Some(p) = real(game, &f.path) {
             store(game, &p, &f.hash)?;
         }
+        crate::work::progress("", i + 1, files.len());
     }
     let at = now_ms();
     let mut id = format!("{at}");
@@ -507,8 +508,9 @@ pub fn restore(game: &Path, id: &str) -> Result<Vec<Change>, String> {
             if let Err(err) = put(game, &e.path, None) { errors.push(err); }
         }
     }
-    for e in &want {
+    for (i, e) in want.iter().enumerate() {
         if let Err(err) = put(game, &e.path, Some(e)) { errors.push(err); }
+        crate::work::progress("", i + 1, want.len());
     }
     if errors.is_empty() { Ok(changes) } else { Err(errors.join("\n")) }
 }

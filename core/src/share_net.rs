@@ -65,6 +65,18 @@ struct Offer {
     game: PathBuf,
     manifest: Arc<Manifest>,
     expires: u64,
+    stats: Arc<Mutex<OfferStatus>>,
+}
+
+/// How a code's sharing is going, for the sharer's screen: friends connected now, files sent, when the last
+/// one went (unix ms), and friends whose import finished.
+#[derive(Serialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferStatus {
+    pub connected: usize,
+    pub sent: usize,
+    pub last_ms: u64,
+    pub finished: usize,
 }
 
 type Offers = Arc<Mutex<HashMap<String, Offer>>>;
@@ -101,6 +113,10 @@ pub struct PackPreview {
     pub refused: Vec<CustomFile>,
     /// Windows Defender's verdict on the custom files.
     pub scan: Scan,
+    /// The sharer's Java, memory and JVM arguments (vetted), for the friend to take or leave.
+    pub game: Option<packcode::GameSettings>,
+    /// A Collaborate code: the invite to join with (then nothing else here is filled in).
+    pub invite: Option<String>,
 }
 
 /// How an import went: the new profile, what was left out and why, and Defender's verdict on the result.
@@ -145,6 +161,21 @@ pub fn stop_incoming() {
 
 fn stopped() -> Result<(), String> {
     if STOP.load(std::sync::atomic::Ordering::SeqCst) { Err("Stopped.".into()) } else { Ok(()) }
+}
+
+/// Defender scans `dir`, telling the screen how long it's been at it. Import → Stop ends it.
+async fn scan_watched(dir: std::path::PathBuf, files: usize, what: &'static str, progress: &Progress) -> Result<Scan, String> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let job = tokio::task::spawn_blocking(move || guard::defender_scan_watched(&dir, |s| { let _ = tx.send(s); }, || stopped().is_err()));
+    let label = |s: u64| format!("Windows Defender is scanning the {what} ({files}) · {}:{:02}", s / 60, s % 60);
+    progress(ImportProgress { step: "scanning", done: 0, total: files, file: label(0) });
+    tokio::pin!(job);
+    loop {
+        tokio::select! {
+            r = &mut job => return r.map_err(|e| e.to_string()),
+            Some(s) = rx.recv() => progress(ImportProgress { step: "scanning", done: 0, total: files, file: label(s) }),
+        }
+    }
 }
 
 /// A sharer that goes quiet this long (asleep, Obelisk closed, connection gone) is given up on.
@@ -271,7 +302,7 @@ impl Net {
         tokio::task::spawn_blocking(move || packcode::publish(&c, &note)).await.map_err(|e| e.to_string())??;
         let mut offers = self.offers.lock().unwrap();
         offers.retain(|_, o| o.expires > packcode::now_secs());
-        offers.insert(code.clone(), Offer { game: game.to_path_buf(), manifest: Arc::new(manifest), expires });
+        offers.insert(code.clone(), Offer { game: game.to_path_buf(), manifest: Arc::new(manifest), expires, stats: Default::default() });
         drop(offers);
         // The code is the key to its note, so anyone who sees the code could point it at their own PC. While the
         // offer is live, put it back whenever it isn't ours (the receiving side vets everything regardless).
@@ -294,6 +325,22 @@ impl Net {
     }
 
     /// Stop offering a code early.
+    /// Collaborate → Get a code: the invite to a collaborative pack, handed out under a short code for 30 minutes.
+    pub async fn offer_invite(&self, game: &Path, name: &str) -> Result<(String, u64), String> {
+        let invite = self.share(game, name).await?;
+        let m = Manifest { v: 1, name: name.to_string(), pack: String::new(), files: vec![], icon: None, game: None,
+            invite: Some(invite), private: vec![] };
+        self.offer(game, m).await
+    }
+
+    /// How sharing under `code` is going (None once it's stopped or expired).
+    pub fn offer_status(&self, code: &str) -> Option<OfferStatus> {
+        let offers = self.offers.lock().unwrap();
+        let o = offers.get(code).filter(|o| o.expires > packcode::now_secs())?;
+        let s = o.stats.lock().unwrap().clone();
+        Some(s)
+    }
+
     pub fn withdraw(&self, code: &str) {
         self.offers.lock().unwrap().remove(code);
     }
@@ -383,7 +430,9 @@ impl Net {
                 std::fs::write(&to, &fetched[&c.path]).map_err(|e| e.to_string())?;
             }
             let p = dir.path().to_path_buf();
-            tokio::task::spawn_blocking(move || guard::defender_scan(&p)).await.map_err(|e| e.to_string())?
+            let s = scan_watched(p, custom.len(), "custom files", progress).await?;
+            stopped()?;
+            s
         };
         Ok(Vetting { known, custom, refused, scan, fetched })
     }
@@ -393,11 +442,18 @@ impl Net {
                          progress: impl Fn(ImportProgress) + Send + Sync + 'static) -> Result<PackPreview, String> {
         STOP.store(false, std::sync::atomic::Ordering::SeqCst);
         let (sess, m) = self.pack_session(code).await?;
+        if let Some(inv) = m.invite.clone() {
+            sess.conn.close(0u32.into(), b"invite");
+            share::parse_invite(&inv)?;
+            return Ok(PackPreview { name: m.name.clone(), files: 0, bytes: 0, known: 0, custom: vec![], refused: vec![],
+                scan: Scan::Clean, game: None, invite: Some(inv) });
+        }
         let v = self.vet(&sess, code, &m, cf, &progress).await;
-        sess.conn.close(0u32.into(), b"done");
+        // Only a finished import hangs up with "done" (the sharer's screen then says they can close).
+        sess.conn.close(0u32.into(), b"checked");
         let v = v?;
         Ok(PackPreview { name: m.name.clone(), files: m.files.len(), bytes: m.files.iter().map(|f| f.size).sum(),
-            known: v.known, custom: v.custom, refused: v.refused, scan: v.scan })
+            known: v.known, custom: v.custom, refused: v.refused, scan: v.scan, game: packcode::vet_game_settings(m.game.clone()), invite: None })
     }
 
     /// Install a code's pack as a new profile. Mods come from their sites where possible (checked against the
@@ -408,9 +464,13 @@ impl Net {
                         progress: impl Fn(ImportProgress) + Send + Sync + 'static) -> Result<ImportReport, String> {
         STOP.store(false, std::sync::atomic::Ordering::SeqCst);
         let (sess, m) = self.pack_session(code).await?;
+        if m.invite.is_some() {
+            sess.conn.close(0u32.into(), b"invite");
+            return Err("That's a Collaborate code: paste it into Import to join the pack.".into());
+        }
         let vet = match self.vet(&sess, code, &m, cf, &progress).await {
             Ok(v) => v,
-            Err(e) => { sess.conn.close(0u32.into(), b"done"); return Err(e) }
+            Err(e) => { sess.conn.close(0u32.into(), b"failed"); return Err(e) }
         };
         if let Scan::Threat(t) = &vet.scan {
             sess.conn.close(0u32.into(), b"done");
@@ -429,6 +489,8 @@ impl Net {
         let total = files.len();
         let progress = Arc::new(progress);
         let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Files the sharer sent (not checked against Modrinth's or CurseForge's own copy): the ones Defender scans after.
+        let mut sent: Vec<(String, Vec<u8>)> = Vec::new();
         let result: Result<(), String> = async {
             // Site downloads, a few at a time; anything that fails comes from the sharer instead.
             let queue = Arc::new(Mutex::new(files.iter().filter(|f| packcode::site_url_ok(&f.url)).cloned().collect::<Vec<_>>()));
@@ -471,6 +533,7 @@ impl Net {
                     continue;
                 }
                 packcode::place(&game, &f, &bytes)?;
+                sent.push((f.path.clone(), bytes));
                 let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 progress(ImportProgress { step: "installing", done: n, total, file: f.path.clone() });
             }
@@ -486,6 +549,7 @@ impl Net {
                     continue;
                 }
                 packcode::place(&game, &f, &bytes)?;
+                sent.push((f.path.clone(), bytes));
                 let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 progress(ImportProgress { step: "installing", done: n, total, file: f.path.clone() });
             }
@@ -497,9 +561,33 @@ impl Net {
             let _ = std::fs::remove_dir_all(self.instances.join(&id));
             return Err(e);
         }
-        progress(ImportProgress { step: "scanning", done: total, total, file: "Windows Defender is scanning the new profile".into() });
-        let g = game.clone();
-        let scan = tokio::task::spawn_blocking(move || guard::defender_scan(&g)).await.map_err(|e| e.to_string())?;
+        // Defender scans everything the sharer sent, exactly as installed. Files from Modrinth and CurseForge are
+        // byte-for-byte the sites' own copies (their hashes were checked), and real-time protection saw each as it was written.
+        let scan = if sent.is_empty() { Scan::Clean } else {
+            let dir = tempfile::tempdir().map_err(|e| e.to_string());
+            let scanned = match dir {
+                Ok(dir) => {
+                    let mut r = Ok(());
+                    for (path, bytes) in &sent {
+                        let to = dir.path().join(path);
+                        if let Some(d) = to.parent() { if let Err(e) = std::fs::create_dir_all(d) { r = Err(e.to_string()); break } }
+                        if let Err(e) = std::fs::write(&to, bytes) { r = Err(e.to_string()); break }
+                    }
+                    match r {
+                        Ok(()) => scan_watched(dir.path().to_path_buf(), sent.len(), "files your friend sent", &*progress).await.and_then(|s| stopped().map(|_| s)),
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            match scanned {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(self.instances.join(&id));
+                    return Err(e);
+                }
+            }
+        };
         if let Scan::Threat(t) = &scan {
             let _ = std::fs::remove_dir_all(self.instances.join(&id));
             return Err(format!("Windows Defender found a threat in the installed pack ({t}). It has been removed."));
@@ -724,10 +812,27 @@ struct PackHandler {
 
 impl ProtocolHandler for PackHandler {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+        // The code's counters, once this friend has asked for something under a live code.
+        let mut stats: Option<Arc<Mutex<OfferStatus>>> = None;
         while let Ok((mut send, mut recv)) = conn.accept_bi().await {
             let Ok(bytes) = recv.read_to_end(64 * 1024).await else { break };
             let (head, body, ok) = match serde_json::from_slice::<PackReq>(&bytes) {
-                Ok(req) => self.answer(req),
+                Ok(req) => {
+                    let (code, file) = match &req { PackReq::Manifest { code } => (code.clone(), false), PackReq::File { code, .. } => (code.clone(), true) };
+                    let r = self.answer(req);
+                    if r.2 {
+                        if stats.is_none() {
+                            stats = self.offers.lock().unwrap().get(&code).map(|o| o.stats.clone());
+                            if let Some(s) = &stats { s.lock().unwrap().connected += 1 }
+                        }
+                        if let Some(s) = &stats {
+                            let mut s = s.lock().unwrap();
+                            if file { s.sent += 1 }
+                            s.last_ms = packcode::now_secs() * 1000;
+                        }
+                    }
+                    r
+                }
                 Err(_) => (Resp { error: Some("bad request".into()), ..Default::default() }, Vec::new(), false),
             };
             let h = serde_json::to_vec(&head).unwrap_or_default();
@@ -741,7 +846,15 @@ impl ProtocolHandler for PackHandler {
                 break; // a wrong or dead code gets nothing more on this connection
             }
         }
-        conn.closed().await;
+        let why = conn.closed().await;
+        if let Some(s) = stats {
+            let mut s = s.lock().unwrap();
+            s.connected = s.connected.saturating_sub(1);
+            // An import that went all the way through says so as it hangs up.
+            if matches!(&why, iroh::endpoint::ConnectionError::ApplicationClosed(c) if &c.reason[..] == b"done") {
+                s.finished += 1;
+            }
+        }
         Ok(())
     }
 }

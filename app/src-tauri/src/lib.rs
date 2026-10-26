@@ -51,6 +51,12 @@ async fn instance_icon(icon_key: String) -> Option<String> {
     prism::icon_data_url(&prism::data_dir(), &icon_key)
 }
 
+/// Library → Change Picture: `png` is the picture the window already cropped and shrank (base64).
+#[tauri::command]
+async fn set_instance_icon(instance_id: String, png: String) -> Result<String, String> {
+    blocking(move || prism::set_icon_base64(&prism::data_dir(), &instance_id, &png)).await
+}
+
 #[tauri::command]
 async fn list_content(instance_id: String, kind: String) -> Result<Vec<ContentItem>, String> {
     kind_ok(&kind)?;
@@ -303,7 +309,7 @@ async fn set_profile_options(instance_id: String, options: prism::ProfileOptions
 
 #[tauri::command]
 async fn clone_instance(instance_id: String, name: String) -> Result<String, String> {
-    blocking(move || prism::clone_instance(&prism::data_dir(), &instance_id, &name)).await
+    blocking(move || prism::work::run("Copying the pack", || prism::clone_instance(&prism::data_dir(), &instance_id, &name))).await
 }
 
 #[tauri::command]
@@ -412,6 +418,12 @@ async fn pack_code_start(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>,
     Ok(serde_json::json!({ "code": code, "expiresMs": expires * 1000, "files": files, "custom": custom, "private": private }))
 }
 
+/// Share → code: friends connected, files sent, imports finished (None once the code is gone).
+#[tauri::command]
+async fn pack_code_status(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<Option<prism::share_net::OfferStatus>, String> {
+    Ok(share_net(&app, &net).await?.offer_status(&code))
+}
+
 #[tauri::command]
 async fn pack_code_stop(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<(), String> {
     share_net(&app, &net).await?.withdraw(&code);
@@ -504,6 +516,15 @@ async fn share_stop(instance_id: String) -> Result<(), String> {
     prism::share::stop(&game(&instance_id)?)
 }
 
+/// Collaborate → Get a code: a short code (like Share's) that carries the invite; the friend pastes it into Import.
+#[tauri::command]
+async fn collab_code(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String) -> Result<serde_json::Value, String> {
+    let game = game(&instance_id)?;
+    let name = instance(&instance_id)?.name;
+    let (code, expires) = share_net(&app, &net).await?.offer_invite(&game, &name).await?;
+    Ok(serde_json::json!({ "code": code, "expiresMs": expires * 1000 }))
+}
+
 #[tauri::command]
 async fn share_join(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<String, String> {
     share_net(&app, &net).await?.join(&code).await
@@ -535,12 +556,12 @@ async fn backups(instance_id: String) -> Result<BackupState, String> {
 async fn create_checkpoint(app: tauri::AppHandle, instance_id: String, label: String) -> Result<prism::history::Backup, String> {
     let game = game(&instance_id)?;
     let (keep_auto, keep_manual) = backup_limits(&app);
-    blocking(move || {
+    blocking(move || prism::work::run("Taking a backup", || {
         let label = if label.trim().is_empty() { "Checkpoint".to_string() } else { label.trim().to_string() };
         let b = prism::history::create(&game, "manual", &label, false)?.ok_or("nothing to back up")?;
         prism::history::prune(&game, keep_auto, keep_manual)?;
         Ok(b)
-    }).await
+    })).await
 }
 
 /// The noon/midnight backup: `slot_ms` is when the current slot began (the UI knows the time zone).
@@ -575,16 +596,16 @@ async fn change_backup(app: tauri::AppHandle, instance_id: String, label: String
 async fn safety_backup(app: tauri::AppHandle, instance_id: String, label: String) -> Result<(), String> {
     let game = game(&instance_id)?;
     let (keep_auto, keep_manual) = backup_limits(&app);
-    blocking(move || {
+    blocking(move || prism::work::run("Taking a safety backup", || {
         prism::history::create(&game, "safety", &label, true)?;
         prism::history::prune(&game, keep_auto, keep_manual).map(|_| ())
-    }).await
+    })).await
 }
 
 #[tauri::command]
 async fn restore_backup(instance_id: String, backup_id: String) -> Result<Vec<prism::history::Change>, String> {
     let game = game(&instance_id)?;
-    blocking(move || prism::history::restore(&game, &backup_id)).await
+    blocking(move || prism::work::run("Restoring the backup", || prism::history::restore(&game, &backup_id))).await
 }
 
 #[tauri::command]
@@ -1116,7 +1137,7 @@ async fn import_pack(source: String) -> Result<(), String> {
     let path = std::path::PathBuf::from(&source);
     if path.is_file() {
         let p = path.clone();
-        blocking(move || {
+        blocking(move || prism::work::run("Checking the pack file", || {
             let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
             let found = prism::guard::inspect(&p.to_string_lossy(), &bytes);
             if !found.serious.is_empty() {
@@ -1126,7 +1147,7 @@ async fn import_pack(source: String) -> Result<(), String> {
                 return Err(format!("Not importing this pack: Windows Defender found a threat ({t})."));
             }
             Ok(())
-        }).await?;
+        })).await?;
     }
     std::process::Command::new(prism::launcher_exe())
         .args(["--import", &source])
@@ -1617,6 +1638,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // Slow jobs tell the window what they're doing (its small progress bar).
+            {
+                use tauri::Emitter;
+                let h = app.handle().clone();
+                prism::work::set_sink(move |w| { let _ = h.emit("work", w); });
+            }
             // Tray icon: Obelisk keeps running there when the window is closed (Settings can turn that off).
             {
                 use tauri::menu::{Menu, MenuItem};
@@ -1713,13 +1740,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, datadir::data_dir_get, datadir::data_dir_set,
-            list_instances, instance_icon, list_content, content_icons, set_enabled, delete_content,
+            list_instances, instance_icon, set_instance_icon, list_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings,
             set_settings, set_cf_key, has_cf_key, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, pack_code_start, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

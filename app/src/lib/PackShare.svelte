@@ -4,6 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { app, toast } from "./state.svelte";
+  import { settings } from "./settings.svelte";
   import type { Instance } from "./api";
 
   let { inst }: { inst: Instance } = $props();
@@ -20,8 +21,18 @@
   const left = $derived(live ? Math.max(0, live.expiresMs - now) : 0);
   const clock = $derived(`${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, "0")}`);
 
+  // How the friend is getting on, so the screen can say whether Obelisk must stay open.
+  type Status = { connected: number; sent: number; lastMs: number; finished: number };
+  let status = $state<Status | null>(null);
+  const downloading = $derived(!!status && (status.connected > 0 || now - status.lastMs < 15000));
+  const finished = $derived(!!status && status.finished > 0 && !downloading);
+
   $effect(() => {
-    const t = setInterval(() => (now = Date.now()), 1000);
+    const t = setInterval(() => {
+      now = Date.now();
+      if (live) invoke<Status | null>("pack_code_status", { code: live.code }).then((s) => (status = s)).catch(() => {});
+      else status = null;
+    }, 1000);
     return () => clearInterval(t);
   });
 
@@ -37,6 +48,7 @@
 
   async function stopCode() {
     if (!live) return;
+    if (downloading && !confirm("Your friend is still downloading this pack. Stop sharing anyway? They won't get the rest.")) return;
     try { await invoke("pack_code_stop", { code: live.code }); } catch (e) { toast(String(e)); }
     delete app.packCodes[inst.id];
   }
@@ -68,7 +80,14 @@
         </div>
         <p class="small">Expires in <b>{clock}</b> · {live.files} files{#if live.custom} · {live.custom} custom{/if}</p>
         {#if live.private}<p class="muted small">{live.private} config {live.private === 1 ? "file stays" : "files stay"} on your PC: {live.private === 1 ? "it seems" : "they seem"} to hold a password, token or webhook.</p>{/if}
-        <p class="muted small">Keep Obelisk open until they're done: the files come from your PC, or from Modrinth and CurseForge where those have them.</p>
+        {#if finished}
+          <p class="note ok small">Your friend has the pack. You can stop sharing and close Obelisk.</p>
+        {:else if downloading}
+          <p class="note warn small">Your friend is downloading · {status?.sent ?? 0} files sent. Keep Obelisk open and don't let this PC sleep until they're done.</p>
+        {:else}
+          <p class="muted small">Keep Obelisk running until your friend has imported it: some files come from your PC (the rest from Modrinth and CurseForge).
+            {settings.closeToTray ? "You can close this window; Obelisk keeps sharing from the tray." : "Closing Obelisk's window stops sharing."}</p>
+        {/if}
         <div class="row"><span class="spacer"></span><button class="ghost" onclick={stopCode}>Stop sharing</button></div>
       </section>
     {:else if zipPath}
@@ -96,6 +115,9 @@
 </div>
 
 <style>
+  .note { border-radius: 6px; padding: 8px 10px; }
+  .note.ok { background: color-mix(in srgb, var(--ok, #3fb950) 16%, transparent); }
+  .note.warn { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .back { position: fixed; inset: 0; background: rgb(0 0 0 / 0.6); display: grid; place-items: center; z-index: 40; }
   .dialog { position: relative; width: min(560px, 94vw); max-height: 90vh; overflow-y: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; outline: none; }
   .x { position: absolute; top: 10px; right: 10px; background: none; border: 0; color: var(--muted); padding: 4px 8px; }

@@ -41,6 +41,7 @@
   import SettingsPage from "$lib/SettingsPage.svelte";
   import Welcome from "$lib/Welcome.svelte";
   import WhatsNew from "$lib/WhatsNew.svelte";
+  import WorkBar from "$lib/WorkBar.svelte";
   import { loadSettings, settings } from "$lib/settings.svelte";
   import { refreshRunning } from "$lib/play.svelte";
 
@@ -175,6 +176,17 @@
   }
 
   const win = getCurrentWindow();
+
+  // Closing the window quits Obelisk when it isn't kept in the tray, which ends any sharing under way.
+  // (With the tray on, the app hides the window itself; a listener here must then not let it be destroyed.)
+  onMount(() => {
+    const un = win.onCloseRequested((e) => {
+      if (settings.closeToTray) return e.preventDefault();
+      const sharing = Object.values(app.packCodes).some((c) => c.expiresMs > Date.now());
+      if (sharing && !confirm("You're sharing a pack. Closing Obelisk stops it, and a friend who is still downloading won't get the rest. Close anyway?")) e.preventDefault();
+    });
+    return () => { un.then((u) => u()); };
+  });
 
   /** Search as you type: jumps to Browse on the first keystroke; Browse debounces the request. */
   function liveSearch(value: string) {
@@ -349,6 +361,7 @@
 {#if app.packImport !== null}<PackImport />{/if}
 <PackMenu />
 {#if showWelcome && !settings.welcomed}<Welcome />{/if}
+<WorkBar />
 {#if whatsNew}<WhatsNew version={whatsNew.version} notes={whatsNew.notes} close={() => (whatsNew = null)} />{/if}
 {#if app.toast}<div class="toast" role="status">{app.toast}</div>{/if}
 

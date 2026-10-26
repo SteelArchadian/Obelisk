@@ -23,6 +23,7 @@ pub mod share;
 pub mod share_net;
 pub mod trash;
 pub mod updates;
+pub mod work;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -469,7 +470,8 @@ pub fn clone_instance(data: &Path, id: &str, new_name: &str) -> Result<String, S
     let new_id = (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} ({i})") })
         .find(|n| !instances.join(n).exists()).unwrap();
     let dst = instances.join(&new_id);
-    copy_dir(&src, &dst)?;
+    let total = count_files(&src);
+    copy_dir(&src, &dst, &mut 0, total)?;
     update_cfg(&dst.join("instance.cfg"), &[
         ("name", Some(new_name.trim().to_string())),
         ("ObeliskSource", None),
@@ -479,15 +481,30 @@ pub fn clone_instance(data: &Path, id: &str, new_name: &str) -> Result<String, S
     Ok(new_id)
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
+/// A clone starts with no backup history of its own.
+fn clone_skips(dir: &Path, name: &std::ffi::OsStr) -> bool {
+    name == "history" && dir.file_name().is_some_and(|n| n == ".obelisk")
+}
+
+fn count_files(dir: &Path) -> usize {
+    fs::read_dir(dir).into_iter().flatten().flatten()
+        .filter(|e| !clone_skips(dir, &e.file_name()))
+        .map(|e| if e.path().is_dir() { count_files(&e.path()) } else { 1 })
+        .sum()
+}
+
+fn copy_dir(src: &Path, dst: &Path, done: &mut usize, total: usize) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     for e in fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
-        // A clone starts with no backup history of its own.
-        if e.file_name() == "history" && src.file_name().is_some_and(|n| n == ".obelisk") {
+        if clone_skips(src, &e.file_name()) {
             continue;
         }
         let to = dst.join(e.file_name());
-        if e.path().is_dir() { copy_dir(&e.path(), &to)?; } else { fs::copy(e.path(), &to).map_err(|e| e.to_string())?; }
+        if e.path().is_dir() { copy_dir(&e.path(), &to, done, total)?; } else {
+            fs::copy(e.path(), &to).map_err(|e| e.to_string())?;
+            *done += 1;
+            work::progress("", *done, total);
+        }
     }
     Ok(())
 }
@@ -713,6 +730,29 @@ pub fn set_enabled(game: &Path, kind: &str, file_name: &str, enabled: bool) -> R
     }
     fs::rename(folder.join(&from), folder.join(&to)).map_err(|e| e.to_string())?;
     Ok(to)
+}
+
+/// Give a profile its own picture (a real PNG, JPEG, GIF or WebP up to 1 MB, so it can travel with Share).
+/// It goes into Prism's icons folder under a new key; the old picture file is left alone (other profiles may use it).
+pub fn set_icon_base64(data: &Path, id: &str, b64: &str) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()).map_err(|_| "the picture didn't come through")?;
+    set_icon(data, id, &bytes)
+}
+
+pub fn set_icon(data: &Path, id: &str, bytes: &[u8]) -> Result<String, String> {
+    let ext = packcode::image_ext(bytes).ok_or("That isn't a picture Obelisk can use (PNG, JPEG, GIF or WebP).")?;
+    if bytes.len() > packcode::ICON_MAX {
+        return Err("That picture is over 1 MB.".into());
+    }
+    let root = instance_root(data, id)?;
+    let slug: String = id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    let key = format!("obelisk-{slug}-{}", &sha1_hex(bytes)[..8]);
+    let icons = data.join("icons");
+    fs::create_dir_all(&icons).map_err(|e| e.to_string())?;
+    fs::write(icons.join(format!("{key}.{ext}")), bytes).map_err(|e| e.to_string())?;
+    update_cfg(&root.join("instance.cfg"), &[("iconKey", Some(key.clone()))])?;
+    Ok(key)
 }
 
 /// Instance icon as a data URL, from Prism's icons folder (custom keys only).

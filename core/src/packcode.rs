@@ -149,6 +149,13 @@ pub struct Manifest {
     /// The pack's own icon (base64 of a PNG, JPEG, GIF or WebP), so it looks the same on the friend's PC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// The sharer's Java, memory and JVM arguments for this pack, offered to the friend (never applied unasked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<GameSettings>,
+    /// Collaborate: this code carries an invite to a collaborative pack instead of a pack (sent only over the
+    /// encrypted connection, never in the code's public note).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite: Option<String>,
     /// Config files kept on the sharer's PC because they seem to hold a secret (never sent).
     #[serde(skip)]
     pub private: Vec<String>,
@@ -214,7 +221,7 @@ pub fn manifest(game: &Path, name: &str, mr: Option<&modrinth::Client>, cf: Opti
     for f in files.iter_mut() {
         f.custom = f.site.is_empty() && (content(&f.path) || is_code(&f.path));
     }
-    Ok(Manifest { v: 1, name: name.to_string(), pack, files, icon: pack_icon(inst), private })
+    Ok(Manifest { v: 1, name: name.to_string(), pack, files, icon: pack_icon(inst), game: game_settings(inst), invite: None, private })
 }
 
 /// A path from someone else's list, made safe: only inside the pack folders a backup tracks.
@@ -226,10 +233,10 @@ pub fn safe_path(p: &str) -> Option<&str> {
 }
 
 /// Largest pack icon sent or taken (Prism's own icons are a few KB; a picture people set may be bigger).
-const ICON_MAX: usize = 1 << 20;
+pub(crate) const ICON_MAX: usize = 1 << 20;
 
 /// An image's file extension, from its first bytes (never from what anyone says it is).
-fn image_ext(b: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_ext(b: &[u8]) -> Option<&'static str> {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") { Some("png") }
     else if b.starts_with(&[0xff, 0xd8, 0xff]) { Some("jpg") }
     else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") { Some("gif") }
@@ -261,6 +268,79 @@ fn take_icon(icons: &Path, id: &str, icon: &str) -> Option<String> {
     fs::create_dir_all(icons).ok()?;
     fs::write(icons.join(format!("{key}.{ext}")), &b).ok()?;
     Some(key)
+}
+
+// ---------------------------------------------------------------- game settings
+
+/// A pack's own Java, memory and JVM arguments (only what the profile sets for itself; Prism's defaults aren't sent).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GameSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub java: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_mem_mb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mem_mb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jvm_args: Option<String>,
+    /// Receiving side: arguments left out because they could run or load something (never sent by a sharer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped_args: Vec<String>,
+}
+
+fn game_settings(inst: &Path) -> Option<GameSettings> {
+    let cfg = crate::read_cfg(&inst.join("instance.cfg"));
+    let on = |k: &str| cfg.get(k).is_some_and(|v| v == "true");
+    let num = |k: &str| cfg.get(k).and_then(|v| v.parse().ok());
+    let mut g = GameSettings::default();
+    if on("OverrideJavaLocation") {
+        g.java = cfg.get("JavaPath").and_then(|p| crate::java::at(Path::new(p))).map(|j| j.major);
+    }
+    if on("OverrideMemory") {
+        (g.min_mem_mb, g.max_mem_mb) = (num("MinMemAlloc"), num("MaxMemAlloc"));
+    }
+    if on("OverrideJavaArgs") {
+        g.jvm_args = cfg.get("JvmArgs").map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    }
+    (g != GameSettings::default()).then_some(g)
+}
+
+/// One JVM argument a friend's pack may bring: memory and garbage-collector tuning, and plain -D settings.
+/// Anything that loads code (-javaagent, -agentlib, class paths), runs a command (-XX:OnError), reads
+/// another file (@argfiles, -XX:Flags) or points at a path or address is left out.
+pub fn jvm_arg_ok(a: &str) -> bool {
+    let plain = |v: &str| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || "._,%+-".contains(c));
+    if let Some(v) = a.strip_prefix("-XX:") {
+        let (name, val) = v.split_once('=').unwrap_or((v, ""));
+        let name = name.trim_start_matches(['+', '-']);
+        const NO: [&str; 9] = ["OnError", "OnOutOfMemoryError", "Flags", "VMOptionsFile", "CompileCommandFile",
+            "ErrorFile", "HeapDumpPath", "LogFile", "StartFlightRecording"];
+        return plain(name) && !NO.iter().any(|n| name.eq_ignore_ascii_case(n)) && (val.is_empty() || plain(val));
+    }
+    if let Some(v) = a.strip_prefix("-D") {
+        let (key, val) = v.split_once('=').unwrap_or((v, "true"));
+        let k = key.to_ascii_lowercase();
+        const NO: [&str; 10] = ["library.path", "librarypath", "class.path", "classpath", "class.loader", "java.security",
+            "log4j", "ext.dirs", "jdk.attach", "agent"];
+        return plain(key) && plain(val) && !NO.iter().any(|n| k.contains(n));
+    }
+    ["-Xmx", "-Xms", "-Xss", "-Xmn"].iter().any(|p| a.strip_prefix(p).is_some_and(|v| v.chars().all(|c| c.is_ascii_alphanumeric())))
+}
+
+/// A friend's settings made safe to offer: arguments vetted one by one, memory kept sensible.
+pub fn vet_game_settings(g: Option<GameSettings>) -> Option<GameSettings> {
+    let mut g = g?;
+    g.dropped_args.clear();
+    if let Some(args) = g.jvm_args.take() {
+        let (ok, no): (Vec<&str>, Vec<&str>) = args.split_whitespace().partition(|a| jvm_arg_ok(a));
+        g.dropped_args = no.into_iter().map(String::from).collect();
+        g.jvm_args = (!ok.is_empty()).then(|| ok.join(" "));
+    }
+    g.java = g.java.filter(|j| [8, 11, 16, 17, 21, 25].contains(j));
+    g.max_mem_mb = g.max_mem_mb.filter(|m| (512..=65536).contains(m));
+    g.min_mem_mb = g.min_mem_mb.filter(|m| *m >= 128 && g.max_mem_mb.is_none_or(|x| *m <= x));
+    (g.java.is_some() || g.max_mem_mb.is_some() || g.min_mem_mb.is_some() || g.jvm_args.is_some() || !g.dropped_args.is_empty()).then_some(g)
 }
 
 // ---------------------------------------------------------------- installing someone else's pack
@@ -386,6 +466,18 @@ pub fn zip_name(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn friends_jvm_args_are_vetted() {
+        let g = vet_game_settings(Some(GameSettings {
+            java: Some(25), min_mem_mb: Some(9000), max_mem_mb: Some(8192),
+            jvm_args: Some("-XX:+UseZGC -XX:MaxGCPauseMillis=50 -Dfml.readTimeout=180 -javaagent:evil.jar                 -XX:OnError=calc.exe -Djava.library.path=C:/x -Dlog4j.configurationFile=http://x @args.txt -Xss4m".into()),
+            dropped_args: vec![],
+        })).unwrap();
+        assert_eq!(g.jvm_args.as_deref(), Some("-XX:+UseZGC -XX:MaxGCPauseMillis=50 -Dfml.readTimeout=180 -Xss4m"));
+        assert_eq!(g.dropped_args.len(), 5);
+        assert_eq!((g.java, g.min_mem_mb, g.max_mem_mb), (Some(25), None, Some(8192)));
+    }
 
     #[test]
     fn icons_travel_only_as_real_images() {

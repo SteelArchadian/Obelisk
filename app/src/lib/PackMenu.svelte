@@ -12,14 +12,34 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { openBrowse, toast } from "./state.svelte";
-  import { setTarget } from "./install";
+  import { setTarget, syncInstances } from "./install";
   import { kill, play, running } from "./play.svelte";
 
   const close = () => (app.packMenu = null);
-  function checkpoint(i: Instance) {
-    invoke("create_checkpoint", { instanceId: i.id, label: "" })
-      .then(() => toast(`Checkpoint saved for ${i.name}. Find it under Backups.`))
-      .catch((e) => toast(String(e)));
+
+  // Change Picture: any picture, cropped to a square and shrunk to 256 px here, so it stays small enough to share.
+  let picker: HTMLInputElement;
+  let pictureFor: Instance | null = null;
+  function choosePicture(i: Instance) {
+    pictureFor = i;
+    picker.value = "";
+    picker.click();
+  }
+  async function setPicture() {
+    const file = picker.files?.[0];
+    const i = pictureFor;
+    if (!file || !i) return;
+    try {
+      const img = await createImageBitmap(file);
+      const side = Math.min(img.width, img.height);
+      const c = document.createElement("canvas");
+      c.width = c.height = Math.min(256, side);
+      c.getContext("2d")!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, c.width, c.height);
+      const png = c.toDataURL("image/png").split(",")[1];
+      await invoke("set_instance_icon", { instanceId: i.id, png });
+      await syncInstances();
+      toast(`New picture for ${i.name}.`);
+    } catch (e) { toast(e instanceof Error ? "Obelisk couldn't read that picture." : String(e)); }
   }
   function act(fn: (inst: Instance) => void) {
     const inst = app.packMenu!.inst;
@@ -36,20 +56,20 @@
     {#if running[m.inst.id]}<button class="danger" onclick={() => act(kill)} title="Force-close the game (for when it's frozen)">■ Kill instance</button>{:else}<button onclick={() => act(play)}>▶ Play</button>{/if}
     <button onclick={() => act((i) => { setTarget(i); app.current = i; openBrowse("mod"); })}>＋ Add Content</button>
     <hr />
-    <button onclick={() => act((i) => { app.current = i; app.page = "instance"; })}>View Profile</button>
     <button onclick={() => act((i) => invoke("reveal", { instanceId: i.id, sub: "" }))}>Open Folder ↗</button>
     <button onclick={() => act((i) => (app.profileDialog = { kind: "options", inst: i }))}>Profile Settings…</button>
+    <button onclick={() => act(choosePicture)}>Change Picture…</button>
     <button onclick={() => act((i) => (app.profileDialog = { kind: "options", inst: i, tab: "backups" }))}>Backups…</button>
-    <button onclick={() => act(checkpoint)}>Create Checkpoint</button>
-    <button onclick={() => act((i) => (app.profileDialog = { kind: "clone", inst: i }))}>Clone as…</button>
+    <button onclick={() => act((i) => (app.profileDialog = { kind: "clone", inst: i }))}>Clone…</button>
     <button onclick={() => act((i) => (app.serverPack = i))}>Make Server &amp; Client Packs…</button>
     <button onclick={() => act((i) => (app.packShare = i))}>Share…</button>
-    <button onclick={() => act((i) => (app.sharePack = i))}>{m.inst.id in app.shareIncoming ? "Collaborative Pack…" : "Create Collaborative Pack…"}{#if app.shareIncoming[m.inst.id]}<span class="inc">{app.shareIncoming[m.inst.id]} new</span>{/if}</button>
+    <button onclick={() => act((i) => (app.sharePack = i))}>Collaborate…{#if app.shareIncoming[m.inst.id]}<span class="inc">{app.shareIncoming[m.inst.id]} new</span>{/if}</button>
     <hr />
     <button class="danger" onclick={() => act((i) => (app.profileDialog = { kind: "purge", inst: i }))}>Purge Configs…</button>
     <button class="danger" onclick={() => act((i) => (app.profileDialog = { kind: "delete", inst: i }))}>Delete Profile</button>
   </div>
 {/if}
+<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden bind:this={picker} onchange={setPicture} />
 
 <style>
   .ctx { position: fixed; z-index: 45; width: 250px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: 0 12px 34px rgb(0 0 0 / 0.5); }

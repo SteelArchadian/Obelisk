@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Share a pack with friends, peer to peer: invite code, who's in, my changes to send, and their
-  // changes waiting for review. Applying takes a safety backup first, so it can always be undone.
+  // Collaborate: play a pack with friends, peer to peer: a short code to invite them (pasted into Import), who's in,
+  // my changes to send, and their changes waiting for review. Applying takes a safety backup first, so it can
+  // always be undone. Unticking "Collaboration on" stops it.
   import { invoke } from "@tauri-apps/api/core";
   import { app, toast } from "./state.svelte";
   import { syncInstances } from "./install";
@@ -14,6 +15,11 @@
   let { inst }: { inst: Instance } = $props();
   let st = $state<Status | null>(null);
   let code = $state("");
+  let expiresMs = $state(0);
+  let now = $state(Date.now());
+  $effect(() => { const t = setInterval(() => (now = Date.now()), 1000); return () => clearInterval(t); });
+  const left = $derived(Math.max(0, expiresMs - now));
+  const clock = $derived(`${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, "0")}`);
   let label = $state("");
   let busy = $state("");
   let open = $state<string | null>(null);
@@ -28,9 +34,14 @@
     try { return await fn(); } catch (e) { toast(String(e)); } finally { busy = ""; }
   }
 
-  const start = () => run("start", async () => { code = await invoke<string>("share_start", { instanceId: inst.id }); await load(); });
-  const invite = () => run("invite", async () => { code = await invoke<string>("share_start", { instanceId: inst.id }); });
-  const copy = () => navigator.clipboard.writeText(code).then(() => toast("Invite code copied. Send it to your friend."));
+  const getCode = async () => {
+    const c = await invoke<{ code: string; expiresMs: number }>("collab_code", { instanceId: inst.id });
+    code = c.code;
+    expiresMs = c.expiresMs;
+  };
+  const start = () => run("start", async () => { await getCode(); await load(); });
+  const invite = () => run("invite", getCode);
+  const copy = () => navigator.clipboard.writeText(code).then(() => toast("Code copied. Your friend pastes it into Import."));
   const send = () => run("send", async () => {
     const sent = await invoke<boolean>("share_publish", { instanceId: inst.id, label });
     label = "";
@@ -62,7 +73,7 @@
 <div class="back" role="presentation" onclick={() => !busy && close()}>
   <div class="dialog" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && close()}>
     <button class="x" onclick={close} aria-label="Close">✕</button>
-    <h3>Collaborative Pack · {inst.name}</h3>
+    <h3>Collaborate · {inst.name}</h3>
 
     {#if !st}
       <p class="muted">Loading…</p>
@@ -73,17 +84,21 @@
         <li>Changes travel when you're both online with Obelisk open.</li>
         <li>Worlds and your personal game settings aren't shared.</li>
         <li>Every applied change can be undone from Backups.</li>
+        <li>You get a short code. Your friend pastes it into Import, and Obelisk downloads the pack and sets it up to collaborate.</li>
+        <li>You can turn collaboration off here any time.</li>
       </ul>
-      <div class="actions"><div class="spacer"></div><button class="primary" disabled={!!busy} onclick={start}>{busy ? "Creating…" : "Create collaborative pack"}</button></div>
+      <div class="actions"><div class="spacer"></div><button class="ghost" onclick={close}>Not now</button><button class="primary" disabled={!!busy} onclick={start}>{busy ? "Making it…" : "Make it collaborative"}</button></div>
     {:else if st.share}
       <section>
         <div class="row">
           <strong>Invite a friend</strong>
-          <span class="muted small">They paste the code in My Modpacks → Join a shared pack.</span>
+          <span class="muted small">They paste the code into Import, like a Share code.</span>
           <div class="spacer"></div>
-          {#if code}<button class="ghost" onclick={copy}>Copy code</button>{:else}<button class="ghost" disabled={!!busy} onclick={invite}>{busy === "invite" ? "Making a code…" : "Get invite code"}</button>{/if}
+          {#if code && left}<button class="ghost" onclick={copy}>Copy code</button>{:else}<button class="ghost" disabled={!!busy} onclick={invite}>{busy === "invite" ? "Making a code…" : "Get a code"}</button>{/if}
         </div>
-        {#if code}<textarea class="code" readonly onfocus={(e) => e.currentTarget.select()}>{code}</textarea>{/if}
+        {#if code && left}
+          <div class="row"><span class="short">{code}</span><span class="muted small">Expires in {clock}. Keep Obelisk open until your friend shows up under Members.</span></div>
+        {/if}
       </section>
 
       <section>
@@ -140,12 +155,12 @@
 
       <div class="actions">
         {#if confirmStop}
-          <span class="muted small">Stop sharing? Your pack stays as it is; friends keep their copies.</span>
+          <span class="muted small">Turn collaboration off? Your pack stays as it is; friends keep their copies.</span>
           <div class="spacer"></div>
           <button class="ghost" onclick={() => (confirmStop = false)}>Cancel</button>
-          <button class="primary danger" disabled={!!busy} onclick={stop}>Stop sharing</button>
+          <button class="primary danger" disabled={!!busy} onclick={stop}>Turn off</button>
         {:else}
-          <button class="ghost" onclick={() => (confirmStop = true)}>Stop sharing…</button>
+          <label class="row small"><input type="checkbox" checked onchange={(e) => { e.currentTarget.checked = true; confirmStop = true; }} /> Collaboration on</label>
           <div class="spacer"></div>
           <button class="primary" onclick={close}>Done</button>
         {/if}
@@ -167,6 +182,7 @@
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .spacer { flex: 1; }
   .code { width: 100%; height: 64px; resize: none; font: 11.5px ui-monospace, Consolas, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; word-break: break-all; }
+  .short { font: 700 22px ui-monospace, Consolas, monospace; letter-spacing: 3px; }
   .members { display: flex; flex-wrap: wrap; gap: 8px; }
   .member { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
   .member i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }

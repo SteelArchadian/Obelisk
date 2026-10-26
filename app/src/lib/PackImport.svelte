@@ -11,11 +11,18 @@
   type Findings = { serious: string[]; notes: string[] };
   type Checked = { path: string; size: number; findings: Findings };
   type Scan = { result: "clean" } | { result: "threat" | "unavailable"; detail: string };
-  type Preview = { name: string; files: number; bytes: number; known: number; custom: Checked[]; refused: Checked[]; scan: Scan };
+  type Game = { java?: number; minMemMb?: number; maxMemMb?: number; jvmArgs?: string; droppedArgs?: string[] };
+  type Preview = { invite?: string | null; name: string; files: number; bytes: number; known: number; custom: Checked[]; refused: Checked[]; scan: Scan; game?: Game | null };
   type Report = { id: string; leftOut: string[]; scan: Scan };
 
   let code = $state(app.packImport ?? "");
-  let stage = $state<"enter" | "looking" | "custom" | "installing">("enter");
+  let stage = $state<"enter" | "looking" | "custom" | "installing" | "settings" | "invite">("enter");
+  // After install: the sharer's own Java, memory and JVM arguments, each taken only if ticked.
+  let newId = $state("");
+  let take = $state({ java: true, memory: true, args: true });
+  let ramMb = $state(0);
+  let applying = $state("");
+  let joining = $state(false);
   let preview = $state<Preview | null>(null);
   let done = $state(0);
   let total = $state(0);
@@ -27,7 +34,7 @@
   const busy = $derived(stage === "looking" || stage === "installing");
   const quiet = $derived(busy ? Math.floor((now - lastMove) / 1000) : 0);
   const STEPS: Record<string, string> = { checking: "Checking your friend's custom files", installing: "Installing", scanning: "Scanning" };
-  const status = $derived(!step ? "Connecting to your friend's PC…"
+  const status = $derived(joining ? "Downloading the pack from your friend's PC…" : !step ? "Connecting to your friend's PC…"
     : step === "scanning" ? current
     : `${STEPS[step] ?? step} · ${done} / ${total}`);
 
@@ -59,7 +66,8 @@
     startWatch();
     try {
       preview = await invoke<Preview>("pack_code_preview", { code });
-      if (preview.custom.length || preview.refused.length || preview.scan.result !== "clean") stage = "custom";
+      if (preview.invite) stage = "invite";
+      else if (preview.custom.length || preview.refused.length || preview.scan.result !== "clean") stage = "custom";
       else install(false);
     } catch (e) { toast(String(e)); stage = "enter"; }
   }
@@ -83,9 +91,63 @@
       const out = r.leftOut.length ? ` ${r.leftOut.length} ${r.leftOut.length === 1 ? "file was" : "files were"} left out.` : "";
       const scan = r.scan.result === "unavailable" ? " Windows Defender couldn't scan it; your own antivirus should." : "";
       toast(`${preview?.name ?? "The pack"} is installed. It's in your Library.${out}${scan}`);
-      close();
+      const g = preview?.game;
+      if (g && (g.java || g.maxMemMb || g.jvmArgs)) {
+        newId = r.id;
+        ramMb = await invoke<number>("system_memory_mb").catch(() => 0);
+        take = { java: !!g.java, memory: !!g.maxMemMb && (!ramMb || g.maxMemMb <= ramMb * 0.75), args: !!g.jvmArgs };
+        stage = "settings";
+      } else close();
     } catch (e) { toast(String(e)); stage = "enter"; }
   }
+
+  // A Collaborate code: join the pack (downloaded from the friend) and keep it in step with theirs.
+  async function join() {
+    if (!preview?.invite) return;
+    joining = true;
+    stage = "installing";
+    startWatch();
+    try {
+      await invoke("share_join", { code: preview.invite });
+      await syncInstances();
+      toast(`You're collaborating on ${preview.name}. It's in your Library; changes come and go from Collaborate.`);
+      close();
+    } catch (e) { toast(String(e)); stage = "enter"; } finally { joining = false; }
+  }
+
+  type Options = { overrideMemory: boolean; maxMemMb: number; minMemMb: number; overrideJavaArgs: boolean; jvmArgs: string;
+    overrideJavaLocation: boolean; javaPath: string } & Record<string, unknown>;
+
+  async function useSettings() {
+    const g = preview?.game;
+    if (!g) return close();
+    try {
+      const o = await invoke<Options>("profile_options", { instanceId: newId });
+      if (take.java && g.java) {
+        const installs = await invoke<{ path: string; major: number }[]>("java_installs");
+        let j = installs.find((i) => i.major === g.java);
+        if (!j) {
+          applying = `Downloading Java ${g.java}…`;
+          j = await invoke<{ path: string; major: number }>("java_download", { major: g.java });
+        }
+        o.overrideJavaLocation = true;
+        o.javaPath = j.path;
+      }
+      if (take.memory && g.maxMemMb) {
+        o.overrideMemory = true;
+        o.maxMemMb = g.maxMemMb;
+        o.minMemMb = Math.min(g.minMemMb ?? o.minMemMb, g.maxMemMb);
+      }
+      if (take.args && g.jvmArgs) {
+        o.overrideJavaArgs = true;
+        o.jvmArgs = g.jvmArgs;
+      }
+      await invoke("set_profile_options", { instanceId: newId, options: o });
+      toast("Your friend's settings are on the pack. You can change them in its Profile options.");
+      close();
+    } catch (e) { toast(String(e)); applying = ""; }
+  }
+  const gb = (m: number) => (m / 1024).toFixed(m % 1024 ? 1 : 0) + " GB";
 </script>
 
 <div class="back" role="presentation" onclick={() => stage !== "installing" && close()}>
@@ -151,6 +213,42 @@
           {/if}
         </div>
       {/if}
+    {:else if stage === "invite" && preview}
+      <p>You're invited to collaborate on <b>{preview.name}</b>.</p>
+      <ul class="muted small">
+        <li>Obelisk downloads the pack from your friend's PC and sets it up to collaborate.</li>
+        <li>When either of you adds or removes mods or changes configs, the other gets those changes to review.</li>
+        <li>Worlds and personal game settings aren't shared. You can turn collaboration off any time.</li>
+      </ul>
+      <div class="row"><span class="spacer"></span>
+        <button class="ghost" onclick={close}>Not now</button>
+        <button class="primary" onclick={join}>Join</button>
+      </div>
+    {:else if stage === "settings" && preview?.game}
+      {@const g = preview.game}
+      <p>Your friend set up {preview.name} with these. Use them too?</p>
+      <p class="muted small">Your choice: Obelisk's own picks work fine. You can change any of this later in the pack's Profile options.</p>
+      {#if g.java}
+        <label class="pick"><input type="checkbox" bind:checked={take.java} disabled={!!applying} />
+          <span>Java {g.java}<br /><span class="muted small">Obelisk downloads it if you don't have it.</span></span></label>
+      {/if}
+      {#if g.maxMemMb}
+        <label class="pick"><input type="checkbox" bind:checked={take.memory} disabled={!!applying} />
+          <span>Memory: {g.minMemMb ? `${gb(g.minMemMb)} to ` : "up to "}{gb(g.maxMemMb)}
+            {#if ramMb}<br /><span class="muted small" class:warnText={g.maxMemMb > ramMb * 0.75}>This PC has {gb(ramMb)}.{g.maxMemMb > ramMb * 0.75 ? " That's a lot of it; Windows may slow down." : ""}</span>{/if}</span></label>
+      {/if}
+      {#if g.jvmArgs}
+        <label class="pick"><input type="checkbox" bind:checked={take.args} disabled={!!applying} />
+          <span>Java arguments<br /><code class="small">{g.jvmArgs}</code></span></label>
+      {/if}
+      {#if g.droppedArgs?.length}
+        <p class="muted small">Left out for safety (they could load or run something): <code>{g.droppedArgs.join(" ")}</code></p>
+      {/if}
+      {#if applying}<p class="small">{applying}</p><div class="bar busy"><i></i></div>{/if}
+      <div class="row"><span class="spacer"></span>
+        <button class="ghost" disabled={!!applying} onclick={close}>Keep mine</button>
+        <button class="primary" disabled={!!applying} onclick={useSettings}>Use the ticked ones</button>
+      </div>
     {:else}
       <p>Installing {preview?.name ?? "the pack"}…</p>
       {@render progress()}
@@ -162,13 +260,18 @@
   <div class="bar" class:busy={!total || step === "scanning"}><i style:width={total && step !== "scanning" ? `${(done / total) * 100}%` : ""}></i></div>
   <p class="small">{status}</p>
   {#if current && step !== "scanning"}<p class="muted small path">{current}</p>{/if}
-  {#if quiet >= 20}
+  {#if step === "scanning"}
+    <p class="muted small">This runs on your PC only. Big files take Defender a while.</p>
+  {:else if quiet >= 20 && !joining}
     <p class="stall small">Nothing has moved for {quiet} seconds. Your friend's PC may have gone to sleep or closed Obelisk; Obelisk gives up by itself after 45 seconds without data.</p>
   {/if}
   <div class="row"><span class="spacer"></span><button class="ghost" onclick={stop}>Stop</button></div>
 {/snippet}
 
 <style>
+  .pick { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+  .pick code, code { word-break: break-all; }
+  .warnText { color: var(--err-text); }
   .bar.busy i { width: 30%; animation: slide 1.2s ease-in-out infinite; }
   @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
   .stall { color: var(--err-text); background: var(--err-bg); border-radius: 6px; padding: 8px 10px; }

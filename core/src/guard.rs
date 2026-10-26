@@ -216,6 +216,12 @@ pub enum Scan {
 
 /// Scan a file or folder with Windows Defender (no automatic cleanup: Obelisk deletes what it refuses itself).
 pub fn defender_scan(path: &Path) -> Scan {
+    defender_scan_watched(path, |_| {}, || false)
+}
+
+/// `defender_scan`, telling `tick` the seconds spent once a second, and ending the scan if `stop` says so
+/// (the caller then throws away what was being scanned; a stopped scan never counts as clean).
+pub fn defender_scan_watched(path: &Path, tick: impl Fn(u64), stop: impl Fn() -> bool) -> Scan {
     let exe = Path::new(&std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into()))
         .join("Windows Defender").join("MpCmdRun.exe");
     if !exe.is_file() {
@@ -228,17 +234,45 @@ pub fn defender_scan(path: &Path) -> Scan {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    match c.output() {
-        Ok(o) => {
-            let text = String::from_utf8_lossy(&o.stdout).to_string();
-            match o.status.code() {
+    c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    let mut child = match c.spawn() {
+        Ok(ch) => ch,
+        Err(e) => return Scan::Unavailable(format!("couldn't start Defender: {e}")),
+    };
+    // Its report is read alongside, so a long one can't fill the pipe and stall the scan.
+    let mut out = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(o) = out.as_mut() { let _ = std::io::Read::read_to_string(o, &mut s); }
+        s
+    });
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Ok(st),
+            Ok(None) if stop() => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err("stopped".to_string());
+            }
+            Ok(None) => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                tick(start.elapsed().as_secs());
+            }
+            Err(e) => break Err(e.to_string()),
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    match status {
+        Ok(st) => {
+            match st.code() {
                 Some(0) => Scan::Clean,
                 Some(2) => Scan::Threat(text.lines().filter(|l| l.contains("Threat") || l.contains("file:")).take(6)
                     .map(str::trim).collect::<Vec<_>>().join("; ")),
                 code => Scan::Unavailable(format!("Defender couldn't scan (exit {code:?})")),
             }
         }
-        Err(e) => Scan::Unavailable(format!("couldn't start Defender: {e}")),
+        Err(e) => Scan::Unavailable(format!("Defender didn't finish: {e}")),
     }
 }
 
