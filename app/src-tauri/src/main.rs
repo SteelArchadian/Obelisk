@@ -18,6 +18,10 @@ fn main() {
         }
         return;
     }
+    // Obelisk's window must see the real AppData (Prism's config, its modpacks), not another app's private copy.
+    if !std::env::args().any(|a| a.starts_with("--")) && obelisk_lib::leave_sandbox() {
+        return;
+    }
     if std::env::args().any(|a| a == "--build-id") {
         return println!("{}", obelisk_lib::build_id());
     }

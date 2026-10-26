@@ -122,14 +122,33 @@ struct Vetting {
     fetched: HashMap<String, Vec<u8>>,
 }
 
-/// Progress of an incoming pack: files done of total, and the one just finished.
+/// Progress of an incoming pack: what it's doing ("checking" the sharer's files, "installing", "scanning" with
+/// Windows Defender), files done of total, and the one being worked on.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportProgress {
+    pub step: &'static str,
     pub done: usize,
     pub total: usize,
     pub file: String,
 }
+
+type Progress = dyn Fn(ImportProgress) + Send + Sync;
+
+/// The person stopped the pack being checked or installed (Import → Stop).
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Import → Stop: the check or install under way ends at its next step (a half-made profile is removed).
+pub fn stop_incoming() {
+    STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn stopped() -> Result<(), String> {
+    if STOP.load(std::sync::atomic::Ordering::SeqCst) { Err("Stopped.".into()) } else { Ok(()) }
+}
+
+/// A sharer that goes quiet this long (asleep, Obelisk closed, connection gone) is given up on.
+const STALL: Duration = Duration::from_secs(45);
 
 impl Net {
     pub async fn start(key: [u8; 32], instances: PathBuf, name: String) -> Result<Net, String> {
@@ -299,7 +318,7 @@ impl Net {
     /// straight from Modrinth's or CurseForge's servers is fetched from the sharer and opened. CurseForge files
     /// whose authors block other apps are matched by fingerprint when a CurseForge key is set. Whatever is left
     /// is custom; Windows programs, scripts and code with signs of malware are refused; Defender scans the rest.
-    async fn vet(&self, sess: &Session, code: &str, m: &Manifest, cf: Option<Arc<crate::curseforge::Client>>) -> Result<Vetting, String> {
+    async fn vet(&self, sess: &Session, code: &str, m: &Manifest, cf: Option<Arc<crate::curseforge::Client>>, progress: &Progress) -> Result<Vetting, String> {
         let mut refused = Vec::new();
         let mut code_files = Vec::new();
         let mut known = 0;
@@ -319,7 +338,8 @@ impl Net {
         }
         let mut fetched = HashMap::new();
         let mut held = 0usize;
-        for f in &code_files {
+        for (i, f) in code_files.iter().enumerate() {
+            progress(ImportProgress { step: "checking", done: i, total: code_files.len(), file: f.path.clone() });
             let bytes = sess.pack_file(code, &f.path).await?;
             held += bytes.len();
             if held > 2 << 30 {
@@ -331,6 +351,7 @@ impl Net {
             fetched.insert(f.path.clone(), bytes);
         }
         // CurseForge's word for files only it hosts (asked by this PC, not the sharer).
+        progress(ImportProgress { step: "checking", done: code_files.len(), total: code_files.len(), file: "Asking CurseForge about its files".into() });
         let genuine: std::collections::HashSet<u32> = match cf {
             Some(cf) => {
                 let fps: Vec<u32> = code_files.iter().filter(|f| f.site == "curseforge")
@@ -347,12 +368,14 @@ impl Net {
                 known += 1;
                 continue;
             }
+            stopped()?;
             let findings = guard::inspect(&f.path, bytes);
             let c = CustomFile { path: f.path.clone(), size: f.size, findings };
             if c.findings.serious.is_empty() { custom.push(c) } else { refused.push(c) }
         }
         // Defender looks at the custom files before anything is installed.
         let scan = if custom.is_empty() { Scan::Clean } else {
+            progress(ImportProgress { step: "scanning", done: 0, total: custom.len(), file: "Windows Defender is scanning the custom files".into() });
             let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
             for c in &custom {
                 let to = dir.path().join(&c.path);
@@ -366,9 +389,11 @@ impl Net {
     }
 
     /// What a code's pack holds (before choosing about custom files).
-    pub async fn preview(&self, code: &str, cf: Option<Arc<crate::curseforge::Client>>) -> Result<PackPreview, String> {
+    pub async fn preview(&self, code: &str, cf: Option<Arc<crate::curseforge::Client>>,
+                         progress: impl Fn(ImportProgress) + Send + Sync + 'static) -> Result<PackPreview, String> {
+        STOP.store(false, std::sync::atomic::Ordering::SeqCst);
         let (sess, m) = self.pack_session(code).await?;
-        let v = self.vet(&sess, code, &m, cf).await;
+        let v = self.vet(&sess, code, &m, cf, &progress).await;
         sess.conn.close(0u32.into(), b"done");
         let v = v?;
         Ok(PackPreview { name: m.name.clone(), files: m.files.len(), bytes: m.files.iter().map(|f| f.size).sum(),
@@ -381,8 +406,9 @@ impl Net {
     /// and a threat removes it again.
     pub async fn import(&self, code: &str, with_custom: bool, cf: Option<Arc<crate::curseforge::Client>>,
                         progress: impl Fn(ImportProgress) + Send + Sync + 'static) -> Result<ImportReport, String> {
+        STOP.store(false, std::sync::atomic::Ordering::SeqCst);
         let (sess, m) = self.pack_session(code).await?;
-        let vet = match self.vet(&sess, code, &m, cf).await {
+        let vet = match self.vet(&sess, code, &m, cf, &progress).await {
             Ok(v) => v,
             Err(e) => { sess.conn.close(0u32.into(), b"done"); return Err(e) }
         };
@@ -411,11 +437,12 @@ impl Net {
             for _ in 0..6 {
                 let (queue, failed, done, game, progress) = (queue.clone(), failed.clone(), done.clone(), game.clone(), progress.clone());
                 workers.push(tokio::task::spawn_blocking(move || loop {
+                    if stopped().is_err() { break }
                     let Some(f) = queue.lock().unwrap().pop() else { break };
                     match packcode::from_site(&f).map(|b| packcode::place(&game, &f, &b)) {
                         Some(Ok(())) => {
                             let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                            progress(ImportProgress { done: n, total, file: f.path.clone() });
+                            progress(ImportProgress { step: "installing", done: n, total, file: f.path.clone() });
                         }
                         _ => failed.lock().unwrap().push(f),
                     }
@@ -424,6 +451,7 @@ impl Net {
             for w in workers {
                 w.await.map_err(|e| e.to_string())?;
             }
+            stopped()?;
             let mut rest: Vec<PackFile> = files.iter().filter(|f| !packcode::site_url_ok(&f.url)).cloned().collect();
             let failed: Vec<PackFile> = failed.lock().unwrap().drain(..).collect();
             for f in failed {
@@ -444,7 +472,7 @@ impl Net {
                 }
                 packcode::place(&game, &f, &bytes)?;
                 let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                progress(ImportProgress { done: n, total, file: f.path.clone() });
+                progress(ImportProgress { step: "installing", done: n, total, file: f.path.clone() });
             }
             for f in rest {
                 let bytes = match fetched.get(&f.path) {
@@ -454,12 +482,12 @@ impl Net {
                 if guard::mod_record(&f.path) && !guard::mod_record_ok(&bytes) {
                     left_out.lock().unwrap().push(format!("{} (its mod's update link isn't Modrinth or CurseForge)", f.path));
                     let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    progress(ImportProgress { done: n, total, file: f.path.clone() });
+                    progress(ImportProgress { step: "installing", done: n, total, file: f.path.clone() });
                     continue;
                 }
                 packcode::place(&game, &f, &bytes)?;
                 let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                progress(ImportProgress { done: n, total, file: f.path.clone() });
+                progress(ImportProgress { step: "installing", done: n, total, file: f.path.clone() });
             }
             Ok(())
         }.await;
@@ -469,6 +497,7 @@ impl Net {
             let _ = std::fs::remove_dir_all(self.instances.join(&id));
             return Err(e);
         }
+        progress(ImportProgress { step: "scanning", done: total, total, file: "Windows Defender is scanning the new profile".into() });
         let g = game.clone();
         let scan = tokio::task::spawn_blocking(move || guard::defender_scan(&g)).await.map_err(|e| e.to_string())?;
         if let Scan::Threat(t) = &scan {
@@ -538,11 +567,24 @@ struct Session {
 
 impl Session {
     async fn raw(&self, req: &Req, limit: usize) -> Result<(Resp, Vec<u8>), String> {
+        stopped()?;
         let (mut send, mut recv) = self.conn.open_bi().await.map_err(|e| e.to_string())?;
         send.write_all(&serde_json::to_vec(req).map_err(|e| e.to_string())?).await.map_err(|e| e.to_string())?;
         send.finish().map_err(|e| e.to_string())?;
-        let all = tokio::time::timeout(Duration::from_secs(600), recv.read_to_end(limit)).await
-            .map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())?;
+        // Read as it comes: a big file may take a while, but a sharer that sends nothing for STALL has stopped.
+        let mut all = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            stopped()?;
+            let n = tokio::time::timeout(STALL, recv.read(&mut buf)).await
+                .map_err(|_| format!("The sharing PC stopped sending (nothing for {} seconds). It may have gone to sleep or closed Obelisk.", STALL.as_secs()))?
+                .map_err(|e| e.to_string())?;
+            let Some(n) = n else { break };
+            all.extend_from_slice(&buf[..n]);
+            if all.len() > limit {
+                return Err("a reply was larger than allowed".into());
+            }
+        }
         if all.len() < 4 {
             return Err("empty reply".into());
         }
@@ -762,7 +804,7 @@ mod tests {
         (e.site, e.url, e.custom) = ("modrinth".into(), "https://cdn.modrinth.com/data/AAAAAAAA/versions/x/evil.jar".into(), false);
         let (code, _) = a.offer(&game, m).await.unwrap();
 
-        let p = b.preview(&code, None).await.unwrap();
+        let p = b.preview(&code, None, |_| {}).await.unwrap();
         assert_eq!(p.custom.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), ["mods/mine.jar"]);
         assert!(p.refused.iter().any(|c| c.path == "mods/setup.exe"), "{p:?}");
         let r = b.import(&code, false, None, |_| {}).await.unwrap();
@@ -778,7 +820,7 @@ mod tests {
         assert!(r2.left_out.iter().any(|l| l.contains("evil.jar") && l.contains("webhook")), "{:?}", r2.left_out);
 
         a.withdraw(&code);
-        assert!(b.preview(&code, None).await.is_err(), "a withdrawn code serves nothing");
-        assert!(a.preview(&code, None).await.unwrap_err().contains("your own code"));
+        assert!(b.preview(&code, None, |_| {}).await.is_err(), "a withdrawn code serves nothing");
+        assert!(a.preview(&code, None, |_| {}).await.unwrap_err().contains("your own code"));
     }
 }

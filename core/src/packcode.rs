@@ -146,6 +146,9 @@ pub struct Manifest {
     /// mmc-pack.json (loader and Minecraft version).
     pub pack: String,
     pub files: Vec<PackFile>,
+    /// The pack's own icon (base64 of a PNG, JPEG, GIF or WebP), so it looks the same on the friend's PC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Config files kept on the sharer's PC because they seem to hold a secret (never sent).
     #[serde(skip)]
     pub private: Vec<String>,
@@ -211,7 +214,7 @@ pub fn manifest(game: &Path, name: &str, mr: Option<&modrinth::Client>, cf: Opti
     for f in files.iter_mut() {
         f.custom = f.site.is_empty() && (content(&f.path) || is_code(&f.path));
     }
-    Ok(Manifest { v: 1, name: name.to_string(), pack, files, private })
+    Ok(Manifest { v: 1, name: name.to_string(), pack, files, icon: pack_icon(inst), private })
 }
 
 /// A path from someone else's list, made safe: only inside the pack folders a backup tracks.
@@ -220,6 +223,44 @@ pub fn safe_path(p: &str) -> Option<&str> {
     let ok = !p.contains("..") && !p.contains('\\') && !p.contains(':') && !p.starts_with('/') && !crate::guard::blocked(p)
         && history::TRACKED.contains(&first) && p.len() > first.len() + 1;
     ok.then_some(p)
+}
+
+/// Largest pack icon sent or taken (Prism's own icons are a few KB; a picture people set may be bigger).
+const ICON_MAX: usize = 1 << 20;
+
+/// An image's file extension, from its first bytes (never from what anyone says it is).
+fn image_ext(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") { Some("png") }
+    else if b.starts_with(&[0xff, 0xd8, 0xff]) { Some("jpg") }
+    else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") { Some("gif") }
+    else if b.len() > 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" { Some("webp") }
+    else { None }
+}
+
+/// The icon the sharer picked for this pack (Prism's icons folder, by the instance's iconKey).
+fn pack_icon(inst: &Path) -> Option<String> {
+    use base64::Engine;
+    let cfg = fs::read_to_string(inst.join("instance.cfg")).ok()?;
+    let key = cfg.lines().find_map(|l| l.strip_prefix("iconKey="))?.trim();
+    if key.is_empty() || key.contains(['/', '\\', '.']) {
+        return None;
+    }
+    let dir = crate::data_dir().join("icons");
+    ["png", "jpg", "jpeg", "gif", "webp"].iter().find_map(|ext| fs::read(dir.join(format!("{key}.{ext}"))).ok())
+        .filter(|b| b.len() <= ICON_MAX && image_ext(b).is_some())
+        .map(|b| base64::engine::general_purpose::STANDARD.encode(b))
+}
+
+/// Put a shared pack's icon into Prism's icons folder; returns its iconKey. Only a real, small image is taken.
+fn take_icon(icons: &Path, id: &str, icon: &str) -> Option<String> {
+    use base64::Engine;
+    let b = base64::engine::general_purpose::STANDARD.decode(icon.as_bytes()).ok().filter(|b| b.len() <= ICON_MAX)?;
+    let ext = image_ext(&b)?;
+    let slug: String = id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    let key = format!("shared-{slug}-{}", &crate::sha1_hex(&b)[..8]);
+    fs::create_dir_all(icons).ok()?;
+    fs::write(icons.join(format!("{key}.{ext}")), &b).ok()?;
+    Some(key)
 }
 
 // ---------------------------------------------------------------- installing someone else's pack
@@ -233,7 +274,11 @@ pub fn create_instance(instances: &Path, m: &Manifest) -> Result<(String, PathBu
     let inst = instances.join(&id);
     let game = inst.join("minecraft");
     fs::create_dir_all(&game).map_err(|e| e.to_string())?;
-    fs::write(inst.join("instance.cfg"), format!("InstanceType=OneSix\nname={}\n", m.name.replace(['\r', '\n'], " "))).map_err(|e| e.to_string())?;
+    let mut cfg = format!("InstanceType=OneSix\nname={}\n", m.name.replace(['\r', '\n'], " "));
+    if let Some(key) = m.icon.as_deref().and_then(|i| take_icon(&crate::data_dir().join("icons"), &id, i)) {
+        cfg.push_str(&format!("iconKey={key}\n"));
+    }
+    fs::write(inst.join("instance.cfg"), cfg).map_err(|e| e.to_string())?;
     fs::write(inst.join("mmc-pack.json"), &m.pack).map_err(|e| e.to_string())?;
     Ok((id, game))
 }
@@ -341,6 +386,21 @@ pub fn zip_name(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icons_travel_only_as_real_images() {
+        use base64::Engine;
+        let t = tempfile::tempdir().unwrap();
+        let png = b"\x89PNG\r\n\x1a\n rest of a picture".to_vec();
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let key = take_icon(t.path(), "My Pack (2)", &b64(&png)).unwrap();
+        assert!(key.starts_with("shared-my-pack--2--") && t.path().join(format!("{key}.png")).is_file());
+        // Anything else wearing an icon's name is dropped: a program, a script, an oversized blob.
+        assert!(take_icon(t.path(), "x", &b64(b"MZ\x90\x00 a program")).is_none());
+        assert!(take_icon(t.path(), "x", &b64(b"<script>alert(1)</script>")).is_none());
+        assert!(take_icon(t.path(), "x", &b64(&[png.clone(), vec![0; ICON_MAX]].concat())).is_none());
+        assert!(take_icon(t.path(), "x", "not base64 !!").is_none());
+    }
 
     fn pack() -> (tempfile::TempDir, PathBuf) {
         let t = tempfile::tempdir().unwrap();

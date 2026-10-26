@@ -421,9 +421,17 @@ async fn pack_code_stop(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, 
 /// Import → code: what the pack holds, including its custom files (for the warning).
 #[tauri::command]
 async fn pack_code_preview(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<prism::share_net::PackPreview, String> {
+    use tauri::Emitter;
     let code = prism::packcode::normalize(&code)?;
     let cf = cf_client().map(std::sync::Arc::new);
-    share_net(&app, &net).await?.preview(&code, cf).await
+    let a = app.clone();
+    share_net(&app, &net).await?.preview(&code, cf, move |p| { let _ = a.emit("pack-import", p); }).await
+}
+
+/// Import → Stop: end the check or install under way (its half-made profile is removed).
+#[tauri::command]
+fn pack_code_cancel() {
+    prism::share_net::stop_incoming();
 }
 
 /// Install a code's pack as a new profile; `with_custom` takes the files no site vouches for too.
@@ -1482,13 +1490,49 @@ fn show_main(app: &tauri::AppHandle) {
 /// makes them see stale copies of instances and load far slower.
 #[tauri::command]
 fn sandboxed() -> bool {
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetCurrentPackageFullName(len: *mut u32, name: *mut u16) -> i32;
+    static IT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *IT.get_or_init(|| {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentPackageFullName(len: *mut u32, name: *mut u16) -> i32;
+        }
+        let mut len = 0u32;
+        // APPMODEL_ERROR_NO_PACKAGE (15700) means a normal desktop process.
+        (unsafe { GetCurrentPackageFullName(&mut len, std::ptr::null_mut()) } != 15700) || appdata_redirected()
+    })
+}
+
+/// A process started by a packaged app (the Claude app) can have no package identity of its own and still get its
+/// AppData quietly redirected into that app's private copy (Packages\<app>\LocalCache): Obelisk then reads a stale
+/// Prism config and shows the wrong modpacks. Seen by writing a file to AppData and finding it there.
+fn appdata_redirected() -> bool {
+    let (Some(roaming), Some(local)) = (std::env::var_os("APPDATA"), std::env::var_os("LOCALAPPDATA")) else { return false };
+    let name = format!("obelisk-probe-{}", std::process::id());
+    let probe = std::path::Path::new(&roaming).join(&name);
+    if std::fs::write(&probe, b"").is_err() {
+        return false;
     }
-    let mut len = 0u32;
-    // APPMODEL_ERROR_NO_PACKAGE (15700) means a normal desktop process.
-    unsafe { GetCurrentPackageFullName(&mut len, std::ptr::null_mut()) != 15700 }
+    let found = std::fs::read_dir(std::path::Path::new(&local).join("Packages")).into_iter().flatten().flatten()
+        .any(|e| e.path().join("LocalCache").join("Roaming").join(&name).exists());
+    let _ = std::fs::remove_file(&probe);
+    found
+}
+
+/// Started inside another app's sandbox (see `sandboxed`): start again through Explorer, which runs Obelisk as a
+/// normal desktop program, and let this copy end (true). Not twice in a row, should Explorer's start be redirected too.
+pub fn leave_sandbox() -> bool {
+    if !sandboxed() {
+        return false;
+    }
+    let mark = std::env::temp_dir().join("obelisk-left-sandbox");
+    let recent = std::fs::metadata(&mark).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() < 60);
+    let Ok(exe) = std::env::current_exe() else { return false };
+    if recent {
+        return false;
+    }
+    let _ = std::fs::write(&mark, b"");
+    std::process::Command::new("explorer.exe").arg(&exe).spawn().is_ok()
 }
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -1675,7 +1719,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings,
             set_settings, set_cf_key, has_cf_key, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, pack_code_start, pack_code_stop, pack_code_preview, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, pack_code_start, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

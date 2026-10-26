@@ -20,6 +20,27 @@
   let done = $state(0);
   let total = $state(0);
   let current = $state("");
+  // What the backend is doing, and when it last moved: no news for a while means something is stuck.
+  let step = $state("");
+  let lastMove = $state(Date.now());
+  let now = $state(Date.now());
+  const busy = $derived(stage === "looking" || stage === "installing");
+  const quiet = $derived(busy ? Math.floor((now - lastMove) / 1000) : 0);
+  const STEPS: Record<string, string> = { checking: "Checking your friend's custom files", installing: "Installing", scanning: "Scanning" };
+  const status = $derived(!step ? "Connecting to your friend's PC…"
+    : step === "scanning" ? current
+    : `${STEPS[step] ?? step} · ${done} / ${total}`);
+
+  $effect(() => {
+    const t = setInterval(() => (now = Date.now()), 1000);
+    const un = listen<{ step: string; done: number; total: number; file: string }>("pack-import", (e) => {
+      ({ step, done, total, file: current } = e.payload);
+      lastMove = Date.now();
+    });
+    return () => { clearInterval(t); un.then((u) => u()); };
+  });
+  const startWatch = () => { step = current = ""; done = total = 0; lastMove = now = Date.now(); };
+  const stop = () => invoke("pack_code_cancel").catch(() => {});
 
   const close = () => (app.packImport = null);
   const mb = (b: number) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB";
@@ -35,6 +56,7 @@
   async function go() {
     if (!code.trim()) return toast("Paste the code your friend gave you.");
     stage = "looking";
+    startWatch();
     try {
       preview = await invoke<Preview>("pack_code_preview", { code });
       if (preview.custom.length || preview.refused.length || preview.scan.result !== "clean") stage = "custom";
@@ -54,8 +76,7 @@
 
   async function install(withCustom: boolean) {
     stage = "installing";
-    done = total = 0;
-    const un = await listen<{ done: number; total: number; file: string }>("pack-import", (e) => { ({ done, total, file: current } = e.payload); });
+    startWatch();
     try {
       const r = await invoke<Report>("pack_code_import", { code, withCustom });
       await syncInstances();
@@ -64,7 +85,6 @@
       toast(`${preview?.name ?? "The pack"} is installed. It's in your Library.${out}${scan}`);
       close();
     } catch (e) { toast(String(e)); stage = "enter"; }
-    finally { un(); }
   }
 </script>
 
@@ -83,7 +103,11 @@
           {stage === "looking" ? "Finding…" : "Paste & go"}
         </button>
       </div>
-      <button class="link small" disabled={stage === "looking"} onclick={fromFile}>Or import a .zip / .mrpack file…</button>
+      {#if stage === "looking"}
+        {@render progress()}
+      {:else}
+        <button class="link small" onclick={fromFile}>Or import a .zip / .mrpack file…</button>
+      {/if}
     {:else if stage === "custom" && preview}
       {#if preview.scan.result === "threat"}
         <div class="warn">
@@ -129,13 +153,25 @@
       {/if}
     {:else}
       <p>Installing {preview?.name ?? "the pack"}…</p>
-      <div class="bar"><i style:width="{total ? (done / total) * 100 : 0}%"></i></div>
-      <p class="muted small path">{total ? `${done} / ${total}` : "Starting…"} {current}</p>
+      {@render progress()}
     {/if}
   </div>
 </div>
 
+{#snippet progress()}
+  <div class="bar" class:busy={!total || step === "scanning"}><i style:width={total && step !== "scanning" ? `${(done / total) * 100}%` : ""}></i></div>
+  <p class="small">{status}</p>
+  {#if current && step !== "scanning"}<p class="muted small path">{current}</p>{/if}
+  {#if quiet >= 20}
+    <p class="stall small">Nothing has moved for {quiet} seconds. Your friend's PC may have gone to sleep or closed Obelisk; Obelisk gives up by itself after 45 seconds without data.</p>
+  {/if}
+  <div class="row"><span class="spacer"></span><button class="ghost" onclick={stop}>Stop</button></div>
+{/snippet}
+
 <style>
+  .bar.busy i { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+  .stall { color: var(--err-text); background: var(--err-bg); border-radius: 6px; padding: 8px 10px; }
   .back { position: fixed; inset: 0; background: rgb(0 0 0 / 0.6); display: grid; place-items: center; z-index: 40; }
   .dialog { position: relative; width: min(560px, 94vw); max-height: 90vh; overflow-y: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; outline: none; }
   .x { position: absolute; top: 10px; right: 10px; background: none; border: 0; color: var(--muted); padding: 4px 8px; }
