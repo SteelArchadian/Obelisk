@@ -1,0 +1,193 @@
+<script lang="ts">
+  // Share a pack with friends, peer to peer: invite code, who's in, my changes to send, and their
+  // changes waiting for review. Applying takes a safety backup first, so it can always be undone.
+  import { invoke } from "@tauri-apps/api/core";
+  import { app, toast } from "./state.svelte";
+  import { syncInstances } from "./install";
+  import type { Instance } from "./api";
+
+  type Change = { kind: "added" | "removed" | "changed"; area: string; path: string; label: string };
+  type Member = { id: string; name: string; lastSeenMs: number };
+  type Changeset = { id: string; author: string; authorName: string; atMs: number; label: string; changes: Change[] };
+  type Status = { shared: boolean; me: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[] };
+
+  let { inst }: { inst: Instance } = $props();
+  let st = $state<Status | null>(null);
+  let code = $state("");
+  let label = $state("");
+  let busy = $state("");
+  let open = $state<string | null>(null);
+  let confirmStop = $state(false);
+
+  const load = () => invoke<Status>("share_status", { instanceId: inst.id }).then((s) => (st = s)).catch((e) => toast(String(e)));
+  $effect(() => { void inst.id; load(); });
+
+  const close = () => (app.sharePack = null);
+  async function run<T>(what: string, fn: () => Promise<T>): Promise<T | undefined> {
+    busy = what;
+    try { return await fn(); } catch (e) { toast(String(e)); } finally { busy = ""; }
+  }
+
+  const start = () => run("start", async () => { code = await invoke<string>("share_start", { instanceId: inst.id }); await load(); });
+  const invite = () => run("invite", async () => { code = await invoke<string>("share_start", { instanceId: inst.id }); });
+  const copy = () => navigator.clipboard.writeText(code).then(() => toast("Invite code copied. Send it to your friend."));
+  const send = () => run("send", async () => {
+    const sent = await invoke<boolean>("share_publish", { instanceId: inst.id, label });
+    label = "";
+    toast(sent ? "Your changes are ready for your friends. They'll get them next time you're both online." : "Nothing new to send.");
+    await load();
+  });
+  const sync = () => run("sync", async () => {
+    const n = await invoke<number>("share_sync");
+    toast(n ? `Got ${n} new change${n === 1 ? "" : "s"} from friends.` : "Up to date with everyone who's online.");
+    await load();
+  });
+  const apply = (ids: string[]) => run("apply", async () => {
+    const r = await invoke<{ applied: number; conflicts: string[] }>("share_apply", { instanceId: inst.id, ids });
+    toast(r.conflicts.length
+      ? `Applied. ${r.conflicts.length} file${r.conflicts.length === 1 ? "" : "s"} you'd also changed now use their version; yours is in Backups.`
+      : `Applied ${r.applied} change${r.applied === 1 ? "" : "s"}. Undo anytime from Backups.`);
+    await load();
+    window.dispatchEvent(new Event("share-changed"));
+  });
+  const skip = (id: string) => run("skip", async () => { await invoke("share_skip", { instanceId: inst.id, id }); await load(); window.dispatchEvent(new Event("share-changed")); });
+  const setAuto = (on: boolean) => run("auto", async () => { await invoke("share_set_auto", { instanceId: inst.id, on }); await load(); });
+  const stop = () => run("stop", async () => { await invoke("share_stop", { instanceId: inst.id }); confirmStop = false; code = ""; await load(); await syncInstances(); });
+
+  const VERB = { added: "Added", removed: "Removed", changed: "Changed" };
+  const when = (ms: number) => (ms ? new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never");
+  const online = (m: Member) => Date.now() - m.lastSeenMs < 3 * 60_000;
+</script>
+
+<div class="back" role="presentation" onclick={() => !busy && close()}>
+  <div class="dialog" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && close()}>
+    <button class="x" onclick={close} aria-label="Close">✕</button>
+    <h3>Collaborative Pack · {inst.name}</h3>
+
+    {#if !st}
+      <p class="muted">Loading…</p>
+    {:else if !st.shared}
+      <p>Play this pack with friends and keep it in step: when anyone adds or removes mods or changes configs, the others get those changes to review and apply.</p>
+      <ul class="muted small">
+        <li>Obelisk connects straight to your friends' Obelisk, encrypted. No account and no server of ours.</li>
+        <li>Changes travel when you're both online with Obelisk open.</li>
+        <li>Worlds and your personal game settings aren't shared.</li>
+        <li>Every applied change can be undone from Backups.</li>
+      </ul>
+      <div class="actions"><div class="spacer"></div><button class="primary" disabled={!!busy} onclick={start}>{busy ? "Creating…" : "Create collaborative pack"}</button></div>
+    {:else if st.share}
+      <section>
+        <div class="row">
+          <strong>Invite a friend</strong>
+          <span class="muted small">They paste the code in My Modpacks → Join a shared pack.</span>
+          <div class="spacer"></div>
+          {#if code}<button class="ghost" onclick={copy}>Copy code</button>{:else}<button class="ghost" disabled={!!busy} onclick={invite}>{busy === "invite" ? "Making a code…" : "Get invite code"}</button>{/if}
+        </div>
+        {#if code}<textarea class="code" readonly onfocus={(e) => e.currentTarget.select()}>{code}</textarea>{/if}
+      </section>
+
+      <section>
+        <div class="row"><strong>Members</strong><div class="spacer"></div><button class="ghost" disabled={!!busy} onclick={sync}>{busy === "sync" ? "Checking…" : "Check for changes now"}</button></div>
+        <div class="members">
+          {#each st.share.members as m (m.id)}
+            <span class="member" title={m.id}><i class:on={m.id === st.me || online(m)}></i>{m.name || "Friend"}{#if m.id === st.me}&nbsp;(you){:else}<small> · seen {when(m.lastSeenMs)}</small>{/if}</span>
+          {/each}
+        </div>
+      </section>
+
+      <section>
+        <div class="row">
+          <strong>Your changes</strong>
+          <span class="muted small">{st.local.length ? `${st.local.length} not sent yet` : "Nothing new"}</span>
+          <div class="spacer"></div>
+          {#if st.local.length}
+            <input class="search" placeholder="What did you change? (optional)" bind:value={label} />
+            <button class="primary" disabled={!!busy} onclick={send}>Send to friends</button>
+          {/if}
+        </div>
+        {#if st.local.length}
+          <ul class="changes">{#each st.local.slice(0, 6) as c (c.path)}<li><span class="k {c.kind}">{VERB[c.kind]}</span> {c.label}</li>{/each}{#if st.local.length > 6}<li class="muted">…and {st.local.length - 6} more</li>{/if}</ul>
+        {/if}
+      </section>
+
+      <section>
+        <div class="row">
+          <strong>From friends</strong>
+          <span class="muted small">{st.incoming.length ? `${st.incoming.length} waiting` : "All caught up"}</span>
+          <div class="spacer"></div>
+          {#if st.incoming.length > 1}<button class="primary" disabled={!!busy} onclick={() => apply([])}>Apply all</button>{/if}
+        </div>
+        <div class="incoming">
+          {#each st.incoming as c (c.id)}
+            <div class="cs">
+              <button class="head" onclick={() => (open = open === c.id ? null : c.id)}>
+                <span class="caret">{open === c.id ? "▾" : "▸"}</span>
+                <strong>{c.authorName}</strong> <span class="muted small">{when(c.atMs)}</span>
+                <span class="what">{c.label || (c.changes.length ? `${c.changes.length} change${c.changes.length === 1 ? "" : "s"}` : "The whole pack")}</span>
+              </button>
+              {#if open === c.id}
+                <ul class="changes body">{#each c.changes as ch (ch.path)}<li><span class="k {ch.kind}">{VERB[ch.kind]}</span> {ch.label}</li>{:else}<li class="muted">The full pack as they shared it.</li>{/each}</ul>
+              {/if}
+              <div class="row cs-actions"><div class="spacer"></div>
+                <button class="ghost" disabled={!!busy} onclick={() => skip(c.id)} title="Keep your version; this won't be offered again">Skip</button>
+                <button class="primary" disabled={!!busy} onclick={() => apply([c.id])}>Apply</button>
+              </div>
+            </div>
+          {/each}
+        </div>
+        <label class="row small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /> Apply friends' changes automatically (still backed up first)</label>
+      </section>
+
+      <div class="actions">
+        {#if confirmStop}
+          <span class="muted small">Stop sharing? Your pack stays as it is; friends keep their copies.</span>
+          <div class="spacer"></div>
+          <button class="ghost" onclick={() => (confirmStop = false)}>Cancel</button>
+          <button class="primary danger" disabled={!!busy} onclick={stop}>Stop sharing</button>
+        {:else}
+          <button class="ghost" onclick={() => (confirmStop = true)}>Stop sharing…</button>
+          <div class="spacer"></div>
+          <button class="primary" onclick={close}>Done</button>
+        {/if}
+      </div>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .back { position: fixed; inset: 0; background: rgb(0 0 0 / 0.6); display: grid; place-items: center; z-index: 40; }
+  .dialog { position: relative; width: min(720px, 94vw); max-height: 90vh; overflow-y: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; outline: none; }
+  .x { position: absolute; top: 10px; right: 10px; background: none; border: 0; color: var(--muted); padding: 4px 8px; }
+  h3 { margin: 0; font-size: 17px; }
+  p { margin: 0; }
+  ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+  section { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .code { width: 100%; height: 64px; resize: none; font: 11.5px ui-monospace, Consolas, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; word-break: break-all; }
+  .members { display: flex; flex-wrap: wrap; gap: 8px; }
+  .member { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+  .member i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .member i.on { background: var(--mr); }
+  .changes { list-style: none; padding: 0; font-size: 13px; }
+  .changes li { display: flex; align-items: center; gap: 8px; }
+  .k { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 3px; min-width: 64px; text-align: center; }
+  .k.added { background: color-mix(in srgb, var(--mr) 18%, transparent); color: var(--mr); }
+  .k.removed { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+  .k.changed { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+  .incoming { display: flex; flex-direction: column; gap: 6px; }
+  .cs { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 4px 10px 8px; }
+  .head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 6px 0; text-align: left; }
+  .caret { width: 12px; color: var(--muted); }
+  .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+  .body { padding-left: 20px; }
+  .cs-actions { margin-top: 4px; }
+  .search { width: 240px; }
+  .actions { display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 12px; }
+  .primary { color: #fff; background: var(--accent); border: 0; border-radius: 4px; padding: 7px 16px; font-weight: 600; }
+  .primary:disabled { opacity: 0.6; }
+  .primary.danger { background: var(--danger); }
+  .ghost { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; }
+</style>

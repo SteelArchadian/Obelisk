@@ -1,0 +1,169 @@
+/* The block skin (data-skin="block" on <html>). Colours and textures come from themes.ts as CSS
+   variables; this file shapes everything: pixel font, framed panels, plate buttons, glowing
+   accents. Panels stay near-opaque so the UI reads clearly over the painted scene. */
+
+:root[data-skin="block"] {
+  --font-display: "Pixelify Sans", "Segoe UI", sans-serif;
+  /* A raised plate: light top-left edge, dark bottom-right edge, hard outline. */
+  --plate-edge: inset 2px 2px 0 rgb(255 255 255 / 0.16), inset -2px -3px 0 rgb(0 0 0 / 0.45);
+  --outline: 0 0 0 2px var(--edge-dark);
+  --drop: 0 4px 0 rgb(0 0 0 / 0.45);
+  /* Panels: dark glass with a glowing inner hairline and accent corner studs. */
+  --pane: color-mix(in srgb, var(--panel) 86%, transparent);
+  --pane-2: color-mix(in srgb, var(--panel) 94%, transparent);
+  --stud: color-mix(in srgb, var(--accent) 80%, #fff 10%);
+  --studs:
+    linear-gradient(var(--stud), var(--stud)) left 2px top 2px / 4px 4px no-repeat,
+    linear-gradient(var(--stud), var(--stud)) right 2px top 2px / 4px 4px no-repeat,
+    linear-gradient(var(--stud), var(--stud)) left 2px bottom 2px / 4px 4px no-repeat,
+    linear-gradient(var(--stud), var(--stud)) right 2px bottom 2px / 4px 4px no-repeat;
+  --pane-glow: var(--outline), var(--drop), 0 0 22px color-mix(in srgb, var(--accent) 18%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent), inset 0 0 26px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+/* ---- pixel font on everything (code stays monospace) ---- */
+:root[data-skin="block"] body,
+:root[data-skin="block"] :is(button, input, select, textarea, h1, h2, h3, h4, h5, small, strong, b, label, td, th) {
+  font-family: var(--font-display) !important;
+}
+:root[data-skin="block"] :is(pre, code, .mono, .err-line, .log-view, textarea[spellcheck="false"]) { font-family: ui-monospace, Consolas, monospace !important; }
+:root[data-skin="block"] body { font-size: 15px; letter-spacing: 0.01em; background: var(--bg); }
+:root[data-skin="block"] :is(h1, h2, h3, .hero h2, .info h2, .head h2) { text-shadow: 0 2px 0 rgb(0 0 0 / 0.6); }
+:root[data-skin="block"] .scene { display: block; }
+
+/* Section headings like "CRASHES AND LOGS" use the theme's heading colour. */
+:root[data-skin="block"] :is(.list h4, .fgroups h5, .side h4, .tgroup) { color: var(--heading) !important; letter-spacing: 0.1em; text-shadow: 0 0 10px var(--glow); }
+:root[data-skin="block"] .list h4 { display: flex; align-items: center; gap: 10px; font-size: 13px !important; }
+:root[data-skin="block"] .list h4::after {
+  content: ""; flex: 1; height: 2px; max-width: 120px;
+  background: linear-gradient(90deg, var(--heading), transparent);
+  box-shadow: 0 0 6px var(--glow);
+}
+
+/* ---- brand and logo ---- */
+:root[data-skin="block"] .brand {
+  font-size: 34px !important; font-weight: 700; letter-spacing: 0.08em !important;
+  color: var(--accent-hover) !important;
+  background: linear-gradient(180deg, #fff 0%, var(--heading) 38%, var(--accent) 62%, color-mix(in srgb, var(--accent) 55%, #000) 100%);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 3px 0 var(--edge-dark)) drop-shadow(0 0 10px var(--glow));
+}
+:root[data-skin="block"] .logo img { filter: var(--logo-filter) drop-shadow(0 0 8px var(--glow)); }
+
+/* ---- framed panels: textured border, dark solid inside ---- */
+:root[data-skin="block"] :is(.table, .tile, .card, .tilecard, .finding, .suspect, .stats > div, .list, .mods-cost, .hist,
+  .dialog, .modal, .filters, .ctx, .menu, .acct-menu, .world, .log-list, .log-view, .note, .diag .hero, .toggle-row,
+  .instance > .hero, .side, .launcher, .change, .vtable) {
+  border: 5px solid transparent !important;
+  border-image: var(--tex-frame) 5 repeat !important;
+  border-radius: 0 !important;
+  background: var(--studs), linear-gradient(180deg, var(--pane), var(--pane-2)) !important;
+  box-shadow: var(--pane-glow) !important;
+}
+/* The profile banner keeps the scene visible on its right side, like a window. */
+:root[data-skin="block"] .instance > .hero {
+  background: var(--studs), linear-gradient(90deg, color-mix(in srgb, var(--panel) 88%, transparent) 0%, color-mix(in srgb, var(--panel) 55%, transparent) 45%, color-mix(in srgb, var(--panel) 10%, transparent) 100%) !important;
+}
+/* Callouts get a coloured stripe; crashes stay red. */
+:root[data-skin="block"] .finding.critical { box-shadow: var(--pane-glow), inset 6px 0 0 #ff4d4d !important; }
+:root[data-skin="block"] .finding.warning { box-shadow: var(--outline), var(--drop), 0 0 24px rgb(255 176 46 / 0.3), inset 0 0 0 1px rgb(255 176 46 / 0.5), inset 6px 0 0 #ffb02e !important; background: var(--studs), linear-gradient(90deg, color-mix(in srgb, #4a2a06 90%, transparent), color-mix(in srgb, #241404 88%, transparent)) !important; }
+:root[data-skin="block"] .finding.info { box-shadow: var(--pane-glow), inset 6px 0 0 var(--accent) !important; }
+:root[data-skin="block"] .diag .hero { box-shadow: var(--pane-glow), inset 6px 0 0 var(--accent) !important; }
+:root[data-skin="block"] .diag .hero:not(.ok) { box-shadow: var(--pane-glow), inset 6px 0 0 #ff4d4d !important; }
+
+/* Rows and lines inside panels: clearer separation. */
+:root[data-skin="block"] .table .thead { background: rgb(0 0 0 / 0.35); }
+:root[data-skin="block"] .table .thead .th { color: var(--heading) !important; }
+:root[data-skin="block"] .table .row:nth-child(even) { background: rgb(255 255 255 / 0.025); }
+:root[data-skin="block"] .table .row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent) !important; }
+
+/* ---- plate buttons: textured, bevelled, outlined ---- */
+:root[data-skin="block"] :is(.ghost, .tool, .hopper, .add-content, .reset, .pinned, .views button, .winctl button, .x,
+  .nav button, [role="tab"], .subtabs button, .rail-btn, .rail-item, .files button, .list button, .theme, .folder, .opt) {
+  border-radius: 0 !important;
+}
+:root[data-skin="block"] :is(.ghost, .tool, .hopper, .add-content, .reset, .pinned, .views button, .nav button, [role="tab"], .subtabs button, .folder, .toolbar button.icon) {
+  background-color: var(--panel-2) !important;
+  background-image: var(--tex-plate) !important;
+  background-size: 48px 48px !important;
+  image-rendering: pixelated;
+  border: 0 !important;
+  box-shadow: var(--plate-edge), var(--outline), 0 3px 0 rgb(0 0 0 / 0.5) !important;
+  color: var(--text) !important;
+  text-shadow: 0 2px 0 rgb(0 0 0 / 0.7);
+  padding: 8px 16px !important;
+  transition: transform 0.05s, filter 0.1s;
+}
+:root[data-skin="block"] :is(.ghost, .tool, .hopper, .add-content, .reset, .pinned, .nav button, [role="tab"], .subtabs button, .folder, .toolbar button.icon):hover:not(:disabled) {
+  filter: brightness(1.25);
+}
+:root[data-skin="block"] :is(.ghost, .tool, .hopper, .add-content, .nav button, [role="tab"], .subtabs button, .folder):active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: inset 2px 3px 0 rgb(0 0 0 / 0.45), var(--outline) !important;
+}
+:root[data-skin="block"] :is(.hopper, .trash-btn, .toolbar button.icon) { padding: 0 0 2px !important; width: 40px !important; height: 38px !important; display: grid !important; place-items: center; }
+:root[data-skin="block"] .reset { padding: 0 !important; }
+:root[data-skin="block"] .ghost.danger { color: #ff8080 !important; }
+
+/* The selected tab / nav item / sub tab: accent-tinted plate with a glowing accent outline. */
+:root[data-skin="block"] :is(.toolbar button.icon.on, .nav button.on, [role="tab"].on, .subtabs button.on, .views button.on, .list button.on, .files button.on) {
+  background-image: linear-gradient(color-mix(in srgb, var(--accent) 30%, transparent), color-mix(in srgb, var(--accent) 18%, transparent)), var(--tex-plate) !important;
+  box-shadow: var(--plate-edge), 0 0 0 2px var(--accent), 0 0 16px var(--glow), 0 3px 0 rgb(0 0 0 / 0.5) !important;
+  color: #fff !important;
+}
+:root[data-skin="block"] :is(.nav, .tabs, .subtabs) { gap: 10px !important; border-bottom: 0 !important; }
+:root[data-skin="block"] .nav button { font-size: 16px !important; padding: 8px 16px !important; }
+:root[data-skin="block"] :is(.nav button, [role="tab"]) .icon { width: 20px; height: 20px; color: var(--heading); filter: drop-shadow(0 0 3px var(--glow)); }
+:root[data-skin="block"] .stats .icon, :root[data-skin="block"] .finding .icon { color: var(--accent-hover); filter: drop-shadow(0 0 4px var(--glow)); }
+
+/* ---- primary actions: bright accent plates that glow ---- */
+:root[data-skin="block"] :is(.play, .primary, .upd, .btn:not(.muted):not(.alt), .back-float) {
+  border-radius: 0 !important;
+  border: 0 !important;
+  background: linear-gradient(180deg, var(--accent-hover) 0%, var(--accent) 50%, color-mix(in srgb, var(--accent) 80%, #000) 100%) !important;
+  color: var(--accent-text) !important;
+  box-shadow: inset 2px 2px 0 rgb(255 255 255 / 0.45), inset -2px -3px 0 rgb(0 0 0 / 0.35), var(--outline), 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 22px var(--glow) !important;
+  text-shadow: 0 2px 0 rgb(0 0 0 / 0.45);
+  font-weight: 700;
+}
+:root[data-skin="block"] .play { font-size: 22px !important; padding: 12px 36px !important; }
+:root[data-skin="block"] :is(.play, .primary, .upd):hover:not(:disabled) { filter: brightness(1.12); }
+:root[data-skin="block"] :is(.play, .primary, .upd):active:not(:disabled) { transform: translateY(2px); }
+
+/* ---- inputs: dark inset wells ---- */
+:root[data-skin="block"] :is(.search, .searchbox, .select, select, .val, .fsearch, input.num, .args) {
+  border-radius: 0 !important;
+  background: rgb(0 0 0 / 0.55) !important;
+  border: 0 !important;
+  box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.6), inset -1px -1px 0 rgb(255 255 255 / 0.12), var(--outline) !important;
+  color: var(--text) !important;
+}
+:root[data-skin="block"] .searchbox:focus-within, :root[data-skin="block"] .search:focus { box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.6), 0 0 0 2px var(--accent), 0 0 12px var(--glow) !important; }
+
+/* ---- small chips and switches ---- */
+:root[data-skin="block"] :is(.badge, .count, .chip, .tag, .fcount) { border-radius: 2px !important; }
+:root[data-skin="block"] .switch { border-radius: 2px !important; box-shadow: var(--outline); }
+:root[data-skin="block"] .switch i { border-radius: 1px !important; }
+
+/* ---- side rail ---- */
+:root[data-skin="block"] .shell .rail {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--panel) 88%, transparent), color-mix(in srgb, var(--panel) 70%, transparent)) !important;
+  box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 15%, transparent);
+  border-right: 4px solid transparent !important; border-image: var(--tex-frame) 4 repeat !important;
+}
+:root[data-skin="block"] :is(.rail-item, .rail-btn) { box-shadow: var(--plate-edge), var(--outline) !important; background-color: var(--panel-2) !important; }
+:root[data-skin="block"] :is(.rail-item.active, .rail-btn.active) { box-shadow: 0 0 0 2px var(--accent), 0 0 16px var(--glow) !important; }
+
+/* The main column is transparent so the scene shows between panels. */
+:root[data-skin="block"] main, :root[data-skin="block"] .view { background: transparent !important; }
+:root[data-skin="block"] .top .winctl button {
+  border: 0 !important; border-radius: 0 !important; color: var(--text) !important;
+  background: var(--panel-2) var(--tex-plate) !important; background-size: 48px 48px !important;
+  box-shadow: var(--plate-edge), var(--outline), 0 3px 0 rgb(0 0 0 / 0.5), 0 0 12px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+:root[data-skin="block"] .top .winctl button:hover { filter: brightness(1.3); box-shadow: var(--plate-edge), 0 0 0 2px var(--accent), 0 0 14px var(--glow) !important; }
+:root[data-skin="block"] .top .winctl .close:hover { background: #c42b1c !important; }
+
+/* Icons on the active tab or nav item take the accent colour (every theme). */
+:is(.nav button.on, [role="tab"].on) .icon { color: var(--accent); }
+:root[data-skin="block"] :is(.nav button.on, [role="tab"].on) .icon { color: #fff; filter: drop-shadow(0 0 4px var(--glow)); }

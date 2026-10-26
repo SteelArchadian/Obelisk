@@ -1,0 +1,178 @@
+/* Painted themes (data-art on <html>): real art from static/themes/<id>/ instead of drawn pixels.
+   Layers, back to front: painted background, framed panels (birch frame image, see-through dark wood or
+   light plank rows), wood buttons cut from the concept (nails and shading included), glowing green states.
+   Overrides the block skin, so every rule here is one attribute more specific. */
+
+:root[data-art][data-skin="block"] {
+  --font-display: "Nunito", "Segoe UI", sans-serif;
+  --wood-ink: #3b2614;
+  --glass: rgb(44 29 15 / 0.84);
+  --glass-2: rgb(52 34 18 / 0.62);
+  --green-rim: #84e65c;
+}
+
+/* ---- type: clean bold font, blocky only for the logo ---- */
+:root[data-art][data-skin="block"] body,
+:root[data-art][data-skin="block"] :is(button, input, select, textarea, h1, h2, h3, h4, h5, small, strong, b, label, td, th) {
+  font-family: var(--font-display) !important;
+}
+:root[data-art][data-skin="block"] body { font-weight: 600; letter-spacing: 0; }
+:root[data-art][data-skin="block"] :is(h2, h3, strong, b) { font-weight: 800; }
+
+/* ---- background: the painting, no drawn scene ---- */
+:root[data-art][data-skin="block"] .scene:not(.fx) { display: none !important; }
+:root[data-art][data-skin="block"] body { background: #1b140c var(--art-bg) center / cover no-repeat fixed !important; }
+
+/* ---- logo ---- */
+:root[data-art][data-skin="block"] .brand {
+  font-family: "Pixelify Sans", sans-serif !important; font-size: 36px !important; font-weight: 700;
+  background: none !important; -webkit-text-fill-color: #f7ecd0; color: #f7ecd0 !important;
+  text-shadow: 2px 0 0 #3a2410, -2px 0 0 #3a2410, 0 2px 0 #3a2410, 0 -2px 0 #3a2410, 0 5px 0 #24160a, 0 6px 10px rgb(0 0 0 / 0.5);
+  filter: none !important;
+}
+
+/* ---- panels: birch frame image around see-through dark wood ---- */
+:root[data-art][data-skin="block"] :is(.table, .tile, .card, .tilecard, .finding, .suspect, .stats > div, .list, .mods-cost, .hist,
+  .dialog, .modal, .filters, .ctx, .menu, .acct-menu, .world, .log-list, .log-view, .note, .diag .hero, .toggle-row,
+  .instance > .hero, .side, .launcher, .change, .vtable) {
+  border: 14px solid transparent !important;
+  border-image: var(--art-frame) 55 / 14px stretch !important;
+  border-radius: 0 !important;
+  background: linear-gradient(180deg, var(--glass), color-mix(in srgb, var(--glass) 100%, #000 8%)) !important;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.38) !important;
+}
+:root[data-art][data-skin="block"] .instance > .hero {
+  background: linear-gradient(90deg, var(--glass) 0%, var(--glass) 35%, var(--glass-2) 100%) !important;
+}
+:root[data-art][data-skin="block"] .stats > div, :root[data-art][data-skin="block"] .instance > .hero .stats span { text-shadow: 0 1px 2px rgb(0 0 0 / 0.6); }
+:root[data-art][data-skin="block"] :is(h1, h2, h3) { color: #fbf3e0 !important; text-shadow: 0 2px 4px rgb(0 0 0 / 0.55) !important; }
+
+/* ---- the mod list: light birch planks, dark text, dark-wood header ---- */
+:root[data-art][data-skin="block"] .table {
+  --text: #2e1d0d; --text-2: #3d2a17; --muted: #6e5437; --row-line: transparent;
+  background: #e6c9a4 !important;
+  color: var(--text);
+}
+:root[data-art][data-skin="block"] .table input[type="checkbox"] { accent-color: #33ad34; filter: drop-shadow(0 0 0 #6e5437); }
+:root[data-art][data-skin="block"] .table .thead {
+  background: #4a2f19 var(--art-header) left top / auto 100% repeat-x !important;
+}
+:root[data-art][data-skin="block"] .table .thead :is(.th, span, button) { color: #f6e7c8 !important; text-shadow: 0 1px 2px rgb(0 0 0 / 0.6); }
+:root[data-art][data-skin="block"] .table .row {
+  background: var(--art-row) left top / 248px 100% repeat-x !important;
+  border-bottom: 0 !important;
+}
+:root[data-art][data-skin="block"] .table .row:hover { background: linear-gradient(rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.18)), var(--art-row) left top / 248px 100% repeat-x !important; }
+:root[data-art][data-skin="block"] .table .row.picked { background: linear-gradient(rgb(90 200 70 / 0.22), rgb(90 200 70 / 0.22)), var(--art-row) left top / 248px 100% repeat-x !important; }
+:root[data-art][data-skin="block"] .table .badge { background: rgb(255 255 255 / 0.35); font-weight: 700; }
+
+/* ---- wood buttons: the concept's plank with nails, stretched by its edges ---- */
+:root[data-art][data-skin="block"] :is(.ghost, .tool, .hopper, .trash-btn, .add-content, .reset, .pinned, .views button, .nav button,
+  [role="tab"], .subtabs button, .folder, .toolbar button.icon, .top .winctl button) {
+  border-style: solid !important;
+  border-width: 8px !important;
+  border-color: transparent !important;
+  border-image: var(--art-plank) 24 fill / 8px stretch !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.4));
+  color: var(--wood-ink) !important;
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.35) !important;
+  font-weight: 800 !important;
+  padding: 1px 10px !important;
+  min-height: 40px;
+}
+:root[data-art][data-skin="block"] :is(.ghost, .tool, .hopper, .trash-btn, .add-content, .nav button, [role="tab"], .subtabs button, .toolbar button.icon, .top .winctl button):hover:not(:disabled) {
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.4)) brightness(1.08);
+}
+:root[data-art][data-skin="block"] :is(.hopper, .trash-btn, .toolbar button.icon) { padding: 0 !important; width: 44px !important; height: 42px !important; }
+:root[data-art][data-skin="block"] .top .winctl button {
+  width: 40px !important; height: 30px !important; min-height: 0; padding: 0 !important;
+  border: 0 !important; border-image: none !important; background: var(--art-win-min) center / 100% 100% no-repeat !important;
+}
+:root[data-art][data-skin="block"] .top .winctl button:nth-child(2) { background-image: var(--art-win-max) !important; }
+:root[data-art][data-skin="block"] .top .winctl button.close { background-image: var(--art-win-close) !important; }
+:root[data-art][data-skin="block"] .top .winctl button svg { visibility: hidden; }
+/* Hover only brightens the tile; the block skin's red/glow hover would resize the painted tile. */
+:root[data-art][data-skin="block"] .top .winctl button:hover {
+  background-color: transparent !important; background-size: 100% 100% !important; box-shadow: none !important;
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.4)) brightness(1.1) !important;
+}
+:root[data-art][data-skin="block"] .top .winctl button.close:hover { filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.4)) sepia(0.6) saturate(3) hue-rotate(-30deg) !important; }
+:root[data-art][data-skin="block"] :is(.ghost, .tool, .hopper, .trash-btn, .nav button, [role="tab"], .subtabs button) .icon { color: var(--wood-ink) !important; filter: none !important; }
+:root[data-art][data-skin="block"] .ghost.danger { color: #9c2a14 !important; }
+
+/* Selected tab / nav item: dark see-through green with a glowing bright rim (as in the concept). */
+:root[data-art][data-skin="block"] :is(.nav button.on, [role="tab"].on, .subtabs button.on, .toolbar button.icon.on) {
+  border: 2px solid var(--green-rim) !important;
+  border-image: none !important;
+  border-radius: 3px !important;
+  background: linear-gradient(180deg, rgb(34 74 26 / 0.82), rgb(20 48 16 / 0.82)) !important;
+  box-shadow: 0 0 0 1px #173a10, 0 0 12px rgb(120 230 80 / 0.55), inset 0 0 10px rgb(120 230 80 / 0.22) !important;
+  color: #fff !important;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.7) !important;
+  padding: 8px 16px !important;
+}
+:root[data-art][data-skin="block"] :is(.nav button.on, [role="tab"].on) .icon { color: #fff !important; }
+:root[data-art][data-skin="block"] :is([role="tab"], .ghost) :is(.count, .muted-count) {
+  background: #2f9e33; color: #fff !important; border: 1px solid #1b6a1f; border-radius: 3px !important; padding: 0 6px; font-weight: 800;
+}
+
+/* ---- green action buttons (Play, Update) ---- */
+:root[data-art][data-skin="block"] :is(.play, .primary, .upd, .btn:not(.muted):not(.alt), .back-float) {
+  border: 11px solid transparent !important;
+  border-image: var(--art-green) 34 fill / 11px stretch !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 0 6px rgb(90 220 70 / 0.35)) drop-shadow(0 2px 3px rgb(0 0 0 / 0.4));
+  color: #fff !important;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.5) !important;
+  font-weight: 800 !important;
+}
+:root[data-art][data-skin="block"] :is(.play, .primary, .upd, .btn:not(.muted):not(.alt), .back-float):hover:not(:disabled) { filter: drop-shadow(0 0 9px rgb(110 235 80 / 0.55)) drop-shadow(0 2px 3px rgb(0 0 0 / 0.4)) brightness(1.06); }
+:root[data-art][data-skin="block"] .play { font-size: 22px !important; padding: 0 30px !important; }
+
+/* ---- inputs: dark wells with a wood rim ---- */
+:root[data-art][data-skin="block"] :is(.search, .searchbox, .select, select, .val, .fsearch, input.num, .args) {
+  background: none !important;
+  border: 6px solid transparent !important;
+  border-image: var(--art-well) 15 fill / 6px stretch !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  color: #f6ecd8 !important;
+}
+
+/* ---- switches and the side rail ---- */
+:root[data-art][data-skin="block"] .switch.on { background: #33ad34 !important; }
+:root[data-art][data-skin="block"] .shell .rail {
+  background: rgb(30 21 12 / 0.72) !important;
+  border-right: 12px solid transparent !important;
+  border-image: var(--art-frame) 55 / 0 12px 0 0 stretch !important;
+  box-shadow: none !important;
+}
+:root[data-art][data-skin="block"] :is(.list h4, .fgroups h5, .side h4, .tgroup) { color: #f3e2b8 !important; text-shadow: 0 1px 2px rgb(0 0 0 / 0.6); }
+
+/* Library tile Play: a round-cornered wood plate, like the concept. */
+:root[data-art][data-skin="block"] .tile-play {
+  border: 7px solid transparent !important; border-radius: 6px !important;
+  border-image: var(--art-plank) 24 fill / 7px stretch !important;
+  background: none !important; color: var(--wood-ink) !important; box-shadow: none !important;
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 0.45)); width: 44px; height: 40px;
+}
+
+/* ---- a little greenery: ivy draped over the profile header, daisies tucked in its corner ---- */
+:root[data-art][data-skin="block"] .instance > .hero { position: relative; overflow: visible !important; }
+:root[data-art][data-skin="block"] .instance > .hero::after {
+  content: ""; position: absolute; pointer-events: none; z-index: 2;
+  left: -18px; right: -18px; top: -26px; height: 64px;
+  background: var(--art-garland) left top / auto 100% repeat-x;
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.35));
+}
+:root[data-art][data-skin="block"] .instance > .hero::before {
+  content: ""; position: absolute; pointer-events: none; z-index: 2;
+  left: -22px; bottom: -24px; width: 74px; height: 72px;
+  background: var(--art-daisies) center / contain no-repeat;
+  filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.35));
+}

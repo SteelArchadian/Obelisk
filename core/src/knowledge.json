@@ -1,0 +1,183 @@
+{
+  "_about": "What Obelisk knows about Minecraft crashes and logs, written from community troubleshooting guides, mod issue trackers and loader docs. 'all'/'any' are lowercase substrings of the file; 'mods' must all be installed (mod ids); 'blame' names the mod to point at ($1 = the namespace found by 'blameFrom'). 'noise' entries mark log lines that look scary but are harmless.",
+  "problems": [
+    {
+      "id": "sodium-embeddium", "mods": ["sodium", "embeddium"],
+      "severity": "critical", "title": "Sodium and Embeddium are both installed",
+      "detail": "Embeddium is a NeoForge copy of Sodium. Two renderers replacing the same game code will crash or render garbage.",
+      "fix": "Keep one. On 1.21+ NeoForge, Sodium itself works; remove Embeddium (and its add-ons like Embeddium++ or Rubidium Extra).",
+      "blame": "embeddium"
+    },
+    {
+      "id": "optifine-sodium", "mods": ["optifine"], "anyMods": ["sodium", "embeddium", "iris", "oculus", "rubidium"],
+      "severity": "critical", "title": "OptiFine clashes with Sodium/Iris",
+      "detail": "OptiFine rewrites the same rendering code as Sodium, Embeddium and Iris. They can't run together.",
+      "fix": "Remove OptiFine. Sodium (speed) plus Iris (shaders) covers what OptiFine did.",
+      "blame": "optifine"
+    },
+    {
+      "id": "connector-no-ffapi", "mods": ["connector"], "notMods": ["fabric_api"], "anyMods": [],
+      "severity": "warning", "title": "Connector is installed without Forgified Fabric API",
+      "detail": "Sinytra Connector runs Fabric mods on NeoForge, but almost every Fabric mod also needs Fabric API, which on NeoForge comes as Forgified Fabric API.",
+      "fix": "Install Forgified Fabric API from Browse."
+    },
+    {
+      "id": "heap-reserve", "any": ["could not reserve enough space for object heap", "invalid maximum heap size", "could not create the java virtual machine"],
+      "severity": "critical", "title": "Java couldn't start with this much memory",
+      "detail": "The memory setting is more than Java can reserve. Usually the profile asks for more RAM than the PC has free, or a 32-bit Java is in use.",
+      "fix": "Lower Custom memory in Profile options (6–8 GB is plenty for most packs) and make sure the profile uses a 64-bit Java.",
+      "action": "memory"
+    },
+    {
+      "id": "openal", "kinds": ["jvm", "crash"], "any": ["openal32.dll", "soft_oal.dll", "openal.dll"],
+      "severity": "critical", "title": "The sound system crashed",
+      "detail": "The crash is in OpenAL, the library Minecraft plays sound through. It's usually a sound driver, a virtual audio device or Windows Spatial Sound.",
+      "fix": "Turn off Spatial Sound (Windows sound settings), unplug or switch away from virtual audio devices, and update the sound driver."
+    },
+    {
+      "id": "lwjgl-native", "kinds": ["jvm"], "any": ["[lwjgl.dll", "[glfw.dll", "[lwjgl_opengl.dll"],
+      "severity": "critical", "title": "The game's window library crashed",
+      "detail": "LWJGL/GLFW (the code that talks to your screen and graphics card) crashed. Overlays like RivaTuner, MSI Afterburner, Discord or OBS game capture are common triggers.",
+      "fix": "Close or turn off overlays, update the graphics driver, and try again."
+    },
+    {
+      "id": "gl-oom", "any": ["gl_out_of_memory", "out of video memory", "failed to allocate vram"],
+      "severity": "critical", "title": "The graphics card ran out of memory",
+      "detail": "Video memory (VRAM) filled up. High-resolution resource packs, heavy shaders and long LOD/render distances all eat VRAM.",
+      "fix": "Lower render distance, LOD distance or shader quality, or use lower-resolution resource packs.",
+      "action": "shaders"
+    },
+    {
+      "id": "atlas-too-big", "any": ["unable to fit:", "maximum texture size"], "all": ["texture"],
+      "severity": "critical", "title": "Too many or too big textures for your graphics card",
+      "detail": "All block and item textures are stitched into one image, and it grew bigger than your graphics card allows.",
+      "fix": "Remove high-resolution (128x+) resource packs, or turn mipmaps down in Video Settings."
+    },
+    {
+      "id": "packet-too-big", "any": ["packet too big", "badly compressed packet", "payload may not be larger than", "decoderexception", "encoderexception"],
+      "severity": "critical", "title": "The game sent more data in one go than Minecraft allows",
+      "detail": "Big modpacks (many recipes, tags or items with lots of data) can go over Minecraft's packet size limits, which kicks you from the world or server.",
+      "fix": "Install Packet Fixer (or XL Packets) on both client and server."
+    },
+    {
+      "id": "timeout", "any": ["readtimeoutexception", "timed out", "connection timed out"], "kinds": ["log"],
+      "severity": "warning", "title": "The connection to the world timed out",
+      "detail": "The (built-in) server took too long to answer. Usually a very slow world load or a frozen server tick.",
+      "fix": "Install Packet Fixer to raise the timeout, and see 'Where the time went' below for what was slow."
+    },
+    {
+      "id": "registry-mismatch", "any": ["mismatched mod channel list", "missing registry entries", "registry remapping failed", "this server has mods that require", "mod rejections"],
+      "severity": "critical", "title": "Your mods don't match the server's",
+      "detail": "The server and this profile have different mods or versions, so they can't agree on blocks, items and network channels.",
+      "fix": "Use exactly the same mod list as the server (a server pack from Obelisk's right-click menu does this for your own packs)."
+    },
+    {
+      "id": "auth", "any": ["failed to verify username", "invalid session", "authentication servers are down", "401 unauthorized"], "kinds": ["log"],
+      "severity": "warning", "title": "Your Minecraft sign-in expired",
+      "detail": "The account's session wasn't accepted.",
+      "fix": "Open Prism's accounts and refresh or re-add the account.",
+      "action": "java"
+    },
+    {
+      "id": "ksyxis-stuck", "kinds": ["log"], "all": ["ksyxis: speeding up the world loading"], "not": ["logged in with entity id"],
+      "severity": "warning", "title": "The world stopped loading after Ksyxis",
+      "detail": "Ksyxis skips spawn-chunk loading to make worlds open faster. Its own message says to remove it if loading gets stuck right after it.",
+      "fix": "If the world never opened, disable Ksyxis and try again.",
+      "blame": "ksyxis"
+    },
+    {
+      "id": "c2me-cme", "mods": ["c2me"], "kinds": ["crash"], "all": ["concurrentmodificationexception"], "any": ["worldgen", "chunk", "feature", "structure"],
+      "severity": "critical", "title": "A world generation mod isn't thread-safe with C2ME",
+      "detail": "C2ME generates chunks on many threads at once. Some worldgen mods assume one thread and break when two chunks touch the same list.",
+      "fix": "Disable C2ME to confirm. If that fixes it, keep C2ME off or check C2ME's issue tracker for that mod.",
+      "blame": "c2me"
+    },
+    {
+      "id": "worldgen-feature", "kinds": ["crash"], "any": ["feature placement", "generating structure", "exception generating new chunk"],
+      "severity": "critical", "title": "A world generation mod crashed while building terrain",
+      "detail": "The crash happened while generating new chunks (terrain, a structure or a feature).",
+      "fix": "Update the mod named below. Moving away from that spot or using a new world can avoid it until it's fixed.",
+      "blameFrom": ["feature: ", "structure: ", "placed feature: "]
+    },
+    {
+      "id": "ticking-entity", "kinds": ["crash"], "any": ["ticking entity", "entity being ticked"],
+      "severity": "critical", "title": "A creature or object crashed while being updated",
+      "detail": "Minecraft crashed while updating one entity (a mob, item frame, vehicle and so on). The crash report says which one.",
+      "fix": "Update the mod that adds it. If the world won't load, a mod like Neruina (or an entity-removal tool) can remove the broken entity.",
+      "blameFrom": ["entity type: "]
+    },
+    {
+      "id": "ticking-block", "kinds": ["crash"], "any": ["ticking block entity", "block entity being ticked"],
+      "severity": "critical", "title": "A block (machine, chest, spawner…) crashed while being updated",
+      "detail": "Minecraft crashed while updating one block entity. The crash report says which one and where.",
+      "fix": "Update the mod that adds it. If the world won't load, break that block with a tool like Neruina or an NBT editor.",
+      "blameFrom": ["block: ", "name: "]
+    },
+    {
+      "id": "rendering-overlay", "kinds": ["crash"], "all": ["rendering overlay"],
+      "severity": "critical", "title": "The game crashed while loading resources",
+      "detail": "The crash happened on the loading screen, while textures, models and sounds were loading. Usually one mod's resources are broken or two mods clash over the same models.",
+      "fix": "Check the mods named below; also try without resource packs."
+    },
+    {
+      "id": "early-window", "any": ["failed to create window", "glfw error 65543", "glfw error 65544"],
+      "severity": "critical", "title": "The game window couldn't open",
+      "detail": "The graphics driver couldn't give the game the OpenGL version it needs.",
+      "fix": "Update the graphics driver. On laptops, set javaw.exe to the high-performance GPU in Windows Graphics settings.",
+      "action": "driver"
+    },
+    {
+      "id": "exception-in-init", "kinds": ["crash"], "all": ["exceptionininitializererror"],
+      "severity": "critical", "title": "A mod failed while starting up",
+      "detail": "A mod's setup code threw an error the first time it ran, so everything that depends on it fails too.",
+      "fix": "Update the mod named below, or check it's the build for your Minecraft and loader version."
+    },
+    {
+      "id": "illegal-access", "any": ["illegalaccesserror", "inaccessibleobjectexception"], "kinds": ["crash"],
+      "severity": "critical", "title": "A mod uses code it isn't allowed to reach",
+      "detail": "Usually a mod built for a different Minecraft, loader or Java version.",
+      "fix": "Use the mod build made for your exact Minecraft and loader version."
+    },
+    {
+      "id": "pride-at", "kinds": ["log"], "all": ["access transformer file", "does not exist"],
+      "severity": "info", "title": "A mod points at a file it doesn't ship",
+      "detail": "A mod lists an access-transformer file it doesn't include. NeoForge skips it; it only matters if that mod misbehaves.",
+      "fix": "",
+      "blameFrom": ["provided by mod "]
+    }
+  ],
+  "slow": [
+    { "who": "roadweaver", "any": ["opencl", "使用 cpu", "using cpu"], "note": "RoadWeaver's GPU (OpenCL) path doesn't support this world's generation settings, so it plans roads on the CPU, which is much slower at world load." },
+    { "who": "villagerapi", "note": "Villager API re-validates every villager type and profession at startup and again at world load, even when no villager packs are installed." },
+    { "who": "Ksyxis", "note": "Ksyxis prints this right before the world's spawn area is prepared; the wait after it is usually other mods' world setup (shown on the next line)." },
+    { "who": "jei", "note": "JEI indexes every item and recipe when you join. Huge packs take a few seconds; EMI or turning off JEI's ingredient list cache rebuild helps." },
+    { "who": "c2me", "note": "C2ME compiles world generation code the first time a world loads." },
+    { "who": "Minecraft", "any": ["saving chunks", "saving worlds", "saving and pausing"], "note": "Minecraft saving the world. Big worlds or many loaded chunks make this longer." },
+    { "who": "Minecraft", "any": ["preparing spawn", "preparing start region"], "note": "Minecraft generating the spawn area. Fresh worlds with heavy worldgen mods take longest." },
+    { "who": "Minecraft", "any": ["reloading resourcemanager", "resource reload", "created: "], "note": "Loading textures, models and sounds. More mods and resource packs make this longer." }
+  ],
+  "noise": [
+    { "any": ["parsing error loading custom advancement"], "label": "Recipe advancements that point at items from mods you don't have", "blameFrom": ["custom advancement "] },
+    { "any": ["parsing error loading recipe", "couldn't parse data file", "error loading recipe"], "label": "Recipes for mods you don't have (skipped)", "blameFrom": ["recipe ", "data file "] },
+    { "any": ["couldn't load tag", "failed to load tag", "couldn't load tags"], "label": "Tags mentioning items from mods you don't have" },
+    { "any": ["unknown variable:", "failed to resolve uniform"], "label": "Shaderpack options for newer Minecraft versions (Iris skips them)" },
+    { "any": ["skipped language file"], "label": "A translation file Minecraft couldn't read" },
+    { "any": ["missing model", "unable to load model", "missing textures in model", "unable to resolve texture"], "label": "Missing models/textures (shows as purple-black if you ever see it)" },
+    { "any": ["error loading class:", "mixin target ", "@pseudo"], "all": [], "label": "Optional mod compatibility for mods you don't have" },
+    { "any": ["reference map", "refmap"], "label": "Mixin reference maps (harmless in production)" },
+    { "any": ["steam deck", "steamos"], "label": "Controller mod checking for a Steam Deck" },
+    { "any": ["no controllers found"], "label": "No controller plugged in" },
+    { "any": ["narrator library"], "label": "Windows narrator not available" },
+    { "any": ["registered with creature mob category but was added under monster"], "label": "Mob spawn categories mixed up by a mod (harmless)" },
+    { "any": ["has been loaded, but is not attached to any existing data"], "label": "Bountiful bounty pools for missing data" },
+    { "any": ["json file fabric.mod.json not found"], "label": "A mod checking for Fabric metadata on NeoForge" },
+    { "any": ["found a remappable @shadow"], "label": "A mod's mixin warning (development leftover)" },
+    { "any": ["specified in data map for registry", "modid:example"], "label": "A data map entry for something that doesn't exist" },
+    { "any": ["unknown custom packet identifier"], "label": "Network messages for mods the other side doesn't have" },
+    { "any": ["failed to load config", "is not correct. correcting", "incorrect key"], "label": "Config files that were out of date and got fixed automatically" },
+    { "any": ["failed to parse item container provider"], "label": "Item Interactions settings for containers from mods you don't have" },
+    { "any": ["fabric api detected! this is not a fabric mod"], "label": "Moonlight noting that Fabric mods run through Connector" },
+    { "any": ["error while indexing resource packs"], "label": "A resource pack index that couldn't be read" },
+    { "any": ["illegal character ':' used in fancymenu action identifier", "failed to run compatibility code for fancymenu", "tried to register action with illegal character"], "label": "Controlify's FancyMenu add-on doesn't match this FancyMenu version (only that add-on is off)" }
+  ]
+}

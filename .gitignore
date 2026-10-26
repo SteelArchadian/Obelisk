@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+out/
+*.obelisk-tmp
+target/
+node_modules/
+.svelte-kit/
+app/build/
+.tmp/
+release/*.exe
+release/*.part
+release/latest.json
+release/[0-9]*/
+assets/chatgpt-ui/
+tools/themes/birch/inbox/

@@ -1,0 +1,76 @@
+{
+  "theme": "birch",
+  "out": "../../app/static/themes/birch",
+  "model": "gpt-image-1",
+  "style": "Painterly Minecraft-inspired fantasy art like a polished game key art: soft golden-hour lighting, rich warm colours, gentle depth of field, blocky voxel shapes rendered with smooth realistic shading. Clean edges, high detail, no text, no watermark, no user interface.",
+  "assets": [
+    {
+      "name": "bg",
+      "size": "1536x1024",
+      "prompt": "Wide landscape background for an app window. A sunny Minecraft birch forest at golden hour: tall white birch trees with black bark marks framing the left and right edges, a clear blue sky with soft clouds, distant blocky mountains with waterfalls on the right, a calm river in the middle distance, grass and small flowers in the foreground. Keep the centre calm and open with no tall objects, because app panels will sit there. No buildings in the centre, no people, no interface elements."
+    },
+    {
+      "name": "frame",
+      "size": "1024x1024",
+      "transparent": true,
+      "refs": ["ref/birch-concept.webp"],
+      "prompt": "A square picture frame made of Minecraft birch logs, seen straight on, perfectly flat and front-facing. The frame border is about 6% of the width on every side, with white birch bark, dark bark marks and darker carved corners. The entire inside of the frame is fully transparent. Evenly lit, no shadow outside the frame, no vines, no decorations. Use the reference only for the material and art style."
+    },
+    {
+      "name": "surface",
+      "size": "1024x1024",
+      "prompt": "Seamless tileable texture of light sanded birch wood planks, warm cream and pale tan, subtle grain, very low contrast so dark text stays readable on top of it. Flat, evenly lit, viewed straight on, no borders, no objects."
+    },
+    {
+      "name": "button",
+      "size": "1536x1024",
+      "transparent": true,
+      "refs": ["ref/birch-concept.webp"],
+      "prompt": "One single wide game UI button plate made of carved birch wood, roughly 4:1 wide, centred, front-facing and flat, with a bevelled light top edge, a darker bottom edge and small rounded corners. Blank face with no text and no icon. Everything outside the button is fully transparent. Use the reference only for the material and art style."
+    },
+    {
+      "name": "button-on",
+      "size": "1536x1024",
+      "transparent": true,
+      "refs": ["ref/birch-concept.webp"],
+      "prompt": "One single wide game UI button plate, roughly 4:1 wide, centred, front-facing and flat: dark birch wood face with a glowing bright green inner rim (selected state), soft green glow. Blank face with no text and no icon. Everything outside the button is fully transparent. Use the reference only for the art style."
+    },
+    {
+      "name": "vines",
+      "size": "1536x1024",
+      "transparent": true,
+      "prompt": "A long horizontal garland of Minecraft-style leafy vines with small white and yellow flowers, hanging down from a straight line along the very top edge of the image, with a few longer strands dangling down at irregular places. Everything else fully transparent."
+    },
+    {
+      "name": "lantern",
+      "size": "1024x1536",
+      "transparent": true,
+      "prompt": "A Minecraft lantern glowing warm orange hanging from a short birch wood post with a little ivy wrapped around it, front view, full object visible. Everything else fully transparent."
+    },
+    {
+      "name": "flowers",
+      "size": "1024x1024",
+      "transparent": true,
+      "prompt": "A small clump of Minecraft-style flowers (white daisies, yellow dandelions, a few pink tulips) and grass tufts growing from the bottom edge, front view. Everything else fully transparent."
+    },
+    {
+      "name": "mushrooms",
+      "size": "1024x1024",
+      "transparent": true,
+      "prompt": "Two red Minecraft mushrooms with white spots, one large and one small, growing from a little patch of moss, front view. Everything else fully transparent."
+    },
+    {
+      "name": "bee",
+      "size": "1024x1024",
+      "transparent": true,
+      "prompt": "A cute Minecraft bee flying, three-quarter view, blocky body with yellow and dark brown stripes and small translucent wings. Everything else fully transparent."
+    },
+    {
+      "name": "logo",
+      "size": "1536x1024",
+      "transparent": true,
+      "refs": ["ref/birch-concept.webp"],
+      "prompt": "Game logo wordmark reading exactly \"OBELISK\" in chunky blocky bold letters, cream-white faces with a dark wood outline and soft drop shadow, preceded by a small glowing amber crystal obelisk icon. Centred, front-facing. Everything else fully transparent. Use the reference only for the art style."
+    }
+  ]
+}
