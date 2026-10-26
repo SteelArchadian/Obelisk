@@ -40,12 +40,15 @@
   import PackImport from "$lib/PackImport.svelte";
   import SettingsPage from "$lib/SettingsPage.svelte";
   import Welcome from "$lib/Welcome.svelte";
+  import WhatsNew from "$lib/WhatsNew.svelte";
   import { loadSettings, settings } from "$lib/settings.svelte";
   import { refreshRunning } from "$lib/play.svelte";
 
   // One-click updates of Obelisk itself, from its GitHub releases (Obelisk also checks every 30 minutes by itself).
   type SelfUpdate = { version: string; notes: string };
   let selfUpdate = $state<SelfUpdate | null>(null);
+  // Shown once after an update installed this version.
+  let whatsNew = $state<SelfUpdate | null>(null);
   let updating = $state(false);
   let lastCheck = 0;
   async function checkSelfUpdate() {
@@ -116,6 +119,7 @@
     if (await invoke<boolean>("sandboxed").catch(() => false))
       toast("Obelisk was started from inside another app, so Windows is redirecting its files. Close it and start Obelisk from the Start menu for normal speed.");
     refreshRunning();
+    whatsNew = await invoke<SelfUpdate | null>("whats_new").catch(() => null);
     checkSelfUpdate();
     app.page = settings.startPage;
     // People who already saved a key don't need the how-to.
@@ -345,6 +349,7 @@
 {#if app.packImport !== null}<PackImport />{/if}
 <PackMenu />
 {#if showWelcome && !settings.welcomed}<Welcome />{/if}
+{#if whatsNew}<WhatsNew version={whatsNew.version} notes={whatsNew.notes} close={() => (whatsNew = null)} />{/if}
 {#if app.toast}<div class="toast" role="status">{app.toast}</div>{/if}
 
 <style>

@@ -18,7 +18,7 @@ use std::path::Path;
 
 /// Files and folders Obelisk itself writes in its data folder.
 const OWNED: &[&str] = &["settings.json", "ignored-duplicates.json", "share-key", "hashes", "icons", "EBWebView",
-    "data-location.log", "moving.lock"];
+    "data-location.log", "moving.lock", "whats-new.json"];
 /// Of those, what a clean install keeps: the sharing identity (friends know this PC by it).
 const KEPT_ON_RESET: &[&str] = &["share-key"];
 

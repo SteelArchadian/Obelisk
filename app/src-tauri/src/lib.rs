@@ -1596,18 +1596,18 @@ pub fn run() {
                 }
                 tray.build(app)?;
             }
-            // Started with Windows: stay in the tray until opened.
-            if std::env::args().any(|a| a == "--hidden") {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
-                }
+            // Obelisk's window starts hidden. Started with Windows it stays in the tray until opened; otherwise the
+            // small update window comes first (selfupdate.rs) and opens it.
+            let hidden = std::env::args().any(|a| a == "--hidden");
+            if !hidden {
+                selfupdate::start_window(app.handle());
             }
             // Local control API for the user's Minecraft chats (see control.rs).
             control::start(app.handle().clone());
             if !sandboxed() {
                 std::thread::spawn(mcp::refresh_helper);
             }
-            selfupdate::watch(app.handle().clone(), || !control::busy() && running_java().is_empty());
+            selfupdate::watch(app.handle().clone(), hidden, || !control::busy() && running_java().is_empty());
             app.manage(std::sync::Arc::new(prism::modrinth::Client::new()?));
             // Shared packs: pull friends' changes every minute while Obelisk runs (only once a pack is shared).
             let net: ShareNet = Default::default();
@@ -1668,7 +1668,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, selfupdate::self_update_check, selfupdate::self_update_install, datadir::data_dir_get, datadir::data_dir_set,
+            sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, list_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
