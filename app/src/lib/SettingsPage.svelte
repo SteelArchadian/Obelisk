@@ -230,6 +230,11 @@
           onclick={() => { settings.quietLaunch = !settings.quietLaunch; saveSettings(); }}><i></i></button>
       </label>
       <label class="toggle-row">
+        <span><strong>Start games with shaders off</strong><small>Each game starts with Iris shaders off, so a heavy shader pack can't make it unplayable. Turn them on in-game with K or Video Settings → Shader Packs.</small></span>
+        <button class="switch" class:on={settings.shadersOffAtStart} role="switch" aria-checked={settings.shadersOffAtStart} aria-label="Start games with shaders off"
+          onclick={() => { settings.shadersOffAtStart = !settings.shadersOffAtStart; saveSettings(); }}><i></i></button>
+      </label>
+      <label class="toggle-row">
         <span><strong>Offer Fabric mods on NeoForge</strong><small>Shows “Via Connector” for Fabric-only mods (needs Sinytra Connector and Forgified Fabric API).</small></span>
         <button class="switch" class:on={settings.connector} role="switch" aria-checked={settings.connector} aria-label="Offer Fabric mods on NeoForge"
           onclick={() => { settings.connector = !settings.connector; saveSettings(); }}><i></i></button>

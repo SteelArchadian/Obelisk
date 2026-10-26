@@ -38,6 +38,8 @@ type Settings = {
   aiAssistant: "claude" | "gpt";
   /** Hide Prism Launcher's progress windows when starting a game. */
   quietLaunch: boolean;
+  /** Each game starts with Iris shaders off (turn them on in-game). */
+  shadersOffAtStart: boolean;
   /** Optional integrations, off until ticked in Settings → Plugins. */
   plugins: { lightning: boolean };
 };
@@ -53,6 +55,7 @@ const DEFAULTS: Settings = {
   packTrashHours: 336,
   backups: { auto: true, keepAuto: 10, keepManual: 20 },
   quietLaunch: true,
+  shadersOffAtStart: true,
   closeToTray: true,
   startWithWindows: false,
   controlApi: false,

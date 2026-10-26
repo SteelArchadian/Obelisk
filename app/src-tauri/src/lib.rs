@@ -1169,6 +1169,7 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
     if !dupes_ignored(&app, &instance_id, &found) { prism::dupes::check_before_launch(&game_dir)?; }
     let java_note = prism::java::check_before_launch(&prism::data_dir(), &instance_id).unwrap_or(None);
     let quiet = settings_value(&app).get("quietLaunch").and_then(|v| v.as_bool()).unwrap_or(true);
+    let shaders_off = settings_value(&app).get("shadersOffAtStart").and_then(|v| v.as_bool()).unwrap_or(true);
     // Pack changed since the last backup (by hand, another tool, a chat)? Back it up before the game touches anything.
     if settings_value(&app).pointer("/backups/auto").and_then(|v| v.as_bool()).unwrap_or(true) {
         let (keep_auto, keep_manual) = backup_limits(&app);
@@ -1177,6 +1178,10 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
             if prism::history::on_change(&g, "Before launch")?.is_some() { prism::history::prune(&g, keep_auto, keep_manual)?; }
             Ok(())
         }).await;
+    }
+    // After the backup above, so the shader setting as it was is kept in Backups.
+    if shaders_off {
+        prism::shaders_off(&game_dir)?;
     }
     let before = game_windows();
     let click_ms = prism::timeline::now_ms();

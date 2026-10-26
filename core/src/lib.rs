@@ -371,6 +371,30 @@ pub fn content_icons(game: &Path, kind: &str, cache: &Path) -> HashMap<String, P
     out
 }
 
+/// Before a launch: the pack starts with Iris shaders off (a shader pack can drop a weak PC to a few frames a second;
+/// they turn back on in-game with K or Video Settings). Only `enableShaders` changes; the chosen shader pack and every
+/// other line stay. A missing file is left missing (no shaders chosen). Returns whether anything changed.
+pub fn shaders_off(game: &Path) -> Result<bool, String> {
+    let path = game.join("config").join("iris.properties");
+    let Ok(text) = fs::read_to_string(&path) else { return Ok(false) };
+    let mut changed = false;
+    let lines: Vec<String> = text.lines().map(|l| {
+        let key = l.split(['=', ':']).next().unwrap_or("").trim();
+        if key == "enableShaders" && l.split_once(['=', ':']).is_some_and(|(_, v)| v.trim() != "false") {
+            changed = true;
+            "enableShaders=false".to_string()
+        } else { l.to_string() }
+    }).collect();
+    if !changed { return Ok(false) }
+    let mut out = lines.join(if text.contains("\r\n") { "\r\n" } else { "\n" });
+    if text.ends_with('\n') { out.push_str(if text.contains("\r\n") { "\r\n" } else { "\n" }) }
+    // Written beside it and swapped in, so a crash mid-write can't leave Iris's settings half-written.
+    let tmp = path.with_extension("properties.obelisk-tmp");
+    fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Set (`Some`) or remove (`None`) keys in a Prism INI file, keeping every other line as is.
 pub fn update_cfg(path: &Path, updates: &[(&str, Option<String>)]) -> Result<(), String> {
     let text = fs::read_to_string(path).unwrap_or_default();
@@ -864,6 +888,18 @@ pub fn remove_account(data: &Path, uuid: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shaders_start_off_keeping_the_rest() {
+        let t = tempfile::tempdir().unwrap();
+        let cfg = t.path().join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        assert!(!shaders_off(t.path()).unwrap());
+        fs::write(cfg.join("iris.properties"), "#Iris\r\nshaderPack=Photon.zip\r\nenableShaders=true\r\n").unwrap();
+        assert!(shaders_off(t.path()).unwrap());
+        assert_eq!(fs::read_to_string(cfg.join("iris.properties")).unwrap(), "#Iris\r\nshaderPack=Photon.zip\r\nenableShaders=false\r\n");
+        assert!(!shaders_off(t.path()).unwrap());
+    }
     use std::io::Write;
 
     fn write(path: &Path, text: &str) {
