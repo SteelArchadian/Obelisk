@@ -21,6 +21,8 @@ const BLOCKED_EXT: &[&str] = &[
 /// Code that runs in the game: jars and classes, scripts for script mods, anything in the code folders.
 const CODE_EXT: &[&str] = &[".jar", ".class", ".js", ".zs", ".lua", ".py", ".groovy", ".kts", ".sh"];
 const CODE_DIRS: &[&str] = &["mods", "kubejs", "scripts"];
+/// Plain data that may sit among the code (a mod's notes, Prism's mods/.index/*.pw.toml records, kubejs data).
+const DATA_EXT: &[&str] = &[".toml", ".json", ".json5", ".txt", ".md", ".cfg", ".properties", ".png", ".ogg", ".nbt", ".snbt", ".mcmeta"];
 
 fn lower(path: &str) -> String {
     path.to_ascii_lowercase()
@@ -46,7 +48,20 @@ fn bad_segment(seg: &str) -> bool {
 pub fn risky(path: &str) -> bool {
     let p = lower(path);
     let first = p.split('/').next().unwrap_or("");
-    CODE_DIRS.contains(&first) || CODE_EXT.iter().any(|e| p.ends_with(e))
+    CODE_EXT.iter().any(|e| p.ends_with(e)) || (CODE_DIRS.contains(&first) && !DATA_EXT.iter().any(|e| p.ends_with(e)))
+}
+
+/// Prism's record of where a mod came from (mods/.index/<mod>.pw.toml). Prism downloads from its url when the
+/// mod is updated, so one from another PC is kept only when every url in it is Modrinth's or CurseForge's.
+pub fn mod_record(path: &str) -> bool {
+    let p = lower(path);
+    p.starts_with("mods/.index/") && p.ends_with(".pw.toml")
+}
+
+pub fn mod_record_ok(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else { return false };
+    text.lines().filter_map(|l| l.trim().strip_prefix("url")).filter_map(|r| r.trim_start().strip_prefix('='))
+        .all(|v| crate::packcode::site_url_ok(v.trim().trim_matches(|c| c == '"' || c == '\'')))
 }
 
 /// A config file that seems to hold a secret of the sharer's: a bot token, a password, an API key, a webhook.
@@ -145,6 +160,10 @@ fn inspect_into(path: &str, bytes: &[u8], depth: u32, f: &mut Findings) {
     };
     for i in 0..zip.len().min(200_000) {
         let Ok(mut entry) = zip.by_index(i) else { continue };
+        // Folders inside a jar ("META-INF/") aren't files: nothing to look at.
+        if entry.is_dir() {
+            continue;
+        }
         let name = entry.name().to_string();
         let n = lower(&name);
         if n.ends_with(".dll") || n.ends_with(".so") || n.ends_with(".dylib") {
@@ -246,6 +265,25 @@ mod tests {
         // Names Windows would quietly change into something else.
         assert!(blocked("mods/setup.exe.") && blocked("mods/setup.exe ") && blocked("config/CON.txt") && blocked("mods/a?.jar"));
         assert!(blocked("mods//x.jar") && !blocked("config/console.toml") && !blocked("mods/com.example.jar"));
+        // Prism's records of where each mod came from are data, but a disabled jar is still code.
+        assert!(!risky("mods/.index/sodium.pw.toml") && risky("mods/a.jar.disabled"));
+        assert!(mod_record("mods/.index/sodium.pw.toml"));
+        assert!(mod_record_ok(b"[download]\nurl = \"https://cdn.modrinth.com/data/AANobbMI/versions/x/sodium.jar\"\nhash-format = \"sha1\""));
+        assert!(mod_record_ok(b"name = \"Sodium\"\n[update.modrinth]\nmod-id = \"AANobbMI\""));
+        assert!(!mod_record_ok(b"[download]\nurl = \"https://evil.example/sodium.jar\""));
+    }
+
+    #[test]
+    fn folders_inside_a_jar_are_fine() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let o = zip::write::SimpleFileOptions::default();
+        z.add_directory("META-INF/", o).unwrap();
+        z.add_directory("dev/chill/acplus/", o).unwrap();
+        z.start_file("dev/chill/acplus/Mod.class", o).unwrap();
+        std::io::Write::write_all(&mut z, b"\xca\xfe\xba\xbe plain").unwrap();
+        z.finish().unwrap();
+        assert!(inspect("mods/advancedcompassplus.jar", buf.get_ref()).serious.is_empty());
     }
 
     #[test]

@@ -451,6 +451,12 @@ impl Net {
                     Some(b) => b.clone(),
                     None => sess.pack_file(code, &f.path).await?,
                 };
+                if guard::mod_record(&f.path) && !guard::mod_record_ok(&bytes) {
+                    left_out.lock().unwrap().push(format!("{} (its mod's update link isn't Modrinth or CurseForge)", f.path));
+                    let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    progress(ImportProgress { done: n, total, file: f.path.clone() });
+                    continue;
+                }
                 packcode::place(&game, &f, &bytes)?;
                 let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 progress(ImportProgress { done: n, total, file: f.path.clone() });
