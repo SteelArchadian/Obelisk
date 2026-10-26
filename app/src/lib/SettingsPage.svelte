@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import { ask, open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -9,6 +10,33 @@
   import { resetCfSearch } from "./cf";
   import { settings, saveSettings, THEMES } from "./settings.svelte";
   import Resolution from "./Resolution.svelte";
+
+  // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
+  type SelfUpdate = { version: string; notes: string };
+  let version = $state("");
+  getVersion().then((v) => (version = v)).catch(() => {});
+  let updateState = $state<"" | "checking" | "current" | "installing">("");
+  let found = $state<SelfUpdate | null>(null);
+  async function checkUpdates() {
+    updateState = "checking";
+    found = null;
+    try {
+      found = await invoke<SelfUpdate | null>("self_update_check");
+      updateState = found ? "" : "current";
+    } catch (e) {
+      updateState = "";
+      toast(`Couldn't check for updates: ${e}`);
+    }
+  }
+  async function installUpdate() {
+    updateState = "installing";
+    try {
+      await invoke("self_update_install");
+    } catch (e) {
+      updateState = "";
+      toast(String(e));
+    }
+  }
 
   type Launcher = { id: string; name: string; found: boolean; supported: boolean; location: string };
   type Source = { launcher: string; name: string; path: string; minecraft: string; loaderUid: string; loaderVersion: string; secondsPlayed: number; syncedAs: string | null };
@@ -357,7 +385,16 @@
 
     {:else}
       <h1>About</h1>
-      <p><strong>Obelisk</strong>: a fast front end for Prism Launcher.</p>
+      <p><strong>Obelisk</strong>{#if version} {version}{/if}: a fast front end for Prism Launcher.</p>
+      <div class="row-buttons update-row">
+        {#if found}
+          <button class="primary" disabled={updateState === "installing"} onclick={installUpdate}>{updateState === "installing" ? "Updating…" : `Update to ${found.version}`}</button>
+          <span class="muted">{found.notes}</span>
+        {:else}
+          <button class="ghost" disabled={updateState === "checking"} onclick={checkUpdates}>{updateState === "checking" ? "Checking…" : "Check for updates"}</button>
+          {#if updateState === "current"}<span class="muted">You have the newest Obelisk.</span>{/if}
+        {/if}
+      </div>
       <p class="muted">Not affiliated with CurseForge, Overwolf, Modrinth or Mojang. Prism Launcher handles accounts, Java and launching.</p>
     {/if}
   </div>
@@ -430,4 +467,5 @@
   .seg button.on { background: var(--accent); color: #fff; box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.35); font-weight: 600; }
   .small { font-size: 12px; }
   .row-buttons { display: flex; gap: 8px; }
+  .update-row { align-items: center; gap: 12px; }
 </style>
