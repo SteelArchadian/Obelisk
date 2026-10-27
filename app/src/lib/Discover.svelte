@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { settings } from "./settings.svelte";
   import { api, compact, TYPES, type Hit, type ProjectType } from "./api";
   import { app, openBrowse, pushOverlay } from "./state.svelte";
 
@@ -28,7 +29,8 @@
     Promise.all(specs.map(([title, type, sort, matchInstance]) =>
       api.search({
         ...base, projectType: type, sort, limit: 12,
-        loaders: matchInstance && loader ? [loader] : [],
+        // NeoForge profiles also get Fabric mods when Connector is on (Settings), as in Browse.
+        loaders: matchInstance && loader ? (settings.connector && type === "mod" && loader === "neoforge" ? [loader, "fabric"] : [loader]) : [],
         gameVersions: matchInstance && mc ? [mc] : [],
       }).then((r) => ({ title, type, hits: r.hits })),
     )).then((r) => (rows = r)).catch((e) => (error = String(e)));

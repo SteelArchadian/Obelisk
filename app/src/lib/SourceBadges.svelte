@@ -1,12 +1,12 @@
 <script lang="ts">
   import type { Hit } from "./api";
 
-  let { hit }: { hit: Hit } = $props();
+  let { hit, big = false }: { hit: Hit; big?: boolean } = $props();
   let sources = $derived(hit.sources ?? (hit.project_id.startsWith("cf:") ? ["curseforge"] : ["modrinth"]));
 </script>
 
 <!-- Simple drawn marks (not the sites' logos) so it's clear where a project can come from. -->
-<span class="srcs">
+<span class="srcs" class:big>
   {#each sources as s (s)}
     <span class="src {s}" title={s === "curseforge" ? "On CurseForge" : "On Modrinth"}>
       {#if s === "curseforge"}
@@ -14,6 +14,7 @@
       {:else}
         <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="2" /><path d="M8 4.5v4l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
       {/if}
+      {#if big}<span class="name">{s === "curseforge" ? "CurseForge" : "Modrinth"}</span>{/if}
     </span>
   {/each}
 </span>
@@ -21,6 +22,9 @@
 <style>
   .srcs { display: inline-flex; gap: 3px; vertical-align: middle; }
   .src { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; }
+  .big { gap: 6px; }
+  .big .src { width: auto; height: 26px; padding: 0 9px 0 7px; gap: 6px; display: inline-flex; align-items: center; border-radius: 6px; font-size: 12.5px; font-weight: 600; }
+  .big .src svg { width: 15px; height: 15px; }
   .src.curseforge { color: var(--cf); background: color-mix(in srgb, var(--cf) 16%, transparent); }
   .src.modrinth { color: var(--mr); background: color-mix(in srgb, var(--mr) 16%, transparent); }
 </style>

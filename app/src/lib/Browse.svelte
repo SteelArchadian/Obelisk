@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { settings } from "./settings.svelte";
   import { onMount, tick } from "svelte";
   import { api, compact, ago, envLabel, versionsLabel, TYPES, type Hit, type Tags, type ProjectType } from "./api";
   import { app, pushOverlay } from "./state.svelte";
@@ -66,7 +67,7 @@
 
   // Re-run the search whenever anything that shapes it changes (debounced for typing).
   $effect(() => {
-    const key = [app.browseType, app.browseQuery, sort, loaders.join(","), gameVersion, [...categories].join(","), useCf, useMr];
+    const key = [app.browseType, app.browseQuery, sort, loaders.join(","), settings.connector, gameVersion, [...categories].join(","), useCf, useMr];
     void key;
     const t = setTimeout(() => load(true), 250);
     return () => clearTimeout(t);
@@ -99,15 +100,19 @@
       if (reset) mrOffset = mrTotal = cfOffset = cfTotal = 0;
       const wantMr = useMr && (reset || mrOffset < mrTotal);
       const wantCf = useCf && (reset || cfOffset < cfTotal);
+      // "Offer Fabric mods on NeoForge" (Sinytra Connector): a NeoForge search also takes Fabric-only mods, which the
+      // Install button then offers "via Connector". Without this they never came back from the search at all.
+      const asked = loaderApplies ? loaders : [];
+      const withFabric = settings.connector && app.browseType === "mod" && asked.includes("neoforge") && !asked.includes("fabric") ? [...asked, "fabric"] : asked;
       const [mr, cf] = await Promise.all([
         wantMr ? api.search({
           query: app.browseQuery, projectType: app.browseType,
-          loaders: loaderApplies ? loaders : [],
+          loaders: withFabric,
           gameVersions: gameVersion ? [gameVersion] : [],
           categories: [...categories], sort, offset: mrOffset, limit: 40,
         }) : null,
         wantCf ? api.cfSearch({
-          query: app.browseQuery, projectType: app.browseType, loader: "", loaders: loaderApplies ? loaders : [],
+          query: app.browseQuery, projectType: app.browseType, loader: "", loaders: withFabric,
           gameVersion, sort, offset: cfOffset, limit: 40,
         }).catch(() => null) : null,
       ]);
@@ -207,8 +212,10 @@
 
     {#if view === "tiles"}<input class="slider" type="range" min="140" max="260" step="10" bind:value={tile} aria-label="Tile size" />{/if}
     <div class="views" role="group" aria-label="View">
-      {#each [["list", "☰"], ["table", "▤"], ["tiles", "▦"]] as [v, icon] (v)}
-        <button class:on={view === v} title={cap(v)} onclick={() => (view = v as any)}>{icon}</button>
+      {#each [["list", "M4 6h16M4 12h16M4 18h16"], ["table", "M4 5h16v14H4zM4 10h16M4 15h16M10 5v14"], ["tiles", "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"]] as [v, d] (v)}
+        <button class:on={view === v} title={cap(v)} aria-label="{cap(v)} view" aria-pressed={view === v} onclick={() => (view = v as any)}>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path {d} fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg>
+        </button>
       {/each}
     </div>
   </div>
@@ -290,8 +297,10 @@
   .field select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; font-weight: 400; }
   .cats { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
   .slider { width: 100px; accent-color: var(--accent); }
-  .views { display: flex; background: var(--panel); border-radius: 6px; padding: 2px; }
-  .views button { background: none; border: 0; padding: 4px 9px; border-radius: 5px; color: var(--muted); font-size: 15px; }
+  .views { display: flex; gap: 2px; background: var(--panel); border-radius: 6px; padding: 2px; }
+  .views button { display: grid; place-items: center; background: none; border: 0; padding: 5px 9px; border-radius: 5px; color: var(--muted); }
+  /* Block themes frame every button: space them so the frames don't run into each other. */
+  :global(:root[data-skin="block"]) .views { gap: 6px; background: none; padding: 0; }
   .views button.on { background: var(--panel-2); color: var(--accent); }
   .target { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; padding-bottom: 8px; }
   .link { background: none; border: 0; color: var(--accent); padding: 0 2px; }

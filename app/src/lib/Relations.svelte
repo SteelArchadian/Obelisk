@@ -1,11 +1,11 @@
 <script lang="ts">
-  // Project page → Relations: what this project needs, and (CurseForge only) what uses it. Modpacks are hidden
-  // from the dependents by default: most people look here for the mods built on this one.
+  // Project page → Relations. Opens on "Required by": the mods that won't run without this one (CurseForge lists them;
+  // Modrinth doesn't, so a Modrinth project uses its CurseForge twin). Modpacks are left out unless asked for.
   import { invoke } from "@tauri-apps/api/core";
   import { compact, type Hit } from "./api";
   import { openProjectById } from "./install";
 
-  let { hit, cfId, deps = [] }: { hit: Hit; cfId: number | null; deps?: { project_id: string; dependency_type: string }[] } = $props();
+  let { hit, cfId, checking = false, deps = [] }: { hit: Hit; cfId: number | null; checking?: boolean; deps?: { project_id: string; dependency_type: string }[] } = $props();
 
   type Row = { id: string; name: string; author?: string; icon?: string; kind: string; cls?: string; downloads?: number };
   const KIND: Record<string, string> = {
@@ -13,8 +13,11 @@
     Tool: "Tool", Incompatible: "Incompatible", required: "Required", optional: "Optional", embedded: "Embedded", incompatible: "Incompatible",
   };
 
-  let which = $state<"dependencies" | "dependents">("dependencies");
-  let kind = $state("");
+  type Mode = "required" | "optional" | "dependencies" | "all";
+  const MODES: [Mode, string][] = [["required", "Required by"], ["optional", "Optional for"], ["dependencies", "Needs"], ["all", "All relations"]];
+  let mode = $state<Mode>("required");
+  let which = $derived<"dependencies" | "dependents">(mode === "dependencies" || !cfId ? "dependencies" : "dependents");
+  let kind = $derived(mode === "required" ? "RequiredDependency" : mode === "optional" ? "OptionalDependency" : "");
   let hidePacks = $state(true);
   let rows = $state<Row[]>([]);
   let total = $state(0);
@@ -42,27 +45,24 @@
     busy = false;
   }
 
-  $effect(() => { void which; void kind; void cfId; load(true); });
+  $effect(() => { void which; void kind; void cfId; if (!checking) load(true); });
 
   const isPack = (r: Row) => /modpack/i.test(r.cls ?? "") || r.kind === "Include";
-  let shown = $derived(which === "dependents" && hidePacks ? rows.filter((r) => !isPack(r)) : rows);
-  const kinds = $derived(which === "dependents" ? ["", "RequiredDependency", "OptionalDependency", "Include"] : []);
+  let shown = $derived(which === "dependents" && (hidePacks || mode !== "all") ? rows.filter((r) => !isPack(r)) : rows);
 </script>
 
 <div class="rel">
   <div class="bar">
     <div class="seg">
-      <button class:on={which === "dependencies"} onclick={() => { which = "dependencies"; kind = ""; }}>Dependencies</button>
-      {#if cfId}<button class:on={which === "dependents"} onclick={() => { which = "dependents"; kind = ""; }}>Dependents</button>{/if}
+      {#each MODES.filter(([m]) => cfId || m === "dependencies") as [m, label] (m)}
+        <button class:on={which === (m === "dependencies" ? "dependencies" : "dependents") && (mode === m || !cfId)} onclick={() => (mode = m)}>{label}</button>
+      {/each}
     </div>
-    {#if which === "dependents"}
-      <select bind:value={kind} aria-label="Relation type">
-        {#each kinds as k (k)}<option value={k}>{k ? KIND[k] : "All types"}</option>{/each}
-      </select>
-      <label class="check"><input type="checkbox" bind:checked={hidePacks} /> Hide modpacks</label>
-    {/if}
+    {#if mode === "all" && cfId}<label class="check"><input type="checkbox" bind:checked={hidePacks} /> Hide modpacks</label>{/if}
+    {#if which === "dependents" && total && !busy}<span class="muted small">{total >= 10000 ? "10,000+" : total.toLocaleString()} {mode === "required" ? "need this to run" : mode === "optional" ? "work with it if it's there" : "in all"}</span>{/if}
   </div>
-  {#if !cfId && which === "dependencies"}<p class="muted small">Modrinth doesn't list which projects depend on this one, so only its dependencies show here.</p>{/if}
+  {#if checking}<p class="muted small">Looking for this project on CurseForge…</p>
+  {:else if !cfId}<p class="muted small">This project isn't on CurseForge, and Modrinth doesn't list which mods need it, so only what it needs shows here.</p>{/if}
   {#if error}<p class="error">{error}</p>{/if}
 
   <div class="list">
@@ -90,7 +90,6 @@
   .seg button { padding: 6px 12px; background: transparent; border: 0; color: inherit; }
   .seg button + button { border-left: 1px solid var(--line); }
   .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
-  select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
   .check { display: flex; align-items: center; gap: 6px; }
   .list { display: flex; flex-direction: column; gap: 6px; }
   .item { display: flex; align-items: center; gap: 12px; min-width: 0; text-align: left; background: var(--panel); border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; color: inherit; }

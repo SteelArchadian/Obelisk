@@ -1110,6 +1110,19 @@ async fn cf_project(id: u64) -> Result<serde_json::Value, String> {
     blocking(move || Ok(serde_json::json!({ "project": cf.project(id)?, "description": cf.description(id)? }))).await
 }
 
+/// The same project on the other site: {mr, cf} ids (either may be null), proven by a shared file where possible.
+#[tauri::command]
+async fn cross_site(mr: tauri::State<'_, Mr>, id: String) -> Result<serde_json::Value, String> {
+    let Some(cf) = cf_client() else {
+        return Ok(serde_json::json!({ "mr": (!id.starts_with("cf:")).then_some(id), "cf": null }));
+    };
+    let mr = mr.inner().clone();
+    blocking(move || Ok(match id.strip_prefix("cf:").and_then(|n| n.parse::<u64>().ok()) {
+        Some(c) => serde_json::json!({ "mr": prism::crosssite::cf_to_mr(&cf, &mr, c).unwrap_or(None), "cf": c }),
+        None => serde_json::json!({ "mr": id, "cf": prism::crosssite::mr_to_cf(&cf, &mr, &id).unwrap_or(None) }),
+    })).await
+}
+
 #[tauri::command]
 async fn cf_id_by_slug(slug: String) -> Result<Option<u64>, String> {
     let cf = cf_required()?;
@@ -1862,7 +1875,7 @@ pub fn run() {
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings,
-            set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
+            set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
             check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())

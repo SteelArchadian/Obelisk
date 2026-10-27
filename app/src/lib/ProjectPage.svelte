@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { crisp } from "./crisp";
   import { api, compact, ago, versionsLabel, type Hit, type Version } from "./api";
   import { app, popOverlay, closeOverlays, openBrowse, pushOverlay } from "./state.svelte";
@@ -36,6 +37,16 @@
   let installedVersion = $derived(app.target ? isInstalled(hit)?.versionId ?? "" : "");
   /** A CurseForge-only project (Modrinth projects that are also on CurseForge use Modrinth data). */
   let isCf = $derived(hit.project_id.startsWith("cf:"));
+  // The same project on the other site, found by a file both sites host (so the page shows both however it was opened).
+  let twin = $state<{ mr: string | null; cf: number | null } | null>(null);
+  $effect(() => {
+    const id = hit.project_id;
+    twin = null;
+    invoke<{ mr: string | null; cf: number | null }>("cross_site", { id }).then((t) => { if (hit.project_id === id) twin = t; }).catch(() => {});
+  });
+  let cfId = $derived(hit.cf_id ?? twin?.cf ?? null);
+  let mrId = $derived(isCf ? twin?.mr ?? null : hit.project_id);
+  let siteHit = $derived<Hit>({ ...hit, sources: [...(mrId ? ["modrinth"] : []), ...(cfId ? ["curseforge"] : [])] as Hit["sources"] });
 
   /** Versions that fit the target profile (loader + game version), unless "show incompatible" is on. */
   let fits = (v: Version) => {
@@ -191,11 +202,11 @@
       <div class="row1">
         <h2>{hit.title}</h2>
         {#if author}<button class="by" onclick={openAuthor}>by {author}</button>{/if}
-        <SourceBadges {hit} />
+        <SourceBadges hit={siteHit} big />
         <div class="spacer"></div>
-        {#if mr.account && !isCf}
-          <button class="follow" class:on={mr.follows.has(hit.project_id)} title={mr.follows.has(hit.project_id) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
-            aria-pressed={mr.follows.has(hit.project_id)} onclick={() => toggleFollow(hit.project_id)}>{mr.follows.has(hit.project_id) ? "♥" : "♡"}</button>
+        {#if mr.account && mrId}
+          <button class="follow" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
+            aria-pressed={mr.follows.has(mrId!)} onclick={() => toggleFollow(mrId!)}>{mr.follows.has(mrId!) ? "♥" : "♡"}</button>
         {/if}
         <InstallButton {hit} big />
       </div>
@@ -223,8 +234,8 @@
         {#each [["issues_url", "Issues"], ["source_url", "Source"], ["wiki_url", "Wiki"], ["discord_url", "Discord"]] as [k, label] (k)}
           {#if project[k]}<button class="link" title={project[k]} onclick={() => openLink(project[k])}>{label} ↗</button>{/if}
         {/each}
-        {#if !isCf}<button class="link" onclick={() => openLink(`https://modrinth.com/${hit.project_type}/${hit.slug}`)}>Modrinth ↗</button>{/if}
-        {#if isCf || hit.cf_id}<button class="link" onclick={() => openLink(project?.site_url ?? `https://www.curseforge.com/projects/${hit.cf_id}`)}>CurseForge ↗</button>{/if}
+        {#if mrId}<button class="link" onclick={() => openLink(isCf ? `https://modrinth.com/project/${mrId}` : `https://modrinth.com/${hit.project_type}/${hit.slug}`)}>Modrinth ↗</button>{/if}
+        {#if cfId}<button class="link" onclick={() => openLink(project?.site_url ?? `https://www.curseforge.com/projects/${cfId}`)}>CurseForge ↗</button>{/if}
       </div>
     {/if}
   </nav>
@@ -242,7 +253,7 @@
         </section>
       {:else}<div class="muted">{versions.length ? "No versions for this profile. Turn on “Show incompatible versions” in Versions." : "Loading…"}</div>{/each}
     {:else if tab === "relations"}
-      <Relations {hit} cfId={hit.cf_id ?? null} deps={(versions[0]?.dependencies ?? []).filter((d) => d.project_id) as { project_id: string; dependency_type: string }[]} />
+      <Relations {hit} {cfId} checking={!twin} deps={(versions[0]?.dependencies ?? []).filter((d) => d.project_id) as { project_id: string; dependency_type: string }[]} />
     {:else if tab === "gallery"}
       <div class="gallery">
         {#each gallery as g (g.url)}

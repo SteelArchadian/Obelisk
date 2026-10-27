@@ -126,6 +126,7 @@ export function installDevMock() {
       case "list_accounts": return [];
       case "mr_project": return { id: "LNytGWDc", slug: "create", title: "Create", description: "Aesthetic technology", project_type: "mod", body: "## Create Rotational power.", gallery: [], loaders: ["neoforge"], issues_url: "github.com/Creators-of-Create/Create/issues", source_url: "https://github.com/Creators-of-Create/Create", downloads: 5_000_000, followers: 1, icon_url: "", categories: ["technology"], game_versions: ["1.21.1"], versions: [], date_modified: new Date(now).toISOString(), published: new Date(now).toISOString(), team: "t" };
       case "mr_versions": case "mr_members": return [];
+      case "cross_site": return { mr: "LNytGWDc", cf: 398521 };
       case "mr_account": return { id: "u1", username: "DemoUser", avatar_url: "" };
       case "mr_follows": return [];
       case "mr_follow": case "mr_notifications_read": return null;
