@@ -5,6 +5,8 @@
   import { app, toast } from "./state.svelte";
   import { syncInstances } from "./install";
   import Resolution from "./Resolution.svelte";
+  import { setPackPicture, PICTURE_TYPES } from "./picture";
+  import { initials } from "./api";
   import Backups from "./Backups.svelte";
   import { settings } from "./settings.svelte";
 
@@ -143,6 +145,7 @@
   });
 
   const close = () => (app.profileDialog = null);
+  let picker = $state<HTMLInputElement>()!;
 
   async function run(fn: () => Promise<unknown>, done: string) {
     busy = true;
@@ -175,7 +178,14 @@
       {#if prismOpen && d.kind !== "clone"}<p class="warn">Prism is open. Close it first, or it may overwrite these changes when it exits.</p>{/if}
 
       {#if d.kind === "options"}
-        <h3>Profile settings · {d.inst.name}</h3>
+        <div class="pic-head">
+          <button class="pic" title="Change the pack's picture" onclick={() => { picker.value = ""; picker.click(); }}>
+            {#if app.icons[d.inst.id]}<img src={app.icons[d.inst.id]} alt="" />{:else}<span>{initials(d.inst.name)}</span>{/if}
+            <span class="pic-edit">Change</span>
+          </button>
+          <input type="file" accept={PICTURE_TYPES} hidden bind:this={picker} onchange={() => setPackPicture(d.inst, picker.files?.[0])} />
+          <h3>Profile settings · {d.inst.name}</h3>
+        </div>
         <div class="ptabs">
           <button class:on={d.tab !== "backups"} onclick={() => (app.profileDialog = { ...d, tab: "options" })}>Options</button>
           <button class:on={d.tab === "backups"} onclick={() => (app.profileDialog = { ...d, tab: "backups" })}>Backups</button>
@@ -348,4 +358,10 @@
   .seg button.on { background: var(--accent); color: #fff; }
   .link { background: none; border: 0; color: var(--accent); padding: 0 2px; cursor: pointer; }
   .getjava { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .pic-head { display: flex; align-items: center; gap: 14px; }
+  .pic-head h3 { margin: 0; }
+  .pic { position: relative; width: 64px; height: 64px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; font-weight: 700; color: var(--muted); }
+  .pic img { width: 100%; height: 100%; object-fit: cover; }
+  .pic-edit { position: absolute; inset: auto 0 0 0; padding: 2px 0; font-size: 11px; font-weight: 600; color: #fff; background: rgb(0 0 0 / 0.6); transition: background 0.12s; }
+  .pic:hover .pic-edit, .pic:focus-visible .pic-edit { background: var(--accent); }
 </style>

@@ -10,6 +10,7 @@
 </script>
 
 <script lang="ts">
+  import { setPackPicture, PICTURE_TYPES } from "./picture";
   import { invoke } from "@tauri-apps/api/core";
   import { openBrowse, toast } from "./state.svelte";
   import { setTarget, syncInstances } from "./install";
@@ -17,7 +18,7 @@
 
   const close = () => (app.packMenu = null);
 
-  // Change Picture: any picture, cropped to a square and shrunk to 256 px here, so it stays small enough to share.
+  // Change Picture (see picture.ts).
   let picker: HTMLInputElement;
   let pictureFor: Instance | null = null;
   function choosePicture(i: Instance) {
@@ -25,22 +26,7 @@
     picker.value = "";
     picker.click();
   }
-  async function setPicture() {
-    const file = picker.files?.[0];
-    const i = pictureFor;
-    if (!file || !i) return;
-    try {
-      const img = await createImageBitmap(file);
-      const side = Math.min(img.width, img.height);
-      const c = document.createElement("canvas");
-      c.width = c.height = Math.min(256, side);
-      c.getContext("2d")!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, c.width, c.height);
-      const png = c.toDataURL("image/png").split(",")[1];
-      await invoke("set_instance_icon", { instanceId: i.id, png });
-      await syncInstances();
-      toast(`New picture for ${i.name}.`);
-    } catch (e) { toast(e instanceof Error ? "Obelisk couldn't read that picture." : String(e)); }
-  }
+  const setPicture = () => setPackPicture(pictureFor!, picker.files?.[0]);
   function act(fn: (inst: Instance) => void) {
     const inst = app.packMenu!.inst;
     close();
@@ -69,7 +55,7 @@
     <button class="danger" onclick={() => act((i) => (app.profileDialog = { kind: "delete", inst: i }))}>Delete Profile</button>
   </div>
 {/if}
-<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden bind:this={picker} onchange={setPicture} />
+<input type="file" accept={PICTURE_TYPES} hidden bind:this={picker} onchange={setPicture} />
 
 <style>
   .ctx { position: fixed; z-index: 45; width: 250px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: 0 12px 34px rgb(0 0 0 / 0.5); }

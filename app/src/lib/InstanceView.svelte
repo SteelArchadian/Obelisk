@@ -275,8 +275,14 @@
 
   async function updateAll(list: FileInfo[]) {
     const id = current.id;
-    // Updating many mods at once is easy to regret: take a safety backup first.
-    await invoke("safety_backup", { instanceId: id, label: "Before Update all" }).catch(() => {});
+    // Updating many mods at once is easy to regret: a checkpoint first (kept like the ones you make yourself, not
+    // pruned with the automatic backups), and no update at all if it can't be taken.
+    try {
+      await invoke("create_checkpoint", { instanceId: id, label: "Pre-Update all" });
+    } catch (e) {
+      toast(`Update all stopped: the checkpoint before it couldn't be made (${e}).`);
+      return;
+    }
     // Direct downloads first; files that need the browser are opened one at a time afterwards.
     list = list.filter((f) => !pins.has(pinKey(f)));
     const direct = list.filter((f) => !f.update!.blocked);
