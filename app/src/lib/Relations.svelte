@@ -2,6 +2,7 @@
   // Project page → Relations. Opens on "Required by": the mods that won't run without this one (CurseForge lists them;
   // Modrinth doesn't, so a Modrinth project uses its CurseForge twin). Modpacks are left out unless asked for.
   import { invoke } from "@tauri-apps/api/core";
+  import { untrack } from "svelte";
   import { compact, type Hit } from "./api";
   import { openProjectById } from "./install";
 
@@ -19,6 +20,10 @@
   let which = $derived<"dependencies" | "dependents">(mode === "dependencies" || !cfId ? "dependencies" : "dependents");
   let kind = $derived(mode === "required" ? "RequiredDependency" : mode === "optional" ? "OptionalDependency" : "");
   let hidePacks = $state(true);
+  const SORTS = [["popular", "Most popular"], ["updated", "Recently updated"], ["newest", "Newest"], ["name", "Name A–Z"]] as const;
+  let sort = $state<string>("popular");
+  let sentinel = $state<HTMLElement>();
+  let relEl = $state<HTMLElement>();
   let rows = $state<Row[]>([]);
   let total = $state(0);
   let page = $state(0);
@@ -29,10 +34,15 @@
 
   async function load(reset: boolean) {
     busy = true; error = "";
-    if (reset) { rows = []; page = 0; }
+    if (reset) {
+      rows = []; page = 0;
+      // A new sort or type starts at the top, not at the end of the old list (which would load page after page).
+      const box = relEl?.closest(".content");
+      if (box && box.scrollTop > 0) box.scrollTop = 0;
+    }
     try {
       if (cfId) {
-        const r = await invoke<any>("cf_relations", { id: cfId, which, index: page * 20, kind });
+        const r = await invoke<any>("cf_relations", { id: cfId, which, index: page * 20, kind, sort });
         rows = [...rows, ...(r.data ?? []).map(cfRow)];
         total = r.pagination?.totalCount ?? rows.length;
       } else if (which === "dependencies") {
@@ -45,19 +55,35 @@
     busy = false;
   }
 
-  $effect(() => { void which; void kind; void cfId; if (!checking) load(true); });
+  // Reload from the top only when the view changes (untracked: load itself reads the page and rows it changes).
+  $effect(() => { void which; void kind; void cfId; void sort; if (!checking) untrack(() => load(true)); });
+
+  // Scrolling near the end loads the next page by itself.
+  const more = () => { if (!busy && cfId && rows.length < total && !error) { page += 1; load(false); } };
+  const near = () => { if (sentinel && sentinel.getBoundingClientRect().top < innerHeight + 400) more(); };
+  $effect(() => {
+    if (!sentinel) return;
+    untrack(near); // a short first page leaves the end already in view
+    addEventListener("scroll", near, { capture: true, passive: true });
+    return () => removeEventListener("scroll", near, { capture: true });
+  });
 
   const isPack = (r: Row) => /modpack/i.test(r.cls ?? "") || r.kind === "Include";
   let shown = $derived(which === "dependents" && (hidePacks || mode !== "all") ? rows.filter((r) => !isPack(r)) : rows);
 </script>
 
-<div class="rel">
+<div class="rel" bind:this={relEl}>
   <div class="bar">
     <div class="seg">
       {#each MODES.filter(([m]) => cfId || m === "dependencies") as [m, label] (m)}
         <button class:on={which === (m === "dependencies" ? "dependencies" : "dependents") && (mode === m || !cfId)} onclick={() => (mode = m)}>{label}</button>
       {/each}
     </div>
+    {#if which === "dependents"}
+      <select class="sort" bind:value={sort} aria-label="Sort">
+        {#each SORTS as [v, l] (v)}<option value={v}>{l}</option>{/each}
+      </select>
+    {/if}
     {#if mode === "all" && cfId}<label class="check"><input type="checkbox" bind:checked={hidePacks} /> Hide modpacks</label>{/if}
     {#if which === "dependents" && total && !busy}<span class="muted small">{total >= 10000 ? "10,000+" : total.toLocaleString()} {mode === "required" ? "need this to run" : mode === "optional" ? "work with it if it's there" : "in all"}</span>{/if}
   </div>
@@ -78,9 +104,8 @@
       {#if !busy && !error}<p class="muted">{which === "dependents" && rows.length ? "Only modpacks use this on this page. Untick Hide modpacks, or load more." : "Nothing here."}</p>{/if}
     {/each}
   </div>
-  {#if busy}<p class="muted">Loading…</p>{:else if cfId && rows.length < total}
-    <button class="ghost more" onclick={() => { page += 1; load(false); }}>Load more ({rows.length} of {total >= 10000 ? "10,000+" : total.toLocaleString()})</button>
-  {/if}
+  {#if busy}<p class="muted">Loading…</p>{/if}
+  {#if cfId && rows.length < total && !busy}<div bind:this={sentinel} class="sentinel"></div>{/if}
 </div>
 
 <style>
@@ -103,7 +128,7 @@
   .chip.k { color: var(--accent); }
   .small { font-size: 13px; margin: 0; }
   .error { color: var(--err-text); background: var(--err-bg); padding: 8px 10px; border-radius: 6px; margin: 0; }
-  .ghost { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; color: inherit; }
-  .more { align-self: flex-start; }
+  .sort { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+  .sentinel { height: 1px; }
   @media (max-width: 700px) { .item .chip:not(.k), .item small.muted { display: none; } }
 </style>

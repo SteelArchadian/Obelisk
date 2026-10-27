@@ -206,8 +206,8 @@ async fn mr_dependencies(mr: tauri::State<'_, Mr>, id: String) -> Result<serde_j
 
 /// Project page → Relations for a CurseForge project (see prism::curseforge::relations).
 #[tauri::command]
-async fn cf_relations(id: u64, which: String, index: u32, kind: String) -> Result<serde_json::Value, String> {
-    blocking(move || prism::curseforge::relations(id, &which, index, &kind)).await
+async fn cf_relations(id: u64, which: String, index: u32, kind: String, sort: Option<String>) -> Result<serde_json::Value, String> {
+    blocking(move || prism::curseforge::relations(id, &which, index, &kind, sort.as_deref().unwrap_or("popular"))).await
 }
 
 // ---- Modrinth account: a personal access token in Windows Credential Manager, never sent back to the UI ----

@@ -132,11 +132,7 @@ export function installDevMock() {
       case "mr_follow": case "mr_notifications_read": return null;
       case "mr_notifications": return [{ id: "n1", title: "Sodium has been updated", text: "Version 0.6.13 is out", link: "/project/sodium", read: false, created: new Date(now - 3600_000).toISOString() }, { id: "n2", title: "You were invited to a team", text: "", link: "/user/x", read: true, created: new Date(now - 3 * day).toISOString() }];
       case "mr_dependencies": return { projects: [{ id: "P7dR8mSH", title: "Fabric API", icon_url: "", project_type: "mod", downloads: 9000000 }], versions: [] };
-      case "cf_relations": return { data: [
-        { id: 1, name: "Create: Steam 'n' Rails", authorName: "Layers", logoUrl: "", type: "RequiredDependency", categoryClass: { name: "Mods" }, downloads: 4200000 },
-        { id: 2, name: "All the Mods 10", authorName: "ATM", logoUrl: "", type: "Include", categoryClass: { name: "Modpacks" }, downloads: 9000000 },
-        { id: 3, name: "Create Deco", authorName: "Rabbit", logoUrl: "", type: "OptionalDependency", categoryClass: { name: "Mods" }, downloads: 800000 }],
-        pagination: { totalCount: 3 } };
+      case "cf_relations": return { data: Array.from({ length: 20 }, (_, k) => ({ id: args.index + k + 1, name: `Addon ${args.index + k + 1} (${args.sort})`, authorName: "someone", logoUrl: "", type: "RequiredDependency", categoryClass: { name: "Mods" }, downloads: 1000 * (k + 1) })), pagination: { totalCount: 60 } };
       case "mr_installed": return [];
       default: return null;
     }

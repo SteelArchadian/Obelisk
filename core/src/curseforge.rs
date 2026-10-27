@@ -105,14 +105,15 @@ fn enc(s: &str) -> String {
 /// Relations: what a project depends on, or what depends on it ("dependents"). The official API has no list of
 /// dependents, so this reads the same public, key-free endpoint curseforge.com's Relations tab uses (20 per page).
 /// `kind` narrows it: RequiredDependency, OptionalDependency, Include (packs that bundle it), EmbeddedLibrary, Tool,
-/// Incompatible; empty for all.
-pub fn relations(mod_id: u64, which: &str, index: u32, kind: &str) -> Result<Value, String> {
+/// Incompatible; empty for all. `sort`: popular, updated, newest or name (that endpoint's sortField 2, 1, 4, 3).
+pub fn relations(mod_id: u64, which: &str, index: u32, kind: &str, sort: &str) -> Result<Value, String> {
     if which != "dependencies" && which != "dependents" { return Err("unknown relation".into()) }
     let tls = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
     let agent = ureq::AgentBuilder::new().user_agent("Obelisk/0.1").tls_connector(Arc::new(tls))
         .timeout(std::time::Duration::from_secs(20)).build();
     let mut url = format!("https://www.curseforge.com/api/v1/mods/{mod_id}/{which}?index={index}&pageSize=20");
     if !kind.is_empty() { url += &format!("&type={}", enc(kind)) }
+    url += match sort { "updated" => "&sortField=1&sortOrder=Desc", "newest" => "&sortField=4&sortOrder=Desc", "name" => "&sortField=3&sortOrder=Asc", _ => "&sortField=2&sortOrder=Desc" };
     agent.get(&url).set("Accept", "application/json").call().map_err(|e| format!("CurseForge: {e}"))?
         .into_json().map_err(|e| e.to_string())
 }
