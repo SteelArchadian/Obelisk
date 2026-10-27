@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use obelisk_core as prism;
 mod bridge;
 mod cleanup;

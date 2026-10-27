@@ -1055,8 +1055,28 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         if let Some(p) = deg("pitch", -90.0, 90.0)? { extra.push(format!("-Dtestharness.pitch={p}")); }
         if let Some(y) = deg("yaw", -360.0, 360.0)? { extra.push(format!("-Dtestharness.yaw={y}")); }
     }
+    // test_world: a custom world built for this run (flat layers, border, platform, scripted events), then opened.
+    let built;
+    let args_world = match args.get("test_world").filter(|v| !v.is_null()) {
+        Some(spec) => {
+            if s(args, "world").is_some() || s(args, "new_world").is_some() {
+                return Err("give test_world, world or new_world, not more than one".into());
+            }
+            if game_running_in(&dir) {
+                return Err(format!("a game is already running in {name}"));
+            }
+            let (save, hold) = prism::testworld::build(&dir, "1.21.1", spec, now())?;
+            built = save;
+            // The autobench stays in the world this long, so the events get to run.
+            if !extra.iter().any(|a| a.starts_with("-Dspeedloader.hold=") || a.starts_with("-Doptimal.hold=")) {
+                extra.push(format!("-Dspeedloader.hold={hold}"));
+            }
+            Some(built.as_str())
+        }
+        None => s(args, "world"),
+    };
     // world "new:<seed>" is the same as new_world (Speed Loader's own spelling).
-    let (world, seed) = match s(args, "world").map(|w| w.strip_prefix("new:").ok_or(w)) {
+    let (world, seed) = match args_world.map(|w| w.strip_prefix("new:").ok_or(w)) {
         Some(Ok(seed)) => (None, Some(seed)),
         Some(Err(w)) => (Some(w), s(args, "new_world")),
         None => (None, s(args, "new_world")),

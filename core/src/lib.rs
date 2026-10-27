@@ -24,6 +24,7 @@ pub mod share_net;
 pub mod trash;
 pub mod updates;
 pub mod work;
+pub mod testworld;
 
 use serde::Serialize;
 use std::collections::HashMap;

@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "obelisk"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "keyring",
  "obelisk-core",
@@ -3386,6 +3386,7 @@ name = "obelisk-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "iroh",
  "iroh-dns",
  "native-tls",
