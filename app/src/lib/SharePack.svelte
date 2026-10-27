@@ -41,7 +41,12 @@
   };
   const start = () => run("start", async () => { await getCode(); await load(); });
   const invite = () => run("invite", getCode);
-  const copy = () => navigator.clipboard.writeText(code).then(() => toast("Code copied. Your friend pastes it into Import."));
+  let copied = $state(false);
+  const copy = () => navigator.clipboard.writeText(code).then(() => {
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+    toast("Code copied. Your friend pastes it into Import.");
+  });
   const send = () => run("send", async () => {
     const sent = await invoke<boolean>("share_publish", { instanceId: inst.id, label });
     label = "";
@@ -94,10 +99,13 @@
           <strong>Invite a friend</strong>
           <span class="muted small">They paste the code into Import, like a Share code.</span>
           <div class="spacer"></div>
-          {#if code && left}<button class="ghost" onclick={copy}>Copy code</button>{:else}<button class="ghost" disabled={!!busy} onclick={invite}>{busy === "invite" ? "Making a code…" : "Get a code"}</button>{/if}
+          {#if !(code && left)}<button class="ghost" disabled={!!busy} onclick={invite}>{busy === "invite" ? "Making a code…" : "Get a code"}</button>{/if}
         </div>
         {#if code && left}
-          <div class="row"><span class="short">{code}</span><span class="muted small">Expires in {clock}. Keep Obelisk open until your friend shows up under Members.</span></div>
+          <div class="row"><button class="short" title="Copy the code" onclick={copy}>{code}</button>
+          <button class="copy-btn" class:done={copied} onclick={copy} aria-label="Copy the code">
+            {#if copied}✓ Copied{:else}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M9 9h10v11H9zM5 15V4h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg> Copy{/if}
+          </button><span class="muted small">Expires in {clock}. Keep Obelisk open until your friend shows up under Members.</span></div>
         {/if}
       </section>
 
@@ -182,7 +190,9 @@
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .spacer { flex: 1; }
   .code { width: 100%; height: 64px; resize: none; font: 11.5px ui-monospace, Consolas, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; word-break: break-all; }
-  .short { font: 700 22px ui-monospace, Consolas, monospace; letter-spacing: 3px; }
+  .short { font: 700 22px ui-monospace, Consolas, monospace; letter-spacing: 3px; background: none; border: 0; padding: 0; color: inherit; cursor: copy; }
+  .copy-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; font-weight: 600; flex: none; }
+  .copy-btn.done { background: var(--ok, #2e9d5b); }
   .members { display: flex; flex-wrap: wrap; gap: 8px; }
   .member { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
   .member i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
