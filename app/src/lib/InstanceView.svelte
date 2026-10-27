@@ -13,6 +13,7 @@
   import { openProjectById, refreshInstalled, setTarget } from "./install";
   import { manualDownload } from "./cf";
   import { checkDupes, dupeState, flagged, ignoreDupes } from "./dupes.svelte";
+  import CollabBadge from "./CollabBadge.svelte";
 
   type Sub = Kind | "worlds";
   type SortKey = "name" | "date" | "authors" | "source" | "enabled" | "env" | "update";
@@ -527,6 +528,7 @@
   <section class="hero">
     <div class="hero-icon">
       {#if app.icons[current.id]}<img src={app.icons[current.id]} alt="" />{:else}<span>{initials(current.name)}</span>{/if}
+      <CollabBadge id={current.id} />
     </div>
     <div class="hero-body">
       <div class="hero-title">
@@ -856,7 +858,7 @@
 
 
   .hero { display: flex; gap: 18px; margin-top: 16px; padding: 14px; background: var(--panel); border-radius: 10px; flex: none; }
-  .hero-icon { width: 104px; height: 104px; flex: none; border-radius: 8px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; font-size: 28px; }
+  .hero-icon { position: relative; width: 104px; height: 104px; flex: none; border-radius: 8px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; font-size: 28px; }
   .hero-icon img { width: 100%; height: 100%; object-fit: cover; }
   .hero-body { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
   .instance { display: flex; flex-direction: column; flex: 1; min-height: 0; }

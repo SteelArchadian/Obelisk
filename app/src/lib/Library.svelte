@@ -8,6 +8,7 @@
   import { settings } from "./settings.svelte";
   import { kill, play, progress, running, starting } from "./play.svelte";
   import { checkAllDupes, dupeState, flagged } from "./dupes.svelte";
+  import CollabBadge from "./CollabBadge.svelte";
 
   // Duplicate mods: checked for every profile when the library shows, and again when Obelisk regains focus.
   $effect(() => {
@@ -253,14 +254,7 @@
           <button class="art" onclick={() => openInstance(inst)} title="Open {inst.name}">
             {#if app.icons[inst.id]}<img src={app.icons[inst.id]} alt="" draggable="false" />{:else}<span>{initials(inst.name)}</span>{/if}
             <span class="badge">{inst.loader} · {inst.minecraft}</span>
-            {#if inst.id in app.shareIncoming}
-              <span class="collab" title="Collaborative pack" aria-label="Collaborative pack">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="1" y="6" width="3" height="9" fill="currentColor" stroke="none" /><rect x="20" y="6" width="3" height="9" fill="currentColor" stroke="none" />
-                  <path d="M20 8h-3l-3-2h-3l-4 4a1.5 1.5 0 0 0 2 2l3-2 5 5M4 8h3M17 14h3M4 14h2l4 4a1.4 1.4 0 0 0 2-2M8 16l-.5-.5M10.5 16.5l1 1a1.4 1.4 0 0 0 2-2l-1-1M13 15l1 1a1.4 1.4 0 0 0 2-2l-1.5-1.5M15.5 13.5a1.4 1.4 0 0 0 2-2" />
-                </svg>
-              </span>
-            {/if}
+            <CollabBadge id={inst.id} />
           </button>
           {#if flagged(inst.id)}
             <button class="dupe-stripe" onclick={() => openInstance(inst)} title="Open {inst.name} to choose which copy to remove">
@@ -368,7 +362,6 @@
   .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgb(255 255 255 / 0.35); border-top-color: #fff; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .art img { width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; }
-  .collab { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; color: #fff; background: rgb(0 0 0 / 0.65); padding: 2px 4px; border-radius: 4px; }
   .badge { position: absolute; top: 8px; right: 8px; font-size: 11.5px; font-weight: 600; color: #fff; background: rgb(0 0 0 / 0.65); padding: 3px 7px; border-radius: 4px; }
   .meta { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 10px 12px 12px; background: none; border: 0; text-align: left; }
   .meta strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
