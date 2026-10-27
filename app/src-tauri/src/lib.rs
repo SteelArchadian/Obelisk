@@ -198,6 +198,88 @@ async fn mr_members(mr: tauri::State<'_, Mr>, id: String) -> Result<serde_json::
     blocking(move || mr.members(&id)).await
 }
 
+#[tauri::command]
+async fn mr_dependencies(mr: tauri::State<'_, Mr>, id: String) -> Result<serde_json::Value, String> {
+    let mr = mr.inner().clone();
+    blocking(move || mr.dependencies(&id)).await
+}
+
+/// Project page → Relations for a CurseForge project (see prism::curseforge::relations).
+#[tauri::command]
+async fn cf_relations(id: u64, which: String, index: u32, kind: String) -> Result<serde_json::Value, String> {
+    blocking(move || prism::curseforge::relations(id, &which, index, &kind)).await
+}
+
+// ---- Modrinth account: a personal access token in Windows Credential Manager, never sent back to the UI ----
+
+fn mr_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new("Obelisk", "modrinth-token").map_err(|e| e.to_string())
+}
+
+fn mr_token() -> Result<String, String> {
+    mr_entry()?.get_password().ok().filter(|t| !t.is_empty())
+        .ok_or_else(|| "Sign in to Modrinth in Settings → Accounts first.".into())
+}
+
+/// Save the token if Modrinth accepts it (empty signs out). Returns the account.
+#[tauri::command]
+async fn mr_token_set(mr: tauri::State<'_, Mr>, token: String) -> Result<serde_json::Value, String> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        mr_entry()?.delete_credential().or(Ok::<(), keyring::Error>(())).map_err(|e| e.to_string())?;
+        return Ok(serde_json::Value::Null);
+    }
+    let mr = mr.inner().clone();
+    let t = token.clone();
+    let me = blocking(move || mr.me(&t)).await?;
+    mr_entry()?.set_password(&token).map_err(|e| e.to_string())?;
+    Ok(me)
+}
+
+/// The signed-in Modrinth account (null when signed out).
+#[tauri::command]
+async fn mr_account(mr: tauri::State<'_, Mr>) -> Result<serde_json::Value, String> {
+    let Ok(token) = mr_token() else { return Ok(serde_json::Value::Null) };
+    let mr = mr.inner().clone();
+    blocking(move || mr.me(&token)).await
+}
+
+/// Ids of the projects the signed-in account follows.
+#[tauri::command]
+async fn mr_follows(mr: tauri::State<'_, Mr>) -> Result<Vec<String>, String> {
+    let token = mr_token()?;
+    let mr = mr.inner().clone();
+    blocking(move || {
+        let me = mr.me(&token)?;
+        let list = mr.follows(&token, me["id"].as_str().unwrap_or_default())?;
+        Ok(list.as_array().into_iter().flatten().filter_map(|p| p["id"].as_str().map(String::from)).collect())
+    }).await
+}
+
+#[tauri::command]
+async fn mr_follow(mr: tauri::State<'_, Mr>, id: String, on: bool) -> Result<(), String> {
+    let token = mr_token()?;
+    let mr = mr.inner().clone();
+    blocking(move || mr.follow(&token, &id, on)).await
+}
+
+#[tauri::command]
+async fn mr_notifications(mr: tauri::State<'_, Mr>) -> Result<serde_json::Value, String> {
+    let token = mr_token()?;
+    let mr = mr.inner().clone();
+    blocking(move || {
+        let me = mr.me(&token)?;
+        mr.notifications(&token, me["id"].as_str().unwrap_or_default())
+    }).await
+}
+
+#[tauri::command]
+async fn mr_notifications_read(mr: tauri::State<'_, Mr>, ids: Vec<String>) -> Result<(), String> {
+    let token = mr_token()?;
+    let mr = mr.inner().clone();
+    blocking(move || mr.mark_read(&token, &ids)).await
+}
+
 fn hash_cache(_app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(datadir::root().join("hashes"))
 }
@@ -1184,6 +1266,11 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
     if shaders_off {
         prism::shaders_off(&game_dir)?;
     }
+    // Paths an older Obelisk wrote with bare backslashes make Prism find no packs (it then shows its own window).
+    let data = prism::data_dir();
+    let healed = prism::heal_cfg(&data.join("prismlauncher.cfg")).unwrap_or(false);
+    let _ = prism::heal_cfg(&game_dir.parent().unwrap_or(&game_dir).join("instance.cfg"));
+    if healed { close_idle_prism().await?; }
     let before = game_windows();
     let click_ms = prism::timeline::now_ms();
     std::process::Command::new(prism::launcher_exe())
@@ -1442,6 +1529,22 @@ fn running_java() -> Vec<(String, sysinfo::Pid)> {
     out
 }
 
+/// A Prism that is already open keeps the pack folder it read at start-up, and a launch request goes to it. After
+/// that setting was repaired, close it so the launch starts a Prism that reads the right folder. Never while a game
+/// it started is still running.
+async fn close_idle_prism() -> Result<(), String> {
+    blocking(|| {
+        if !running_java().is_empty() { return Ok(()) }
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        for p in sys.processes().values().filter(|p| p.name().eq_ignore_ascii_case("prismlauncher.exe")) {
+            p.kill();
+            p.wait();
+        }
+        Ok(())
+    }).await
+}
+
 #[tauri::command]
 async fn running_games() -> Vec<String> {
     blocking(|| Ok(running_java().into_iter().map(|(id, _)| id).collect())).await.unwrap_or_default()
@@ -1644,6 +1747,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // Repair pack and Java paths an older Obelisk wrote in a form Prism misreads (see prism::heal_cfg).
+            std::thread::spawn(|| {
+                let data = prism::data_dir();
+                let _ = prism::heal_cfg(&data.join("prismlauncher.cfg"));
+                if let Ok(rd) = std::fs::read_dir(prism::instances_dir(&data)) {
+                    for e in rd.flatten() { let _ = prism::heal_cfg(&e.path().join("instance.cfg")); }
+                }
+            });
             // Slow jobs tell the window what they're doing (its small progress bar).
             {
                 use tauri::Emitter;
@@ -1751,7 +1862,7 @@ pub fn run() {
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings,
-            set_settings, set_cf_key, has_cf_key, list_accounts, switch_account, logout_account,
+            set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
             check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())

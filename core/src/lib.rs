@@ -48,14 +48,41 @@ pub fn launcher_exe() -> PathBuf {
         .join("prismlauncher.exe")
 }
 
-/// Parse Prism's INI-style config files (`key=value`, `[General]` sections ignored).
+/// Parse Prism's INI-style config files (`key=value`, `[General]` sections ignored). Prism writes them with Qt,
+/// which escapes a backslash as `\\`; that is undone here.
 pub fn read_cfg(path: &Path) -> HashMap<String, String> {
     let text = fs::read_to_string(path).unwrap_or_default();
     text.lines()
         .filter(|l| !l.starts_with('[') && !l.starts_with(';'))
         .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.trim().to_string(), v.trim().trim_matches('"').to_string()))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().trim_matches('"').replace("\\\\", "\\")))
         .collect()
+}
+
+/// A value as Prism (Qt) reads it back. Qt treats `\` in these files as an escape, so `D:\Modding` would come back
+/// as `D:odding`: paths get forward slashes (as Prism writes them itself), any other backslash is doubled.
+fn cfg_value(v: &str) -> String {
+    let b = v.as_bytes();
+    let path = (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')) || v.starts_with("\\\\");
+    if path { v.replace('\\', "/") } else { v.replace('\\', "\\\\") }
+}
+
+/// Repair path settings an older Obelisk wrote with bare backslashes (which Prism misreads, so it found no
+/// packs or no Java). Returns whether anything changed.
+pub fn heal_cfg(path: &Path) -> Result<bool, String> {
+    let Ok(text) = fs::read_to_string(path) else { return Ok(false) };
+    let mut fixes = vec![];
+    for l in text.lines() {
+        let Some((k, v)) = l.split_once('=') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        if matches!(k, "InstanceDir" | "JavaPath" | "IconsDir" | "CentralModsDir" | "JavaDir" | "SkinsDir")
+            && v.contains('\\') && !v.contains("\\\\") && !v.starts_with('"') {
+            fixes.push((k, Some(v.to_string())));
+        }
+    }
+    if fixes.is_empty() { return Ok(false) }
+    update_cfg(path, &fixes)?;
+    Ok(true)
 }
 
 pub fn instances_dir(data: &Path) -> PathBuf {
@@ -406,9 +433,9 @@ pub fn update_cfg(path: &Path, updates: &[(&str, Option<String>)]) -> Result<(),
     for (key, value) in updates {
         let pos = lines.iter().position(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == *key));
         match (pos, value) {
-            (Some(i), Some(v)) => lines[i] = format!("{key}={v}"),
+            (Some(i), Some(v)) => lines[i] = format!("{key}={}", cfg_value(v)),
             (Some(i), None) => { lines.remove(i); }
-            (None, Some(v)) => lines.push(format!("{key}={v}")),
+            (None, Some(v)) => lines.push(format!("{key}={}", cfg_value(v))),
             (None, None) => {}
         }
     }
@@ -888,6 +915,22 @@ pub fn remove_account(data: &Path, uuid: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cfg_paths_survive_qt() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("prismlauncher.cfg");
+        std::fs::write(&p, "[General]\nInstanceDir=D:\\Modding\\Instances\nJvmArgs=-Xmx4G\n").unwrap();
+        assert!(super::heal_cfg(&p).unwrap());
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("InstanceDir=D:/Modding/Instances"), "{text}");
+        assert!(!super::heal_cfg(&p).unwrap());
+        super::update_cfg(&p, &[("JavaPath", Some(r"C:\Java\bin\javaw.exe".into())), ("Note", Some(r"a\b".into()))]).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("JavaPath=C:/Java/bin/javaw.exe") && text.contains(r"Note=a\\b"), "{text}");
+        assert_eq!(super::read_cfg(&p)["Note"], r"a\b");
+        assert_eq!(super::instances_dir(dir.path()), std::path::PathBuf::from("D:/Modding/Instances"));
+    }
+
     use super::*;
 
     #[test]

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { mr, signIn, signOut, openLink } from "./account.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -44,8 +45,17 @@
 
   const SECTIONS = [
     ["general", "General"], ["sync", "Sync & Import"], ["themes", "Themes"],
-    ["minecraft", "Minecraft & Java"], ["curseforge", "CurseForge API"], ["plugins", "Plugins"], ["about", "About"],
+    ["minecraft", "Minecraft & Java"], ["curseforge", "CurseForge API"], ["modrinth", "Modrinth account"], ["plugins", "Plugins"], ["about", "About"],
   ] as const;
+
+  let mrInput = $state("");
+  let mrBusy = $state(false);
+  let mrError = $state("");
+  async function mrSave() {
+    mrBusy = true; mrError = "";
+    try { await signIn(mrInput); mrInput = ""; } catch (e) { mrError = String(e); }
+    mrBusy = false;
+  }
 
   let launchers = $state<Launcher[]>([]);
   let sources = $state<Source[]>([]);
@@ -388,6 +398,30 @@
         {#if hasKey}<button class="ghost" onclick={() => { keyInput = ""; saveKey(); }}>Remove</button>{/if}
       </div>
 
+    {:else if app.settingsSection === "modrinth"}
+      <h1>Modrinth account</h1>
+      <p class="muted">Sign in to follow projects from their pages and see your Modrinth notifications under the bell. Modrinth signs other apps in with a personal access token: you make one on Modrinth and paste it here. It's kept in Windows Credential Manager and only ever sent to Modrinth.</p>
+      {#if mr.account}
+        <div class="launcher">
+          {#if mr.account.avatar_url}<img class="mr-avatar" src={mr.account.avatar_url} alt="" />{/if}
+          <span>Signed in as <strong>{mr.account.username}</strong></span>
+          <div class="spacer"></div>
+          <button class="ghost" onclick={signOut}>Sign out</button>
+        </div>
+      {:else}
+        <ol class="muted steps">
+          <li>Open <button class="link" onclick={() => openLink("https://modrinth.com/settings/pats")}>modrinth.com → Settings → PATs ↗</button> and click <strong>Create a PAT</strong>.</li>
+          <li>Name it Obelisk and tick: <strong>Read user data</strong>, <strong>Write user data</strong> (for following), <strong>Read notifications</strong> and <strong>Write notifications</strong> (to mark them read).</li>
+          <li>Copy the token and paste it below.</li>
+        </ol>
+        <div class="keyrow">
+          <input class="search" type="password" placeholder="Paste your Modrinth token" bind:value={mrInput} autocomplete="off" />
+          <button class="primary" disabled={!mrInput.trim() || mrBusy} onclick={mrSave}>{mrBusy ? "Checking…" : "Sign in"}</button>
+        </div>
+        {#if mrError}<p class="warn">{mrError}</p>{/if}
+      {/if}
+      <p class="muted small">CurseForge doesn't let other apps sign in, so following and notifications there stay on curseforge.com.</p>
+
     {:else}
       <h1>About</h1>
       <p><strong>Obelisk</strong>{#if version} {version}{/if}: a fast front end for Prism Launcher.</p>
@@ -472,6 +506,9 @@
   .seg button:hover { background: var(--hover, rgba(127,127,127,.12)); }
   .seg button.on { background: var(--accent); color: #fff; box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.35); font-weight: 600; }
   .small { font-size: 12px; }
+  .launcher .spacer { flex: 1; }
+  .mr-avatar { width: 28px; height: 28px; border-radius: 50%; }
+  .steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
   .row-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
   /* Narrow window: the section list goes across the top and the page uses the full width. */
   @media (max-width: 820px) {

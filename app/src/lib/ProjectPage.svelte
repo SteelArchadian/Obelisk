@@ -1,6 +1,5 @@
 <script lang="ts">
   import { crisp } from "./crisp";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import { api, compact, ago, versionsLabel, type Hit, type Version } from "./api";
   import { app, popOverlay, closeOverlays, openBrowse, pushOverlay } from "./state.svelte";
   import { cap, install, isInstalled, linkTarget, openProjectById } from "./install";
@@ -9,10 +8,12 @@
   import { renderBody, wireYouTube } from "./richtext";
   import InstallButton from "./InstallButton.svelte";
   import TargetChip from "./TargetChip.svelte";
+  import Relations from "./Relations.svelte";
+  import { mr, toggleFollow, openLink } from "./account.svelte";
 
   let { hit }: { hit: Hit } = $props();
 
-  let tab = $state<"overview" | "changelog" | "gallery" | "versions">("overview");
+  let tab = $state<"overview" | "changelog" | "gallery" | "versions" | "relations">("overview");
   let project = $state<any>(null);
   let fetchedAuthor = $state("");
   let author = $derived(hit.author || fetchedAuthor);
@@ -86,7 +87,7 @@
     else if (t && "author" in t && !t.cf) pushOverlay({ kind: "author", name: t.author });
     // A CurseForge member is found by id; we know it only for this project's own author.
     else if (t && "author" in t && isCf && t.author.toLowerCase() === author.toLowerCase()) openAuthor();
-    else openUrl(a.href);
+    else openLink(a.href);
   }
 
   async function installVersion(v: Version) {
@@ -123,7 +124,7 @@
     if (!isCf) return pushOverlay({ kind: "author", name: author });
     const a = (await api.cfProject(hit.cf_id!).catch(() => null))?.project?.authors?.[0];
     if (a?.id) pushOverlay({ kind: "author", name: a.name, cfId: a.id });
-    else openUrl(`https://www.curseforge.com/members/${encodeURIComponent(author)}/projects`);
+    else openLink(`https://www.curseforge.com/members/${encodeURIComponent(author)}/projects`);
   }
 
   // Gallery slideshow: A/W/←/↑ back, D/S/→/↓ forward (opens the first image when none is open).
@@ -192,6 +193,10 @@
         {#if author}<button class="by" onclick={openAuthor}>by {author}</button>{/if}
         <SourceBadges {hit} />
         <div class="spacer"></div>
+        {#if mr.account && !isCf}
+          <button class="follow" class:on={mr.follows.has(hit.project_id)} title={mr.follows.has(hit.project_id) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
+            aria-pressed={mr.follows.has(hit.project_id)} onclick={() => toggleFollow(hit.project_id)}>{mr.follows.has(hit.project_id) ? "♥" : "♡"}</button>
+        {/if}
         <InstallButton {hit} big />
       </div>
       <p class="desc">{hit.description}</p>
@@ -209,16 +214,17 @@
   </header>
 
   <nav class="tabs">
-    {#each [["overview", "Overview"], ["changelog", "Changelog"], ["gallery", `Gallery (${gallery.length})`], ["versions", `Versions (${listed.length})`]] as [id, label] (id)}
+    {#each [["overview", "Description"], ["changelog", "Changelog"], ["versions", `${isCf ? "Files" : "Versions"} (${listed.length})`], ["gallery", `Gallery (${gallery.length})`], ["relations", "Relations"]] as [id, label] (id)}
       <button class:on={tab === id} onclick={() => (tab = id as any)}>{label}</button>
     {/each}
     {#if project}
       <div class="links">
-        {#each [["source_url", "Source"], ["issues_url", "Issues"], ["wiki_url", "Wiki"], ["discord_url", "Discord"]] as [k, label] (k)}
-          {#if project[k]}<button class="link" onclick={() => openUrl(project[k])}>{label}</button>{/if}
+        {#if isCf && project.site_url}<button class="link" title="CurseForge's comments (in your browser)" onclick={() => openLink(`${project.site_url.replace(/\/$/, "")}/comments`)}>Comments ↗</button>{/if}
+        {#each [["issues_url", "Issues"], ["source_url", "Source"], ["wiki_url", "Wiki"], ["discord_url", "Discord"]] as [k, label] (k)}
+          {#if project[k]}<button class="link" title={project[k]} onclick={() => openLink(project[k])}>{label} ↗</button>{/if}
         {/each}
-        {#if !isCf}<button class="link" onclick={() => openUrl(`https://modrinth.com/${hit.project_type}/${hit.slug}`)}>Modrinth ↗</button>{/if}
-        {#if isCf || hit.cf_id}<button class="link" onclick={() => openUrl(project?.site_url ?? `https://www.curseforge.com/projects/${hit.cf_id}`)}>CurseForge ↗</button>{/if}
+        {#if !isCf}<button class="link" onclick={() => openLink(`https://modrinth.com/${hit.project_type}/${hit.slug}`)}>Modrinth ↗</button>{/if}
+        {#if isCf || hit.cf_id}<button class="link" onclick={() => openLink(project?.site_url ?? `https://www.curseforge.com/projects/${hit.cf_id}`)}>CurseForge ↗</button>{/if}
       </div>
     {/if}
   </nav>
@@ -235,6 +241,8 @@
           <div class="rich">{@html v.changelog === null && isCf ? '<p class="muted">Loading…</p>' : renderBody(v.changelog || "_No changelog._")}</div>
         </section>
       {:else}<div class="muted">{versions.length ? "No versions for this profile. Turn on “Show incompatible versions” in Versions." : "Loading…"}</div>{/each}
+    {:else if tab === "relations"}
+      <Relations {hit} cfId={hit.cf_id ?? null} deps={(versions[0]?.dependencies ?? []).filter((d) => d.project_id) as { project_id: string; dependency_type: string }[]} />
     {:else if tab === "gallery"}
       <div class="gallery">
         {#each gallery as g (g.url)}
@@ -346,8 +354,11 @@
   .chip { font-size: 12px; color: var(--text-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
   .chip.plain { border: 0; }
   .stats { margin-left: auto; display: flex; gap: 16px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
-  .tabs { display: flex; gap: 28px; border-bottom: 1px solid var(--line); margin-top: 14px; align-items: center; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px 28px; border-bottom: 1px solid var(--line); margin-top: 14px; align-items: center; }
   .tabs > button { background: none; border: 0; padding: 8px 0 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 15px; }
+  .follow { width: 40px; height: 40px; flex: none; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 20px; line-height: 1; }
+  .follow:hover { color: var(--text); }
+  .follow.on { color: #ff5c7a; border-color: color-mix(in srgb, #ff5c7a 50%, var(--line)); }
   .tabs > button.on { color: var(--text); border-bottom-color: var(--accent); }
   .links { margin-left: auto; display: flex; gap: 12px; }
   .link { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 2px; }

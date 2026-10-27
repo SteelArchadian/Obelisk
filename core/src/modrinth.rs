@@ -285,6 +285,46 @@ impl Client {
         self.get(&format!("/project/{}/members", enc(project)))
     }
 
+    /// Every project any of this project's versions depends on (Modrinth has no list of dependents).
+    pub fn dependencies(&self, project: &str) -> Result<Value, String> {
+        self.get(&format!("/project/{}/dependencies", enc(project)))
+    }
+
+    // ---- Signed in: a personal access token the user made on modrinth.com (Settings → PATs) ----
+
+    fn authed(&self, method: &str, path: &str, token: &str) -> Result<Option<Value>, String> {
+        let r = self.agent.request(method, &format!("{API}{path}")).set("Authorization", token).call()
+            .map_err(|e| match e {
+                ureq::Error::Status(401, _) => "Modrinth didn't accept the token. Make a new one in Modrinth → Settings → PATs.".to_string(),
+                e => format!("Modrinth: {e}"),
+            })?;
+        if r.status() == 204 { return Ok(None) }
+        r.into_json().map(Some).map_err(|e| e.to_string())
+    }
+
+    /// The token's account: id, username, avatar.
+    pub fn me(&self, token: &str) -> Result<Value, String> {
+        self.authed("GET", "/user", token)?.ok_or_else(|| "Modrinth sent no account".into())
+    }
+
+    /// Projects the account follows.
+    pub fn follows(&self, token: &str, user_id: &str) -> Result<Value, String> {
+        Ok(self.authed("GET", &format!("/user/{}/follows", enc(user_id)), token)?.unwrap_or(Value::Array(vec![])))
+    }
+
+    pub fn follow(&self, token: &str, project: &str, on: bool) -> Result<(), String> {
+        self.authed(if on { "POST" } else { "DELETE" }, &format!("/project/{}/follow", enc(project)), token).map(|_| ())
+    }
+
+    pub fn notifications(&self, token: &str, user_id: &str) -> Result<Value, String> {
+        Ok(self.authed("GET", &format!("/user/{}/notifications", enc(user_id)), token)?.unwrap_or(Value::Array(vec![])))
+    }
+
+    pub fn mark_read(&self, token: &str, ids: &[String]) -> Result<(), String> {
+        if ids.is_empty() { return Ok(()) }
+        self.authed("PATCH", &format!("/notifications?ids={}", enc(&serde_json::to_string(ids).unwrap())), token).map(|_| ())
+    }
+
     /// Everything in an instance that maps to a Modrinth project: Prism's `.index` entries plus
     /// any other file whose exact hash Modrinth knows (e.g. mods that came from CurseForge).
     pub fn installed(&self, game: &Path, hash_cache: &Path) -> Result<Vec<Installed>, String> {

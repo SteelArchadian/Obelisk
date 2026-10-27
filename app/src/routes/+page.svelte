@@ -39,6 +39,7 @@
   import PackShare from "$lib/PackShare.svelte";
   import PackImport from "$lib/PackImport.svelte";
   import SettingsPage from "$lib/SettingsPage.svelte";
+  import Bell from "$lib/Bell.svelte";
   import Welcome from "$lib/Welcome.svelte";
   import WhatsNew from "$lib/WhatsNew.svelte";
   import WorkBar from "$lib/WorkBar.svelte";
@@ -284,6 +285,7 @@
       <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
     </button>
     <div class="grow"></div>
+    <Bell />
     {#if account}
       <div class="acct-wrap">
         <button class="avatar" title={account.name} onclick={(e) => { e.stopPropagation(); accountMenu = !accountMenu; }}>
