@@ -219,31 +219,40 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-/// The assistants' MCP helper is a copy of this program named obelisk-mcp.exe, so connected chats never hold
-/// obelisk.exe itself open: Windows can't replace a running program's file, which used to make updates and
-/// uninstalls fail while a chat was connected. Brought up to date at every start; a copy still in use is
-/// renamed aside (Windows allows that) and swept up at a later start.
+/// The assistants' MCP helper, obelisk-mcp.exe, is the same program under its own name, so connected chats never
+/// hold obelisk.exe itself open (Windows can't replace a running program's file). The installer writes it; the
+/// app never copies itself. At each start: sweep up copies an update renamed aside, and point Claude's entry at
+/// the helper if it still runs this app (`obelisk.exe --mcp`) or an old install's helper.
 pub fn refresh_helper() {
     let Ok(me) = std::env::current_exe() else { return };
     let Some(dir) = me.parent() else { return };
-    let helper = dir.join("obelisk-mcp.exe");
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let n = e.file_name().to_string_lossy().to_string();
         if n.starts_with("obelisk-mcp.exe.old-") || n.starts_with("obelisk.exe.old") || n.starts_with("WebView2Loader.dll.old-") {
             let _ = std::fs::remove_file(e.path());
         }
     }
-    let same = std::fs::metadata(&helper).is_ok_and(|h| std::fs::metadata(&me).is_ok_and(|m| m.len() == h.len()))
-        && std::fs::read(&helper).ok() == std::fs::read(&me).ok();
-    if same {
-        return;
+    let helper = dir.join("obelisk-mcp.exe");
+    if helper.is_file() {
+        let _ = repoint_claude(&helper);
     }
-    if helper.exists() && std::fs::remove_file(&helper).is_err() {
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let _ = std::fs::rename(&helper, dir.join(format!("obelisk-mcp.exe.old-{stamp}")));
+}
+
+/// Claude's `obelisk` MCP entry, when it runs an Obelisk program other than `helper`, now runs `helper`.
+/// Entries pointing anywhere else are someone's own choice and left alone. ~/.claude.json is backed up first.
+fn repoint_claude(helper: &std::path::Path) -> Result<(), String> {
+    let home = std::path::PathBuf::from(std::env::var("USERPROFILE").map_err(|e| e.to_string())?);
+    let path = home.join(".claude.json");
+    let Ok(bytes) = std::fs::read(&path) else { return Ok(()) };
+    let mut cfg: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let want = helper.to_string_lossy().into_owned();
+    let Some(cmd) = cfg.pointer("/mcpServers/obelisk/command").and_then(Value::as_str) else { return Ok(()) };
+    let name = std::path::Path::new(cmd).file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if cmd.eq_ignore_ascii_case(&want) || !(name == "obelisk.exe" || name == "obelisk-mcp.exe") {
+        return Ok(());
     }
-    let tmp = dir.join("obelisk-mcp.exe.part");
-    if std::fs::copy(&me, &tmp).is_ok() {
-        let _ = std::fs::rename(&tmp, &helper);
-    }
+    std::fs::copy(&path, home.join(".claude.json.obelisk-bak")).map_err(|e| e.to_string())?;
+    cfg["mcpServers"]["obelisk"]["command"] = json!(want);
+    cfg["mcpServers"]["obelisk"]["args"] = json!(["--mcp"]);
+    write_atomic(&path, &serde_json::to_vec_pretty(&cfg).map_err(|e| e.to_string())?)
 }

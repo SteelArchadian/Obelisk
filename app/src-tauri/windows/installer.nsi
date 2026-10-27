@@ -800,6 +800,9 @@ Section Install
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
+  ; The AI assistants' MCP helper: the same program under its own name, so a connected chat never holds
+  ; obelisk.exe open. Written here by the installer, never by the app copying itself.
+  File "/oname=obelisk-mcp.exe" "${MAINBINARYSRCPATH}"
 
   ; Copy resources
   {{#each resources_dirs}}

@@ -214,7 +214,8 @@ pub enum Scan {
     Unavailable(String),
 }
 
-/// Scan a file or folder with Windows Defender (no automatic cleanup: Obelisk deletes what it refuses itself).
+/// Scan a file or folder with Windows Defender. Defender deals with what it finds in its usual way (quarantine), and
+/// Obelisk then refuses the pack: an exit code of 2 means a threat was found, whether or not it was cleaned up.
 pub fn defender_scan(path: &Path) -> Scan {
     defender_scan_watched(path, |_| {}, || false)
 }
@@ -228,7 +229,7 @@ pub fn defender_scan_watched(path: &Path, tick: impl Fn(u64), stop: impl Fn() ->
         return Scan::Unavailable("Windows Defender isn't installed here".into());
     }
     let mut c = std::process::Command::new(exe);
-    c.args(["-Scan", "-ScanType", "3", "-File"]).arg(path).arg("-DisableRemediation");
+    c.args(["-Scan", "-ScanType", "3", "-File"]).arg(path);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
