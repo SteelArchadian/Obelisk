@@ -314,7 +314,7 @@
       <span class="brand" data-tauri-drag-region>OBELISK</span>
       <nav class="nav">
         {#each NAV as n (n.page)}
-          <button class:on={app.page === n.page} onclick={() => go(n.page)}><Icon name={n.icon} /> {n.label}</button>
+          <button class:on={app.page === n.page} title={n.label} onclick={() => go(n.page)}><Icon name={n.icon} /> <span class="nav-label">{n.label}</span></button>
         {/each}
       </nav>
       <form class="searchbox" class:filled={!!app.browseQuery} onsubmit={submitSearch}>
@@ -454,7 +454,13 @@
   .nav button { display: flex; align-items: center; gap: 7px; background: none; border: 0; padding: 7px 12px; font-size: 15px; color: var(--muted); border-bottom: 2px solid transparent; transition: color 0.15s; }
   .nav button:hover { color: var(--text); }
   .nav button.on { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
-  .view { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 28px; }
+  .view { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 0 28px; }
+  /* Narrow window: icons only in the top nav and tighter margins, so nothing gets pushed off the edge. */
+  @media (max-width: 900px) {
+    .nav-label { display: none; }
+    .top { gap: 10px; padding-left: 16px; }
+    .view { padding: 0 16px; }
+  }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.45); z-index: 50; max-width: 70vw; animation: up 0.15s ease-out; }
   @keyframes up { from { opacity: 0; transform: translate(-50%, 8px); } }
 </style>

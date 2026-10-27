@@ -92,7 +92,22 @@
     if (c === "source") filters = { ...filters, sources: [] };
     try { localStorage.setItem("obelisk.hiddenCols", JSON.stringify(hiddenCols)); } catch { /* ignore */ }
   }
-  let colTemplate = $derived(["22px", "minmax(230px, 3fr)", ...COLUMNS.filter(([c]) => shown(c)).map(([c]) => WIDTH[c])].join(" "));
+  // A narrow window drops columns (least useful first) until the rest fit; they come back when it widens.
+  const MIN_W: Record<string, number> = { date: 120, authors: 90, env: 54, source: 100, update: 84, enabled: 60 };
+  const DROP_ORDER = ["authors", "date", "source", "env", "enabled"];
+  let tableW = $state(0);
+  let squeezed = $derived.by(() => {
+    if (!tableW) return [] as string[];
+    let need = 32 + 22 + 230 + COLUMNS.filter(([c]) => shown(c)).reduce((n, [c]) => n + MIN_W[c] + 14, 14);
+    const out: string[] = [];
+    for (const c of DROP_ORDER) {
+      if (need <= tableW) break;
+      if (shown(c)) { out.push(c); need -= MIN_W[c] + 14; }
+    }
+    return out;
+  });
+  const vis = (c: string) => shown(c) && !squeezed.includes(c);
+  let colTemplate = $derived(["22px", "minmax(180px, 3fr)", ...COLUMNS.filter(([c]) => vis(c)).map(([c]) => WIDTH[c])].join(" "));
   let filterCount = $derived(filters.authors.length + filters.sources.length + filters.envs.length + filters.status.length + (filters.noLibs ? 1 : 0));
   let sub = $state<Sub>("mods");
   let query = $state("");
@@ -689,11 +704,11 @@
         <input class="search" placeholder="Search {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()} or authors…" bind:value={query} />
       </div>
 
-      <div class="table" role="table" style:--cols={colTemplate}>
+      <div class="table" role="table" style:--cols={colTemplate} bind:clientWidth={tableW}>
         <div class="thead" role="row" tabindex="-1" title="Right-click to choose columns"
           oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); colMenu = { x: Math.min(e.clientX, innerWidth - 230), y: e.clientY }; }}>
           <span><input type="checkbox" checked={allChecked} onchange={toggleAll} aria-label="Select all" /></span>
-          {#each [["name", "Name"], ["date", ""], ["authors", "Author"], ["env", "Env"], ["source", "Source"], ["update", viewTrash ? "" : "Action"], ["enabled", viewTrash ? "" : "Active"]].filter(([k]) => k === "name" || shown(k)) as [key, label] (key)}
+          {#each [["name", "Name"], ["date", ""], ["authors", "Author"], ["env", "Env"], ["source", "Source"], ["update", viewTrash ? "" : "Action"], ["enabled", viewTrash ? "" : "Active"]].filter(([k]) => k === "name" || vis(k)) as [key, label] (key)}
             {#if key === "date"}
               <div class="pop">
                 <button class="th" onclick={(e) => { e.stopPropagation(); if (viewTrash) sortBy("date"); else dateMenu = !dateMenu; }}>
@@ -736,15 +751,15 @@
                 {#if icons[item.fileName] || f?.iconUrl}<img class="thumb" use:crisp src={icons[item.fileName] || f?.iconUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="thumb">{initials(item.name)}</div>{/if}
                 <button class="text linkish" onclick={() => openItem(item)} title="Open project page"><strong>{item.name}</strong><small>{item.fileName}</small>{#if item.version}<small class="ver">{item.version}</small>{/if}</button>
               </div>
-              {#if shown("date")}<span class="muted small" title={when ? new Date(when).toLocaleString() : ""}>{when ? new Date(when).toLocaleDateString(undefined, { dateStyle: "medium" }) : "–"}</span>{/if}
-              {#if shown("authors")}<span class="ellipsis">{#if item.authors && f?.provider}<button class="author" title="Open the author's page" onclick={() => openAuthor(item)}>{item.authors}</button>{:else}<span class="muted" title={item.authors}>{item.authors}</span>{/if}</span>{/if}
-              {#if shown("env")}<span class="center env" title={ENV_LABEL[f?.env ?? ""]}>
+              {#if vis("date")}<span class="muted small" title={when ? new Date(when).toLocaleString() : ""}>{when ? new Date(when).toLocaleDateString(undefined, { dateStyle: "medium" }) : "–"}</span>{/if}
+              {#if vis("authors")}<span class="ellipsis">{#if item.authors && f?.provider}<button class="author" title="Open the author's page" onclick={() => openAuthor(item)}>{item.authors}</button>{:else}<span class="muted" title={item.authors}>{item.authors}</span>{/if}</span>{/if}
+              {#if vis("env")}<span class="center env" title={ENV_LABEL[f?.env ?? ""]}>
                 {#if f?.env === "client" || f?.env === "both"}<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8" /><path d="M8 20h8M12 16v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>{/if}
                 {#if f?.env === "server" || f?.env === "both"}<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="4" y="3" width="16" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8" /><rect x="4" y="14" width="16" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8" /><circle cx="8" cy="6.5" r="1" fill="currentColor" /><circle cx="8" cy="17.5" r="1" fill="currentColor" /></svg>{/if}
                 {#if !f?.env}<span class="muted">–</span>{/if}
               </span>{/if}
-              {#if shown("source")}<span><span class="badge {src}">{SOURCE_LABEL[src as keyof typeof SOURCE_LABEL]}</span></span>{/if}
-              {#if shown("update")}<span>
+              {#if vis("source")}<span><span class="badge {src}">{SOURCE_LABEL[src as keyof typeof SOURCE_LABEL]}</span></span>{/if}
+              {#if vis("update")}<span>
                 {#if item.trashId}
                   <button class="upd" onclick={() => restoreIds([item.trashId!])}>Restore</button>
                 {:else if isPinned(item)}
@@ -762,7 +777,7 @@
                   <span class="muted small">Up to date</span>
                 {/if}
               </span>{/if}
-              {#if shown("enabled")}<span class="center">
+              {#if vis("enabled")}<span class="center">
                 {#if !item.trashId}<button class="switch" class:on={item.enabled} role="switch" aria-checked={item.enabled}
                   aria-label="Toggle {item.name}" onclick={() => setEnabled(item, !item.enabled)}><i></i></button>{/if}
               </span>{/if}
@@ -839,8 +854,8 @@
   .hero-icon img { width: 100%; height: 100%; object-fit: cover; }
   .hero-body { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
   .instance { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .hero-actions { display: flex; gap: 10px; align-items: center; }
-  .hero-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; align-items: center; }
+  .hero-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px 16px; }
   h2 { margin: 2px 0; font-size: 20px; font-weight: 600; }
   .sub { margin: 0; color: var(--muted); font-size: 13px; }
   .play { background: var(--accent); border: 0; border-radius: 6px; padding: 9px 30px; font-weight: 600; font-size: 15px; color: #fff; transition: background 0.15s; }
@@ -850,8 +865,8 @@
   .play.stop:hover { background: color-mix(in srgb, var(--danger) 85%, #fff); }
   .stats { display: flex; flex-wrap: wrap; gap: 6px 20px; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 10px; color: var(--muted); font-size: 12.5px; }
 
-  .tabs, .subtabs { display: flex; flex: none; }
-  .tabs { gap: 26px; margin-top: 16px; border-bottom: 1px solid var(--line); }
+  .tabs, .subtabs { display: flex; flex-wrap: wrap; flex: none; }
+  .tabs { gap: 6px 26px; margin-top: 16px; border-bottom: 1px solid var(--line); }
   .tabs button { background: none; border: 0; padding: 8px 0 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 0.15s; }
   .tabs button:hover, .subtabs button:hover { color: var(--text); }
   .tabs .add-content { margin: 0 0 6px auto; display: inline-flex; align-items: center; gap: 8px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; font-size: 15px; }
@@ -863,7 +878,7 @@
   .subtabs button { background: none; border: 0; padding: 5px 12px; border-radius: 6px; color: var(--muted); }
   .subtabs button.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
-  .toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 0; flex: none; min-height: 58px; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 0; flex: none; min-height: 58px; }
   .sel { font-weight: 600; margin-right: 4px; }
   .ghost { display: inline-flex; align-items: center; gap: 8px; background: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; transition: border-color 0.15s; }
   .ghost:hover:not(:disabled) { border-color: var(--muted); }
@@ -875,7 +890,7 @@
   .search:focus { border-color: var(--accent); }
   .error { background: var(--err-bg); color: var(--err-text); padding: 8px 12px; border-radius: 6px; margin-top: 10px; user-select: text; }
 
-  .table { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-radius: 10px 10px 0 0; }
+  .table { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-radius: 10px 10px 0 0; }
   .thead, .row { display: grid; grid-template-columns: var(--cols); gap: 14px; align-items: center; padding: 0 16px; }
   .thead { height: 38px; border-bottom: 1px solid var(--line); flex: none; }
   .th { background: none; border: 0; padding: 0; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); }
@@ -919,7 +934,7 @@
   .trash-btn { position: relative; width: 38px; height: 36px; padding: 0 !important; display: grid !important; place-items: center; }
   .hopper:hover, .hopper.active { color: var(--accent); border-color: var(--accent); }
   .fcount { position: absolute; top: -6px; right: -6px; background: var(--accent); color: #fff; border-radius: 999px; font-size: 10.5px; min-width: 17px; height: 17px; display: grid; place-items: center; padding: 0 4px; }
-  .filters { position: absolute; right: 0; top: 42px; z-index: 40; width: 460px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: 0 14px 40px rgb(0 0 0 / 0.45); display: flex; flex-direction: column; gap: 10px; }
+  .filters { position: absolute; right: 0; top: 42px; z-index: 40; width: min(460px, calc(100vw - 110px)); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: 0 14px 40px rgb(0 0 0 / 0.45); display: flex; flex-direction: column; gap: 10px; }
   .fhead { display: flex; justify-content: space-between; align-items: center; }
   .fsort { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
   .fsort select { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 5px; padding: 6px 8px; }

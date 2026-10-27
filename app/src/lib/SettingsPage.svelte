@@ -406,19 +406,19 @@
 </div>
 
 <style>
-  .settings { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px 1fr; gap: 28px; padding-top: 18px; }
+  .settings { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 28px; padding-top: 18px; }
   .side { display: flex; flex-direction: column; gap: 2px; }
   .side h2 { font-size: 18px; margin: 0 0 12px 10px; }
   .side button { text-align: left; background: none; border: 0; padding: 9px 12px; border-radius: 6px; color: var(--text-2); }
   .side button:hover { background: var(--panel); }
   .side button.on { background: var(--panel-2); color: var(--text); font-weight: 600; }
-  .body { overflow-y: auto; padding: 0 10px 40px 0; display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
+  .body { min-width: 0; overflow-y: auto; padding: 4px 10px 40px 8px; margin-left: -8px; display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
   h1 { margin: 0; font-size: 22px; }
   h3 { margin: 6px 0 0; font-size: 15px; }
   .muted { color: var(--muted); margin: 0; line-height: 1.5; }
   p { margin: 0; }
   .field { display: flex; flex-direction: column; gap: 8px; font-weight: 600; }
-  .field .select { width: 260px; font-weight: 400; }
+  .field .select { width: 260px; max-width: 100%; font-weight: 400; }
   .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; background: var(--panel); padding: 12px 14px; border-radius: 8px; }
   .toggle-row small { display: block; color: var(--muted); font-weight: 400; }
   .switch { flex: none; width: 40px; height: 22px; border-radius: 999px; border: 0; padding: 0; position: relative; background: var(--switch-off); transition: background 0.15s; }
@@ -434,11 +434,12 @@
   .sync-head { display: flex; align-items: center; justify-content: space-between; }
   .sources { display: flex; flex-direction: column; gap: 6px; }
   .source { display: grid; grid-template-columns: 1fr auto auto; gap: 16px; align-items: center; background: var(--panel); padding: 10px 14px; border-radius: 8px; }
-  .source small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 460px; }
+  .source { min-width: 0; }
+  .source small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .status { color: var(--muted); font-size: 13px; }
   .status.ok { color: var(--mr); }
   .themes { display: flex; flex-wrap: wrap; gap: 12px; }
-  .theme { width: 200px; display: grid; grid-template-columns: 34px 1fr; grid-template-rows: auto auto; gap: 6px 10px; align-items: center; background: #1f2024; border: 2px solid transparent; border-radius: 8px; padding: 12px; color: #e9e9ec; text-align: left; }
+  .theme { width: 200px; max-width: 100%; display: grid; grid-template-columns: 34px 1fr; grid-template-rows: auto auto; gap: 6px 10px; align-items: center; background: #1f2024; border: 2px solid transparent; border-radius: 8px; padding: 12px; color: #e9e9ec; text-align: left; }
   .theme.light { background: #ffffff; color: #18181c; border-color: #d9d9e0; }
   .theme.on { border-color: var(--accent); }
   .sw { width: 30px; height: 30px; border-radius: 6px; grid-row: span 1; }
@@ -457,7 +458,7 @@
   .num { width: 90px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 5px 6px; font: inherit; }
   .args { min-height: 80px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 12.5px "Cascadia Mono", Consolas, monospace; font-weight: 400; resize: vertical; }
   .keyrow { display: flex; gap: 10px; }
-  .keyrow .search { width: 380px; }
+  .keyrow .search { width: 380px; max-width: 100%; }
   .status-line { font-weight: 600; }
   .primary { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 8px 20px; font-weight: 600; }
   .primary:disabled { opacity: 0.5; }
@@ -465,12 +466,20 @@
   .ghost:disabled { opacity: 0.6; }
   .link { background: none; border: 0; color: var(--accent); padding: 0; }
   .ai-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: -4px 0 0; }
-  .seg { display: inline-flex; width: fit-content; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg { display: inline-flex; flex-wrap: wrap; width: fit-content; max-width: 100%; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .seg button { padding: 6px 12px; background: transparent; border: 0; color: inherit; cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--line); }
   .seg button:hover { background: var(--hover, rgba(127,127,127,.12)); }
   .seg button.on { background: var(--accent); color: #fff; box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.35); font-weight: 600; }
   .small { font-size: 12px; }
-  .row-buttons { display: flex; gap: 8px; }
+  .row-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* Narrow window: the section list goes across the top and the page uses the full width. */
+  @media (max-width: 820px) {
+    .settings { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+    .side { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+    .side h2 { display: none; }
+    .side button { padding: 6px 10px; }
+    .toggle-row { gap: 12px; }
+  }
   .update-row { align-items: center; gap: 12px; }
 </style>

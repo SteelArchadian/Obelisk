@@ -2,6 +2,8 @@
 //! tauri.conf.json, the signing key never leaves the release PC). Like Discord: a start opens a small window that
 //! checks for an update and installs it before Obelisk opens (Obelisk then starts again by itself, and shows what
 //! changed once). While Obelisk runs, a check every 30 minutes shows the Update button ("self-update" event).
+//! While releases aren't code-signed, nothing installs by itself: a start only shows the Update button, and the
+//! update runs when someone presses it (antivirus rightly distrusts an unsigned program quietly replacing itself).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
@@ -9,6 +11,9 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// When this copy was built (seconds since 1970), set by build.rs.
 pub const BUILD: &str = env!("OBELISK_BUILD");
+
+/// Releases are code-signed, so an update may install at start without asking (set by build.rs).
+const SIGNED: bool = !env!("OBELISK_SIGNED").is_empty();
 
 /// The update window's label (its page is the "updater" route).
 pub const WINDOW: &str = "updater";
@@ -80,9 +85,13 @@ async fn install_inner(app: &tauri::AppHandle, u: Update) -> Result<(), String> 
 }
 
 /// The start-up window: install a waiting update (Obelisk starts again by itself), or report that there is none
-/// (false: open Obelisk). A slow or absent connection doesn't hold Obelisk up for long.
+/// (false: open Obelisk). A slow or absent connection doesn't hold Obelisk up for long. Unsigned builds don't
+/// install here: Obelisk opens and its own check shows the Update button.
 #[tauri::command]
 pub async fn startup_update(app: tauri::AppHandle) -> bool {
+    if !SIGNED {
+        return false;
+    }
     let Ok(Ok(Some(u))) = tokio::time::timeout(std::time::Duration::from_secs(6), find(&app)).await else {
         return false;
     };
@@ -141,12 +150,13 @@ pub fn start_window(app: &tauri::AppHandle) {
 }
 
 /// Every 30 minutes while Obelisk runs: offer a new release with the Update button. Started with Windows (no
-/// start-up window), a waiting update installs straight away unless something would be cut off (`idle` false).
+/// start-up window), a waiting update installs straight away unless something would be cut off (`idle` false)
+/// or releases aren't signed yet.
 pub fn watch(app: tauri::AppHandle, at_start: bool, idle: impl Fn() -> bool + Send + 'static) {
     tauri::async_runtime::spawn(async move {
         if at_start {
             if let Ok(Some(u)) = find(&app).await {
-                if idle() {
+                if SIGNED && idle() {
                     let _ = install(&app, u).await;
                 } else {
                     let _ = app.emit("self-update", Available::from(&u));

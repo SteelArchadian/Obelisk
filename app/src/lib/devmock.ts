@@ -97,6 +97,7 @@ export function installDevMock() {
       case "build_packs": return { serverDir: "C:/Users/you/Downloads/Foundation Server", serverZip: "C:/Users/you/Downloads/Foundation Server.zip", clientZip: "C:/Users/you/Downloads/Foundation Client.zip", notes: [] };
       case "profile_options": return { name: "Foundation", overrideMemory: false, maxMemMb: 8192, minMemMb: 1024, overrideJavaArgs: false, jvmArgs: "", overrideWindow: false, width: 1280, height: 720, maximized: false, overrideJavaLocation: false, javaPath: "" };
       case "java_installs": return [{ path: "C:/Prism/java/java-runtime-delta/bin/javaw.exe", version: "21.0.7", major: 21, vendor: "Microsoft" }, { path: "C:/Program Files/Java/jre1.8.0_481/bin/javaw.exe", version: "1.8.0_481", major: 8, vendor: "Oracle Corporation" }];
+      case "prism_defaults": return { maxMemMb: 4096, jvmArgs: "", width: 1920, height: 1080, maximized: false };
       case "system_memory_mb": return 32768;
       case "prism_running": return false;
       case "read_report": return "[log text]";

@@ -285,7 +285,7 @@
   .chev { color: var(--muted); transition: transform 0.15s; font-size: 18px; line-height: 1; }
   .folder.open .chev { transform: rotate(90deg); }
   .group.nested { padding-left: 12px; border-left: 2px solid var(--line); margin: 0 0 6px 14px; }
-  .field { display: grid; grid-template-columns: 1fr minmax(260px, 360px); gap: 16px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--row-line); }
+  .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 360px); gap: 16px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--row-line); }
   .field.bad .val { border-color: var(--danger); }
   .lbl { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .lbl small { color: var(--muted); white-space: pre-line; font-size: 12px; }
