@@ -17,7 +17,7 @@ fn tools() -> Value {
     let t = |name: &str, desc: &str, schema: Value| json!({ "name": name, "description": desc, "inputSchema": schema });
     json!([
         t("copies", "List the test copies in the test bench and whether a game runs in each.", obj(json!({}), &[])),
-        t("launch", "Launch Minecraft in a test copy (never the play instance), at full speed outside the assistant's sandbox. Waits for the bench lock first, mutes the game, adds the test harness (no mouse grab), turns off Absolute AFK Cinema, parks the window off-screen, and kills it if still alive 30 s after \"Stopping!\". Returns a job id; use wait. End runs that need no saved progress with kill (fast quit).",
+        t("launch", "Launch Minecraft in a test copy (never the play instance), at full speed outside the assistant's sandbox. Waits for the bench lock first (shared with other test runs, one per copy, unless perf is set), mutes the game, adds the test harness (no mouse grab), turns off Absolute AFK Cinema, parks the window off-screen, and kills it if still alive 30 s after \"Stopping!\". Returns a job id; use wait. End runs that need no saved progress with kill (fast quit).",
             obj(json!({ "copy": copy, "owner": { "type": "string", "description": "Your chat's name (for the bench lock)" },
                 "purpose": { "type": "string" }, "eta": { "type": "integer", "description": "Expected minutes, 1-30" },
                 "world": { "type": "string", "description": "Save folder to open automatically (Speed Loader autobench), or \"new:<seed>\" for a fresh world (same as new_world)" },
@@ -54,7 +54,8 @@ fn tools() -> Value {
                 "add_mods": { "type": "array", "items": { "type": "string" }, "description": "Jars in the test bench to add for this run only" },
                 "config": { "type": "array", "items": { "type": "object", "properties": { "file": { "type": "string" }, "key": { "type": "string" }, "value": { "type": "string" } }, "required": ["file", "key", "value"] }, "description": "TOML settings for this run only: file relative to the copy, dotted key (section.key, must exist), value as TOML (true, 12, \"text\"). Restored byte-for-byte after" },
                 "java": { "type": "integer", "description": "21 (default) or 25 (jdk-25* in the test bench's java folder)" },
-                "compact_headers": { "type": "boolean", "description": "Java 25 only: -XX:+UseCompactObjectHeaders" } }), &["copy", "owner", "purpose"])),
+                "compact_headers": { "type": "boolean", "description": "Java 25 only: -XX:+UseCompactObjectHeaders" },
+                "perf": { "type": "boolean", "description": "A performance test (FPS, load times, memory): waits until no other test runs and has the bench to itself. Only when the user asked for one. Default false: shares the bench with other non-performance runs, one run per copy" } }), &["copy", "owner", "purpose"])),
         t("gate", "Run the full-pack gate (gate.py in the test bench's scripts) in its gate copy, optionally swapping in a candidate jar.",
             obj(json!({ "owner": { "type": "string" }, "jar": { "type": "string", "description": "Candidate .jar in the test bench" },
                 "replace": { "type": "string", "description": "Glob in mods/ of the jar(s) it replaces" }, "mods": { "type": "string" },

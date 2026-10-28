@@ -1132,15 +1132,21 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let lock = format!("{owner} - {purpose} (obelisk)");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, java, cmd, swap, new_world, hooks));
+    // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
+    let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks));
     Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") }))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, java: String, cmd: Vec<String>,
+fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>) {
     let me = std::process::id().to_string();
-    let child = bench(&["acquire", &lock, "--pid", &me, "--wait", "--eta", &eta.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let eta_s = eta.to_string();
+    let mut acquire = vec!["acquire", &lock, "--pid", &me, "--wait", "--eta", &eta_s];
+    if !perf { acquire.extend(["--shared", "--copy", &copy]); }
+    let child = bench(&acquire).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     let Ok(mut child) = child else {
         update(&jobs, id, |j| { j.state = "failed".into(); j.detail = "couldn't run benchlock.py".into(); j.ended = Some(now()); });
         return;
@@ -1150,10 +1156,15 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let got = loop {
         if let Ok(Some(s)) = child.try_wait() { break s.code() == Some(0); }
         let holder = bench(&["status"]).output().ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
-        if let Some(h) = holder.filter(|h| h["owner"].is_string()) {
-            let d = format!("waiting for the bench lock: {} has it, expected to end {}", h["owner"].as_str().unwrap_or("?"), h["expected_end"].as_str().unwrap_or("?"));
-            update(&jobs, id, |j| if j.detail != KILLED { j.detail = d });
-        }
+        let d = match holder {
+            Some(h) if h["owner"].is_string() => Some(format!("waiting for the bench lock: {} has it, expected to end {}",
+                h["owner"].as_str().unwrap_or("?"), h["expected_end"].as_str().unwrap_or("?"))),
+            Some(h) if h["shared"].is_array() => Some(format!("waiting for the bench lock: shared by {}",
+                h["shared"].as_array().into_iter().flatten().map(|s| format!("{} in {} (until {})", s["owner"].as_str().unwrap_or("?"),
+                    s["copy"].as_str().unwrap_or("?"), s["expected_end"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", "))),
+            _ => None,
+        };
+        if let Some(d) = d { update(&jobs, id, |j| if j.detail != KILLED { j.detail = d }); }
         std::thread::sleep(Duration::from_secs(15));
     };
     update(&jobs, id, |j| if j.detail.starts_with("waiting for the bench lock") { j.detail.clear() });
