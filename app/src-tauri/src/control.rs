@@ -1182,7 +1182,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         }
         set_option(&dir.join("options.txt"), "soundCategory_master", "0.0");
         test_rules(&dir);
-        let runs = dir.join("obelisk-runs");
+        // Run logs live beside the copies, never inside one: a copy's folder must match the pack it came from.
+        let runs = tb().root.join("obelisk-runs").join(dir.file_name().unwrap_or_default());
         let _ = std::fs::create_dir_all(&runs);
         let out = std::fs::File::create(runs.join(format!("{id}.stdout"))).map_err(|e| e.to_string())?;
         let started = SystemTime::now();
@@ -1195,7 +1196,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let mut parked = std::collections::HashSet::new();
         let mut stopping: Option<Instant> = None;
         let mut window_ms = None;
-        let mut watch = super::devrun::Sampler::new(pid, &dir, id, click_ms, super::devrun::jcmd_for(&java).ok());
+        let mut watch = super::devrun::Sampler::new(pid, &dir, &runs, id, click_ms, super::devrun::jcmd_for(&java).ok());
         let mut shown = Instant::now();
         let latest = dir.join("logs").join("latest.log");
         let why = loop {

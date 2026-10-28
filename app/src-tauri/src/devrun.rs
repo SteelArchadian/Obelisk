@@ -1,7 +1,7 @@
 //! AI dev mode: what a test run looks like from outside the game, from the moment Java starts.
 //! Once a second: the game's CPU, memory, GPU load and video memory; every 10 s the Java heap (jcmd).
 //! Stage events (mods loaded, resources, title screen, world join, terrain ready, quit) come from the log and
-//! Optimal's timeline as they happen. Everything goes to <copy>/obelisk-runs/<job>.samples.jsonl.
+//! Optimal's timeline as they happen. Everything goes to <bench>/obelisk-runs/<copy>/<job>.samples.jsonl.
 
 use obelisk_core as prism;
 use serde_json::{json, Value};
@@ -33,8 +33,8 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn new(pid: u32, dir: &Path, job: u32, launched_ms: i64, jcmd: Option<PathBuf>) -> Self {
-        let out = std::fs::File::create(dir.join("obelisk-runs").join(format!("{job}.samples.jsonl"))).ok();
+    pub fn new(pid: u32, dir: &Path, runs: &Path, job: u32, launched_ms: i64, jcmd: Option<PathBuf>) -> Self {
+        let out = std::fs::File::create(runs.join(format!("{job}.samples.jsonl"))).ok();
         let heap = Arc::new(Mutex::new(None));
         let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
         if let Some(jcmd) = jcmd {
