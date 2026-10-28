@@ -1324,6 +1324,20 @@ async fn import_pack(source: String) -> Result<(), String> {
 #[tauri::command]
 /// Returns a note when the profile's pinned Java was wrong and got switched first.
 async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<String>, String> {
+    // A player runs one game at a time. Test copies the assistant runs under C:\mcw aren't modpacks, so they don't count.
+    static LAUNCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    struct Starting(bool);
+    impl Drop for Starting {
+        fn drop(&mut self) { if self.0 { LAUNCHING.store(false, std::sync::atomic::Ordering::SeqCst); } }
+    }
+    if LAUNCHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("Another game is starting. Wait for it to open, or close it first.".into());
+    }
+    let mut starting = Starting(true);
+    if let Some(other) = blocking(|| Ok(running_java())).await?.into_iter().map(|(id, _)| id).find(|id| game(id).is_ok()) {
+        let name = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == other).map(|i| i.name).unwrap_or(other);
+        return Err(format!("{name} is already running. Close it before starting another game."));
+    }
     let game_dir = game(&instance_id)?;
     let g = game_dir.clone();
     let found = blocking(move || Ok(prism::dupes::find(&g))).await?;
@@ -1361,9 +1375,11 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
         .args(["--launch", &instance_id])
         .spawn()
         .map_err(|e| format!("could not start Prism: {e}"))?;
+    starting.0 = false; // handed to the watcher, which clears it once the game is up or has failed to start
     std::thread::spawn(move || {
         use tauri::Emitter;
         let found = watch_launch(&app, &instance_id, quiet, &before);
+        LAUNCHING.store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": found.is_some() }));
         // A crash report written since Play was clicked: the UI offers its diagnosis.
         let crashed = |app: &tauri::AppHandle| {
