@@ -69,6 +69,7 @@ export function installDevMock() {
       case "pack_trash": return [{ id: "1-Odyssey", instanceId: "Odyssey", name: "Odyssey", deletedMs: now - 2 * 86_400_000, bytes: 2_400_000_000 }];
       case "create_checkpoint": case "auto_backup": case "change_backup": case "safety_backup": case "restore_backup": case "revert_change": return null;
       case "share_overview": return { Foundation: 2 };
+      case "running_games": return [];
       case "share_status": return {
         shared: true, me: "me1",
         share: { packId: "p", name: "Foundation", autoApply: false, members: [

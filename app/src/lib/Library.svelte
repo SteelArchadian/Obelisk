@@ -10,6 +10,16 @@
   import { checkAllDupes, dupeState, flagged } from "./dupes.svelte";
   import CollabBadge from "./CollabBadge.svelte";
 
+  // Stop on a playing tile asks once more (it force-closes the game), then closes it.
+  let stopArmed = $state<string | null>(null);
+  let stopTimer: ReturnType<typeof setTimeout> | undefined;
+  function stop(inst: Instance) {
+    clearTimeout(stopTimer);
+    if (stopArmed === inst.id) { stopArmed = null; kill(inst); return; }
+    stopArmed = inst.id;
+    stopTimer = setTimeout(() => (stopArmed = null), 3000);
+  }
+
   // Duplicate mods: checked for every profile when the library shows, and again when Obelisk regains focus.
   $effect(() => {
     const ids = app.instances.map((i) => i.id);
@@ -249,7 +259,7 @@
   {:else if view === "tiles"}
     <div class="grid" style:--tile="{size}px">
       {#each shown as inst (inst.id)}
-        <div class="tile" role="group" oncontextmenu={(e) => onContext(e, inst)}>
+        <div class="tile" class:playing={running[inst.id]} role="group" oncontextmenu={(e) => onContext(e, inst)}>
           <div class="artwrap">
           <button class="art" onclick={() => openInstance(inst)} title="Open {inst.name}">
             {#if app.icons[inst.id]}<img src={app.icons[inst.id]} alt="" draggable="false" />{:else}<span>{initials(inst.name)}</span>{/if}
@@ -271,10 +281,13 @@
           </div>
           <div class="metarow">
             <button class="meta" onclick={() => openInstance(inst)}>
-              <strong>{inst.name}</strong><small>Played {ago(inst.lastLaunchMs).toLowerCase()}</small>
+              <strong>{inst.name}</strong>{#if running[inst.id]}<small class="now"><i></i>Playing now</small>{:else}<small>Played {ago(inst.lastLaunchMs).toLowerCase()}</small>{/if}
             </button>
-            <button class="tile-play" class:busy={starting[inst.id]} class:live={running[inst.id]} title={running[inst.id] ? "Running. Open the profile to stop it" : starting[inst.id] ? "Starting…" : `Play ${inst.name}`} aria-label="Play {inst.name}" onclick={() => (running[inst.id] ? openInstance(inst) : play(inst))}>
-              {#if running[inst.id]}<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" /></svg>
+            <button class="tile-play" class:busy={starting[inst.id]} class:live={running[inst.id]} class:armed={stopArmed === inst.id}
+              title={running[inst.id] ? (stopArmed === inst.id ? "Click again to close the game (unsaved progress since the last autosave is lost)" : `Stop ${inst.name}`) : starting[inst.id] ? "Starting…" : `Play ${inst.name}`}
+              aria-label={running[inst.id] ? `Stop ${inst.name}` : `Play ${inst.name}`} onclick={() => (running[inst.id] ? stop(inst) : play(inst))}>
+              {#if running[inst.id] && stopArmed === inst.id}<span class="sure">Stop?</span>
+              {:else if running[inst.id]}<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" /></svg><span class="sure">Stop</span>
               {:else if starting[inst.id]}<span class="spin"></span>{:else}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>{/if}
             </button>
           </div>
@@ -359,6 +372,13 @@
   .tile-play svg { margin-left: 2px; }
   .tile-play.busy, .tile-play.live { opacity: 1; transform: scale(1); }
   .tile-play.live { background: var(--danger); }
+  .tile-play.live { width: auto; padding: 0 14px; border-radius: 20px; display: flex; gap: 6px; }
+  .tile-play.live svg { margin-left: 0; }
+  .sure { font-size: 13px; font-weight: 700; }
+  .tile.playing { box-shadow: 0 0 0 2px var(--ok, #3fb950), 0 0 18px color-mix(in srgb, var(--ok, #3fb950) 45%, transparent); }
+  .meta small.now { color: var(--ok, #3fb950); display: flex; align-items: center; gap: 6px; }
+  .now i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
   .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgb(255 255 255 / 0.35); border-top-color: #fff; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .art img { width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; }

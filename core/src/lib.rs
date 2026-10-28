@@ -68,6 +68,14 @@ fn cfg_value(v: &str) -> String {
     if path { v.replace('\\', "/") } else { v.replace('\\', "\\\\") }
 }
 
+/// The profile id in a running game's "-Djava.library.path=<instances folder>/<id>/natives" argument (Prism sets
+/// it). The instances folder can be anywhere, in any case.
+pub fn natives_instance(arg: &str) -> Option<String> {
+    let path = arg.strip_prefix("-Djava.library.path=")?.replace('\\', "/");
+    let dir = path.trim_end_matches('/').strip_suffix("/natives")?;
+    dir.rsplit('/').next().filter(|id| !id.is_empty()).map(String::from)
+}
+
 /// Repair path settings an older Obelisk wrote with bare backslashes (which Prism misreads, so it found no
 /// packs or no Java). Returns whether anything changed.
 pub fn heal_cfg(path: &Path) -> Result<bool, String> {
@@ -916,6 +924,14 @@ pub fn remove_account(data: &Path, uuid: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn finds_profile_in_natives_path() {
+        use super::natives_instance as n;
+        assert_eq!(n("-Djava.library.path=D:/Modding/Minecraft/Obelisk/Instances/Foundation (EXPERIMENTAL)/natives").as_deref(), Some("Foundation (EXPERIMENTAL)"));
+        assert_eq!(n(r"-Djava.library.path=C:\Users\a\AppData\Roaming\PrismLauncher\instances\Odyssey\natives").as_deref(), Some("Odyssey"));
+        assert_eq!(n("-Xmx4G"), None);
+    }
+
     #[test]
     fn cfg_paths_survive_qt() {
         let dir = tempfile::tempdir().unwrap();

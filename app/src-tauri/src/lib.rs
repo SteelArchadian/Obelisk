@@ -1530,13 +1530,9 @@ fn running_java() -> Vec<(String, sysinfo::Pid)> {
         if !name.starts_with("java") {
             continue;
         }
-        let cmd = p.cmd().iter().map(|a| a.to_string_lossy().replace('\\', "/")).collect::<Vec<_>>().join(" ");
-        // Prism passes -Djava.library.path=<data>/instances/<id>/natives.
-        if let Some(i) = cmd.find("/instances/") {
-            let rest = &cmd[i + 11..];
-            if let Some(id) = rest.split('/').next().filter(|_| rest.contains("/natives")) {
-                out.push((id.to_string(), *pid));
-            }
+        // Prism passes -Djava.library.path=<instances folder>/<id>/natives; that folder can be anywhere, in any case.
+        if let Some(id) = p.cmd().iter().find_map(|a| prism::natives_instance(&a.to_string_lossy())) {
+            out.push((id, *pid));
         }
     }
     out
