@@ -1287,7 +1287,13 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
     // Paths an older Obelisk wrote with bare backslashes make Prism find no packs (it then shows its own window).
     let data = prism::data_dir();
     let healed = prism::heal_cfg(&data.join("prismlauncher.cfg")).unwrap_or(false);
-    let _ = prism::heal_cfg(&game_dir.parent().unwrap_or(&game_dir).join("instance.cfg"));
+    let inst_cfg = game_dir.parent().unwrap_or(&game_dir).join("instance.cfg");
+    let _ = prism::heal_cfg(&inst_cfg);
+    if quiet {
+        // Prism pops its console window when a game crashes; Obelisk reports crashes itself (Diagnosis).
+        let off = |k: &'static str, v: &str| (k, Some(v.to_string()));
+        prism::update_cfg(&inst_cfg, &[off("OverrideConsole", "true"), off("ShowConsole", "false"), off("ShowConsoleOnError", "false"), off("AutoCloseConsole", "true")])?;
+    }
     if healed { close_idle_prism().await?; }
     let before = game_windows();
     let click_ms = prism::timeline::now_ms();
@@ -1299,6 +1305,13 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
         use tauri::Emitter;
         let found = watch_launch(&app, &instance_id, quiet, &before);
         let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": found.is_some() }));
+        // A crash report written since Play was clicked: the UI offers its diagnosis.
+        let crashed = |app: &tauri::AppHandle| {
+            if let Some(r) = prism::crash::list(&game_dir).into_iter().filter(|r| r.kind != "log" && r.time_ms as i64 >= click_ms).max_by_key(|r| r.time_ms) {
+                let _ = app.emit("game-crashed", serde_json::json!({ "id": instance_id, "file": r.file }));
+            }
+        };
+        if found.is_none() { crashed(&app); }
         // Then tell the UI when the game closes (normally, crashed or killed).
         if let Some((pid, hwnd)) = found {
             let window_ms = prism::timeline::now_ms();
@@ -1315,6 +1328,7 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
             prism::timeline::record(&game_dir, prism::timeline::Session { source: "obelisk".into(), click_ms, java_ms, window_ms: Some(window_ms),
                 exit_ms: Some(prism::timeline::now_ms()), ..Default::default() });
             let _ = app.emit("game-exited", serde_json::json!({ "id": instance_id }));
+            crashed(&app);
         }
     });
     Ok(java_note)

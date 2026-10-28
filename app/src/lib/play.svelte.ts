@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast } from "./state.svelte";
+import { app, toast } from "./state.svelte";
 import type { Instance } from "./api";
 
 /** Profiles whose game is on its way: Play buttons show "Starting…" until the game window opens. */
@@ -20,8 +20,13 @@ function listenOnce() {
     delete progress[id];
     if (!starting[id]) return;
     delete starting[id];
-    if (!up) toast("The game didn't start. Open Prism Launcher to see what went wrong.");
+    if (!up) toast("The game didn't start.");
   }).catch(() => (listening = false));
+  // Prism's console stays shut on a crash (quiet launch); say so here and point at the diagnosis.
+  listen<{ id: string; file: string }>("game-crashed", (e) => {
+    const name = app.instances.find((i) => i.id === e.payload.id)?.name ?? e.payload.id;
+    toast(`${name} crashed. Open it and look at Diagnosis to see why.`);
+  }).catch(() => {});
   listen<{ id: string }>("game-exited", (e) => { delete running[e.payload.id]; delete starting[e.payload.id]; delete progress[e.payload.id]; }).catch(() => {});
   listen<{ id: string; pct: number | null; text: string }>("launch-progress", (e) => {
     const { id, pct, text } = e.payload;

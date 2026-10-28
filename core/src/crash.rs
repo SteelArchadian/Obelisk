@@ -322,6 +322,21 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
             }
         }
     }
+    // NeoForge 21: "Failure message: Mod aquamirae requires fragmentum 5.3.0 or above" then "Currently, fragmentum is 5.2.0".
+    for (i, l) in lines.iter().enumerate() {
+        let Some(rest) = l.split("Failure message: Mod ").nth(1) else { continue };
+        let Some((by, need)) = rest.split_once(" requires ") else { continue };
+        let id = need.split_whitespace().next().unwrap_or("");
+        let range = need[id.len()..].trim();
+        let now = lines.get(i + 1).and_then(|n| n.trim().strip_prefix(&format!("Currently, {id} is "))).map(str::trim);
+        let what = match now {
+            Some(v) if !v.contains("not installed") => format!("{by} needs {id} {range}, but {v} is installed. Update {id}."),
+            _ => format!("{by} needs {id} {range}, which isn't installed"),
+        };
+        if !missing.contains(&what) {
+            missing.push(what);
+        }
+    }
     if !missing.is_empty() {
         f.push(Finding {
             severity: "critical".into(),
@@ -651,6 +666,16 @@ mod tests {
         let d = analyze("jvm", t, &HashMap::new());
         assert_eq!(d.findings[0].title, "The NVIDIA graphics driver crashed");
         assert_eq!(d.findings[0].action, "driver");
+    }
+
+    #[test]
+    fn neoforge_too_old_dependency() {
+        let t = "Description: Mod loading failures have occurred\n\nnet.neoforged.neoforge.logging.CrashReportExtender$ModLoadingCrashException: Mod loading has failed\n\n-- Mod loading issue for: aquamirae --\nDetails:\n\tFailure message: Mod aquamirae requires fragmentum 5.3.0 or above\n\t\tCurrently, fragmentum is 5.2.0\n";
+        let d = analyze("crash", t, &HashMap::new());
+        let f = &d.findings[0];
+        assert_eq!(f.title, "A mod is missing something it needs");
+        assert_eq!(f.detail, "aquamirae needs fragmentum 5.3.0 or above, but 5.2.0 is installed. Update fragmentum.");
+        assert!(!d.findings.iter().any(|x| x.title.contains("crashed the game")));
     }
 
     #[test]
