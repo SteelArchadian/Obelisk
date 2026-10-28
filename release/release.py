@@ -3,6 +3,9 @@
   python -I release/release.py "what changed"            # next patch version (or the current one if not released yet)
   python -I release/release.py "what changed" --version 0.3.0
 
+First it checks the source for private names, runs the core tests and svelte-check; after the build it scans the
+installer with Windows Defender and commits (unless --no-commit). Any failure stops it with a short reason.
+
 Run from a shell where cargo, npm and the MinGW toolchain are on PATH. The updater signing key is read from
 OBELISK_SIGNING_KEY (a path), default %USERPROFILE%\\.tauri\\obelisk-updater.key; it never goes in the repo.
 
@@ -58,6 +61,40 @@ def next_version():
     return f'{major}.{minor}.{patch + 1}'
 
 
+def private_words():
+    """Names that must never go public (the git identity on this PC, plus OBELISK_PRIVATE_WORDS, comma-separated)."""
+    words = [w.strip() for w in os.environ.get('OBELISK_PRIVATE_WORDS', '').split(',') if w.strip()]
+    name = subprocess.run(['git', 'config', '--global', 'user.name'], capture_output=True, text=True).stdout.strip()
+    return [w for w in words + [name] if w]
+
+
+def checks():
+    """Everything that must pass before a build: no private names in the source, core tests, Svelte check."""
+    words = private_words()
+    for root in (os.path.join(APP, 'src'), os.path.join(TAURI, 'src'), os.path.join(ROOT, 'core', 'src')):
+        for dirpath, _, files in os.walk(root):
+            for name in files:
+                path = os.path.join(dirpath, name)
+                with open(path, encoding='utf-8', errors='replace') as f:
+                    text = f.read().lower()
+                hit = next((w for w in words if w.lower() in text), None)
+                if hit:
+                    sys.exit(f'a private name is in {os.path.relpath(path, ROOT)}; take it out first')
+    tests = subprocess.run(['cargo', 'test', '--lib', '--quiet'], cwd=os.path.join(ROOT, 'core'), capture_output=True, text=True)
+    if tests.returncode != 0:
+        sys.exit(f'core tests failed:\n{(tests.stdout + tests.stderr)[-1500:]}')
+    npx = shutil.which('npx') or 'npx'
+    svelte = subprocess.run([npx, 'svelte-check', '--threshold', 'error', '--output', 'machine'], cwd=APP, capture_output=True, text=True)
+    if svelte.returncode != 0:
+        sys.exit(f'svelte-check failed:\n{svelte.stdout[-1500:]}')
+
+
+def commit(version, notes):
+    subprocess.run(['git', 'add', '-A'], cwd=ROOT, check=True)
+    subprocess.run(['git', 'commit', '-q', '-m', f'{version}: {notes}'], cwd=ROOT, check=True)
+    return subprocess.run(['git', 'log', '-1', '--format=%h'], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     args = sys.argv[1:]
@@ -66,7 +103,9 @@ def main():
         i = args.index('--version')
         version = args[i + 1]
         del args[i:i + 2]
-    if not args or not args[0].strip():
+    flags = [a for a in args if a.startswith('--')]
+    args = [a for a in args if not a.startswith('--')] + flags
+    if not args or args[0].startswith('--') or not args[0].strip():
         sys.exit('give the release notes: release.py "what changed"')
     notes = args[0].strip()
     version = version or next_version()
@@ -76,6 +115,7 @@ def main():
     if os.path.exists(out):
         sys.exit(f'release/{version} already exists')
 
+    checks()
     key = os.environ.get('OBELISK_SIGNING_KEY') or os.path.join(os.path.expanduser('~'), '.tauri', 'obelisk-updater.key')
     if not os.path.isfile(key):
         sys.exit(f'no signing key at {key}')
@@ -120,7 +160,8 @@ def main():
         f.write('\n')
     with open(os.path.join(out, 'notes.md'), 'w', encoding='utf-8') as f:
         f.write(f'# Obelisk {version}\n\n{notes}\n')
-    print(f'release/{version} ready: tag v{version}, assets {setup}, {setup}.sig, latest.json')
+    head = commit(version, notes) if '--no-commit' not in args else '(not committed)'
+    print(f'release/{version} ready and Defender-clean: commit {head}, tag v{version}, assets {setup}, {setup}.sig, latest.json')
 
 
 if __name__ == '__main__':
