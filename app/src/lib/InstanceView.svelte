@@ -69,6 +69,7 @@
       failed = String(e);
     }
     await load(id);
+    refreshInstalled();
     await checkDupes(id);
     error = failed;
     dupeBusy = false;
@@ -447,6 +448,7 @@
     }
     selected = new Set(selected);
     trash = await invoke<TrashEntry[]>("list_trash", { instanceId: current.id });
+    refreshInstalled(); // mod pages stop saying "Installed"
     quietRecheck(current.id);
     toast(`Moved to this profile's trash. Restore it within ${trashLabel(settings.trashHours)}.`);
   }
@@ -464,7 +466,7 @@
     if (ok) toast(`Restored ${ok} item${ok === 1 ? "" : "s"}.`);
     selected = new Set();
     await load(current.id);
-    if (ok) quietRecheck(current.id);
+    if (ok) { refreshInstalled(); quietRecheck(current.id); }
   }
 
   async function removeIds(ids: string[]) {

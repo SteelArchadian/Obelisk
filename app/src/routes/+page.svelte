@@ -24,7 +24,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { api, initials, type Instance } from "$lib/api";
   import { app, openBrowse, toast, closeOverlays, type Page, type Overlay } from "$lib/state.svelte";
-  import { syncInstances } from "$lib/install";
+  import { refreshInstalled, syncInstances } from "$lib/install";
   import { startAssistantBridge } from "$lib/assistant.svelte";
   import Library from "$lib/Library.svelte";
   import InstanceView from "$lib/InstanceView.svelte";
@@ -264,7 +264,7 @@
 </script>
 
 <!-- Re-read Prism's instances when the window regains focus, so packs imported or changed in Prism show up. -->
-<svelte:window onresize={() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => size++, 150); }} onmouseup={onMouseUp} onkeydown={onKey} oncontextmenu={onContextMenu} onclick={() => (accountMenu = false)} onfocus={() => { syncInstances(); loadAccounts(); refreshRunning(); checkSelfUpdate(); }} />
+<svelte:window onresize={() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => size++, 150); }} onmouseup={onMouseUp} onkeydown={onKey} oncontextmenu={onContextMenu} onclick={() => (accountMenu = false)} onfocus={() => { syncInstances(); refreshInstalled(); loadAccounts(); refreshRunning(); checkSelfUpdate(); }} />
 <svelte:document onmousedown={(e) => (e.button === 3 || e.button === 4) && e.preventDefault()} />
 
 <canvas class="scene" bind:this={sceneEl} aria-hidden="true"></canvas>
