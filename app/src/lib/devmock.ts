@@ -40,6 +40,8 @@ export function installDevMock() {
   mockWindows("main");
   mockIPC((cmd, args: any) => {
     switch (cmd) {
+      case "get_favorites": return JSON.parse(sessionStorage.getItem("mock.favorites") ?? "{}");
+      case "set_favorites": sessionStorage.setItem("mock.favorites", JSON.stringify(args.favorites)); return null;
       case "get_settings": return { welcomed: true, plugins: { lightning: true }, theme: new URLSearchParams(location.search).get("theme") ?? undefined };
       case "list_instances": return [{ id: "Foundation", name: "Foundation", iconKey: "", minecraft: "1.21.1", loader: "NeoForge", loaderVersion: "21.1.252", secondsPlayed: 612000, lastLaunchMs: now }];
       case "list_content": return args.kind === "mods" ? mods : [];
@@ -71,7 +73,7 @@ export function installDevMock() {
       case "share_overview": return { Foundation: 2 };
       case "running_games": return [];
       case "share_status": return {
-        shared: true, me: "me1",
+        shared: true, me: "me1", owner: "me1",
         share: { packId: "p", name: "Foundation", autoApply: false, members: [
           { id: "me1", name: "You", lastSeenMs: now }, { id: "f1", name: "Alex", lastSeenMs: now - 60_000 }, { id: "f2", name: "Sam", lastSeenMs: now - 2 * 86_400_000 }] },
         local: [{ kind: "changed", area: "configs", path: "config/sodium-options.json", label: "sodium-options.json" }],
@@ -81,6 +83,17 @@ export function installDevMock() {
             { kind: "changed", area: "configs", path: "config/farmersdelight-common.toml", label: "farmersdelight-common.toml" }] },
           { id: "c2", author: "f2", authorName: "Sam", atMs: now - 1_800_000, label: "", changes: [{ kind: "removed", area: "mods", path: "mods/x.jar", label: "Xaero's Minimap 25.1" }] },
         ] };
+      case "share_info": {
+        const w = (id: string, t: string, type = "mod") => ({ hit: { project_id: id, slug: id, title: t, description: "", author: "Someone", icon_url: null, downloads: 1, follows: 0, date_modified: "", date_created: "", categories: [], versions: [], client_side: "", server_side: "", project_type: type }, addedMs: now - 3_600_000 });
+        const mine = JSON.parse(sessionStorage.getItem("mock.wishes") ?? "null") ?? [w("AANobbMI", "Sodium")];
+        return { shared: true, me: "me1", owner: "me1", members: [{ id: "me1", name: "You", lastSeenMs: now }, { id: "f1", name: "Alex", lastSeenMs: now - 60_000 }, { id: "f2", name: "Sam", lastSeenMs: now - 2 * 86_400_000 }],
+          wishes: { me1: { name: "You", updatedMs: now, items: mine }, f1: { name: "Alex", updatedMs: now, items: [w("AANobbMI", "Sodium"), w("create", "Create"), w("fa", "Fresh Animations", "resourcepack")] }, f2: { name: "Sam", updatedMs: now, items: [w("iris", "Iris Shaders")] } } };
+      }
+      case "share_set_wishes": sessionStorage.setItem("mock.wishes", JSON.stringify(args.items)); return null;
+      case "share_remove": case "share_dismiss_ended": return null;
+      case "share_history": return [
+        { id: "c3", author: "f1", authorName: "Alex", atMs: now - 3_600_000, label: "Added Create", changes: [{ kind: "added", area: "mods", path: "mods/create.jar", label: "Create 6.0" }] },
+        { id: "c0", author: "me1", authorName: "You", atMs: now - 9 * 86_400_000, label: "Shared the pack", changes: [] }];
       case "share_start": return "obelisk1.eyJwIjoiZGVtbyIsInMiOiJ4IiwibiI6IkZvdW5kYXRpb24iLCJhIjp7ImlkIjoiYWJjIn19";
       case "share_publish": return true;
       case "share_sync": return 0;

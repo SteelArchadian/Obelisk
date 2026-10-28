@@ -453,6 +453,10 @@ fn iroh_key() -> [u8; 32] {
 struct ShareStatus {
     shared: bool,
     me: String,
+    /// The pack's owner (who can remove people).
+    owner: String,
+    /// Set when the owner removed us: who and when (the pack's page says so until dismissed).
+    ended: Option<prism::share::Ended>,
     share: Option<prism::share::Share>,
     incoming: Vec<prism::share::Changeset>,
     local: Vec<prism::history::Change>,
@@ -462,14 +466,15 @@ struct ShareStatus {
 async fn share_status(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String) -> Result<ShareStatus, String> {
     let game = game(&instance_id)?;
     let Some(share) = prism::share::get(&game) else {
-        return Ok(ShareStatus { shared: false, me: String::new(), share: None, incoming: vec![], local: vec![] });
+        return Ok(ShareStatus { shared: false, me: String::new(), owner: String::new(), ended: prism::share::ended(&game), share: None, incoming: vec![], local: vec![] });
     };
     let me = share_net(&app, &net).await?.id();
     blocking(move || {
         let mut incoming = prism::share::incoming(&game);
         // Don't ship whole baselines to the UI: the changelog is what it shows.
         for c in &mut incoming { c.entries.clear(); }
-        Ok(ShareStatus { shared: true, me, local: prism::share::local_changes(&game)?, incoming, share: Some(share) })
+        let owner = prism::share::owner(&game, &share);
+        Ok(ShareStatus { shared: true, me, owner, ended: None, local: prism::share::local_changes(&game)?, incoming, share: Some(share) })
     }).await
 }
 
@@ -592,6 +597,44 @@ async fn share_set_auto(instance_id: String, on: bool) -> Result<(), String> {
     let mut s = prism::share::get(&game).ok_or("not shared")?;
     s.auto_apply = on;
     prism::share::save(&game, &s)
+}
+
+/// The owner removes someone from a collaborative pack.
+#[tauri::command]
+async fn share_remove(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String, member: String) -> Result<(), String> {
+    let game = game(&instance_id)?;
+    share_net(&app, &net).await?.remove(&game, &member).map(|_| ())
+}
+
+/// The light view of a pack's collaboration for its page: who's in it, who owns it, everyone's wish lists,
+/// or the note that the owner removed us. (share_status also works out local changes, which takes longer.)
+#[tauri::command]
+async fn share_info(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String) -> Result<serde_json::Value, String> {
+    let game = game(&instance_id)?;
+    let Some(s) = prism::share::get(&game) else {
+        return Ok(serde_json::json!({ "shared": false, "ended": prism::share::ended(&game) }));
+    };
+    let me = share_net(&app, &net).await?.id();
+    Ok(serde_json::json!({ "shared": true, "me": me, "owner": prism::share::owner(&game, &s), "members": s.members, "wishes": prism::share::wishes(&game) }))
+}
+
+/// Replace my own wish list for a collaborative pack.
+#[tauri::command]
+async fn share_set_wishes(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String, items: Vec<serde_json::Value>) -> Result<(), String> {
+    let game = game(&instance_id)?;
+    share_net(&app, &net).await?.set_wishes(&game, items)
+}
+
+/// The pack's whole change log, newest first: who changed what.
+#[tauri::command]
+async fn share_history(instance_id: String) -> Result<Vec<prism::share::Changeset>, String> {
+    let game = game(&instance_id)?;
+    blocking(move || Ok(prism::share::history_log(&game))).await
+}
+
+#[tauri::command]
+async fn share_dismiss_ended(instance_id: String) -> Result<(), String> {
+    prism::share::dismiss_ended(&game(&instance_id)?)
 }
 
 #[tauri::command]
@@ -765,6 +808,23 @@ async fn set_settings(app: tauri::AppHandle, settings: serde_json::Value) -> Res
     let p = settings_path(&app)?;
     std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(p, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())
+}
+
+/// Saved-for-later projects (the heart on a project page), kept apart from settings.
+#[tauri::command]
+async fn get_favorites() -> serde_json::Value {
+    std::fs::read_to_string(datadir::root().join("favorites.json")).ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+#[tauri::command]
+async fn set_favorites(favorites: serde_json::Value) -> Result<(), String> {
+    let p = datadir::root().join("favorites.json");
+    std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&favorites).unwrap()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
 // ---- CurseForge API key: kept in Windows Credential Manager, never sent back to the UI ----
@@ -1889,9 +1949,9 @@ pub fn run() {
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
-            delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings,
+            delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_join, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

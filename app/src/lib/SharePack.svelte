@@ -1,7 +1,8 @@
 <script lang="ts">
   // Collaborate: play a pack with friends, peer to peer: a short code to invite them (pasted into Import), who's in,
   // my changes to send, and their changes waiting for review. Applying takes a safety backup first, so it can
-  // always be undone. Unticking "Collaboration on" stops it.
+  // always be undone. Unticking "Collaboration on" stops it. The owner (who made it collaborative) can remove people;
+  // History shows who changed what.
   import { invoke } from "@tauri-apps/api/core";
   import { app, toast } from "./state.svelte";
   import { syncInstances } from "./install";
@@ -10,7 +11,7 @@
   type Change = { kind: "added" | "removed" | "changed"; area: string; path: string; label: string };
   type Member = { id: string; name: string; lastSeenMs: number };
   type Changeset = { id: string; author: string; authorName: string; atMs: number; label: string; changes: Change[] };
-  type Status = { shared: boolean; me: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[] };
+  type Status = { shared: boolean; me: string; owner: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[] };
 
   let { inst }: { inst: Instance } = $props();
   let st = $state<Status | null>(null);
@@ -24,6 +25,10 @@
   let busy = $state("");
   let open = $state<string | null>(null);
   let confirmStop = $state(false);
+  let confirmRemove = $state<Member | null>(null);
+  let history = $state<Changeset[] | null>(null);
+  let historyOpen = $state(false);
+  const isOwner = $derived(!!st && st.owner === st.me);
 
   const load = () => invoke<Status>("share_status", { instanceId: inst.id }).then((s) => (st = s)).catch((e) => toast(String(e)));
   $effect(() => { void inst.id; load(); });
@@ -68,6 +73,17 @@
   });
   const skip = (id: string) => run("skip", async () => { await invoke("share_skip", { instanceId: inst.id, id }); await load(); window.dispatchEvent(new Event("share-changed")); });
   const setAuto = (on: boolean) => run("auto", async () => { await invoke("share_set_auto", { instanceId: inst.id, on }); await load(); });
+  const remove = (m: Member) => run("remove", async () => {
+    await invoke("share_remove", { instanceId: inst.id, member: m.id });
+    confirmRemove = null;
+    toast(`Removed ${m.name || "them"}. They'll be told next time their Obelisk connects, and the pack has a new key, so old invite codes no longer work.`);
+    await load();
+    window.dispatchEvent(new Event("share-changed"));
+  });
+  const showHistory = () => run("history", async () => {
+    historyOpen = !historyOpen;
+    if (historyOpen) history = await invoke<Changeset[]>("share_history", { instanceId: inst.id });
+  });
   const stop = () => run("stop", async () => { await invoke("share_stop", { instanceId: inst.id }); confirmStop = false; code = ""; await load(); await syncInstances(); });
 
   const VERB = { added: "Added", removed: "Removed", changed: "Changed" };
@@ -113,9 +129,18 @@
         <div class="row"><strong>Members</strong><div class="spacer"></div><button class="ghost" disabled={!!busy} onclick={sync}>{busy === "sync" ? "Checking…" : "Check for changes now"}</button></div>
         <div class="members">
           {#each st.share.members as m (m.id)}
-            <span class="member" title={m.id}><i class:on={m.id === st.me || online(m)}></i>{m.name || "Friend"}{#if m.id === st.me}&nbsp;(you){:else}<small> · seen {when(m.lastSeenMs)}</small>{/if}</span>
+            <span class="member" title={m.id}><i class:on={m.id === st.me || online(m)}></i>{m.name || "Friend"}{#if m.id === st.owner}&nbsp;<small>(owner)</small>{/if}{#if m.id === st.me}&nbsp;(you){:else}<small> · seen {when(m.lastSeenMs)}</small>{/if}
+              {#if isOwner && m.id !== st.me}<button class="rm" title="Remove {m.name || 'them'} from this pack" aria-label="Remove {m.name || 'them'}" onclick={() => (confirmRemove = m)}>✕</button>{/if}</span>
           {/each}
         </div>
+        {#if confirmRemove}
+          <div class="row confirm">
+            <span class="small">Remove <b>{confirmRemove.name || "this friend"}</b> from {inst.name}? Their copy stops getting changes and turns into a normal pack, and they'll see that you removed them. Invite codes you gave out before stop working.</span>
+            <div class="spacer"></div>
+            <button class="ghost" onclick={() => (confirmRemove = null)}>Cancel</button>
+            <button class="primary danger" disabled={!!busy} onclick={() => remove(confirmRemove!)}>{busy === "remove" ? "Removing…" : "Remove"}</button>
+          </div>
+        {/if}
       </section>
 
       <section>
@@ -161,6 +186,27 @@
         <label class="row small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /> Apply friends' changes automatically (still backed up first)</label>
       </section>
 
+      <section>
+        <div class="row"><strong>History</strong><span class="muted small">Who changed what, newest first</span><div class="spacer"></div>
+          <button class="ghost" disabled={busy === "history"} onclick={showHistory}>{historyOpen ? "Hide" : "Show"}</button></div>
+        {#if historyOpen && history}
+          <div class="incoming">
+            {#each history as c (c.id)}
+              <div class="cs">
+                <button class="head" onclick={() => (open = open === "h" + c.id ? null : "h" + c.id)}>
+                  <span class="caret">{open === "h" + c.id ? "▾" : "▸"}</span>
+                  <strong>{c.author === st.me ? "You" : c.authorName}</strong> <span class="muted small">{when(c.atMs)}</span>
+                  <span class="what">{c.label || (c.changes.length ? `${c.changes.length} change${c.changes.length === 1 ? "" : "s"}` : "Shared the pack")}</span>
+                </button>
+                {#if open === "h" + c.id}
+                  <ul class="changes body">{#each c.changes as ch (ch.path)}<li><span class="k {ch.kind}">{VERB[ch.kind]}</span> {ch.label}</li>{:else}<li class="muted">The full pack as it was shared.</li>{/each}</ul>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
       <div class="actions">
         {#if confirmStop}
           <span class="muted small">Turn collaboration off? Your pack stays as it is; friends keep their copies.</span>
@@ -194,6 +240,9 @@
   .copy-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; font-weight: 600; flex: none; }
   .copy-btn.done { background: var(--ok, #2e9d5b); }
   .members { display: flex; flex-wrap: wrap; gap: 8px; }
+  .rm { margin-left: 6px; padding: 0 4px; border: 0; background: none; color: var(--muted); font-size: 12px; }
+  .rm:hover { color: var(--err-text); }
+  .confirm { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--panel-2); }
   .member { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
   .member i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .member i.on { background: var(--mr); }

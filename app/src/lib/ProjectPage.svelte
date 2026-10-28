@@ -8,6 +8,8 @@
   import SourceBadges from "./SourceBadges.svelte";
   import { renderBody, wireYouTube } from "./richtext";
   import InstallButton from "./InstallButton.svelte";
+  import { isFavorite, toggleFavorite } from "./favstore.svelte";
+  import { collab, isWished, loadCollab, toggleWish } from "./collab.svelte";
   import TargetChip from "./TargetChip.svelte";
   import Relations from "./Relations.svelte";
   import { settings } from "./settings.svelte";
@@ -40,6 +42,10 @@
   let isCf = $derived(hit.project_id.startsWith("cf:"));
   // The same project on the other site, found by a file both sites host (so the page shows both however it was opened).
   let twin = $state<{ mr: string | null; cf: number | null } | null>(null);
+  // The open pack, when it's collaborative: the star adds to my wish list for it.
+  let wishPack = $derived(app.current && app.current.id in app.shareIncoming && collab[app.current.id]?.me ? app.current : null);
+  $effect(() => { const id = app.current?.id; if (id && id in app.shareIncoming && !collab[id]) loadCollab(id); });
+
   $effect(() => {
     const id = hit.project_id;
     twin = null;
@@ -209,9 +215,17 @@
         <SourceBadges hit={siteHit} big />
         <div class="spacer"></div>
         {#if mr.account && mrId}
-          <button class="follow" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
-            aria-pressed={mr.follows.has(mrId!)} onclick={() => toggleFollow(mrId!)}>{mr.follows.has(mrId!) ? "♥" : "♡"}</button>
+          <button class="mr-follow" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
+            aria-pressed={mr.follows.has(mrId!)} onclick={() => toggleFollow(mrId!)}>{mr.follows.has(mrId!) ? "✓ Following" : "+ Follow"}</button>
         {/if}
+        {#if wishPack}
+          <button class="follow wish" class:on={isWished(wishPack.id, hit.project_id)} aria-pressed={isWished(wishPack.id, hit.project_id)}
+            title={isWished(wishPack.id, hit.project_id) ? `On your wish list for ${wishPack.name} (click to take it off)` : `Wish-list it for ${wishPack.name}, so everyone in the pack can talk it over`}
+            onclick={() => toggleWish(wishPack!.id, hit)}>{isWished(wishPack.id, hit.project_id) ? "★" : "☆"}</button>
+        {/if}
+        <button class="follow fav" class:on={isFavorite(hit.project_id)} aria-pressed={isFavorite(hit.project_id)}
+          title={isFavorite(hit.project_id) ? "In your favorites (click to remove)" : "Save to your favorites, to decide on later from any pack's Favorites tab"}
+          onclick={() => toggleFavorite(hit)}>{isFavorite(hit.project_id) ? "♥" : "♡"}</button>
         <InstallButton {hit} big />
       </div>
       <p class="desc">{hit.description}</p>
@@ -374,6 +388,10 @@
   .follow { width: 40px; height: 40px; flex: none; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 20px; line-height: 1; }
   .follow:hover { color: var(--text); }
   .follow.on { color: #ff5c7a; border-color: color-mix(in srgb, #ff5c7a 50%, var(--line)); }
+  .follow.wish.on { color: #f5c542; border-color: color-mix(in srgb, #f5c542 50%, var(--line)); }
+  .mr-follow { height: 40px; flex: none; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-weight: 600; }
+  .mr-follow:hover { color: var(--text); }
+  .mr-follow.on { color: var(--accent); }
   .tabs > button.on { color: var(--text); border-bottom-color: var(--accent); }
   .links { margin-left: auto; display: flex; gap: 12px; }
   .link { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 2px; }

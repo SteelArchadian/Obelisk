@@ -44,6 +44,7 @@
   import WhatsNew from "$lib/WhatsNew.svelte";
   import WorkBar from "$lib/WorkBar.svelte";
   import { loadSettings, settings } from "$lib/settings.svelte";
+  import { loadFavorites } from "$lib/favstore.svelte";
   import { refreshRunning } from "$lib/play.svelte";
 
   // One-click updates of Obelisk itself, from its GitHub releases (Obelisk also checks every 30 minutes by itself).
@@ -116,6 +117,7 @@
 
   onMount(async () => {
     await loadSettings();
+    loadFavorites();
     startAssistantBridge();
     // Started from inside another app's sandbox (e.g. the Claude app): games would load slowly and see stale files.
     if (await invoke<boolean>("sandboxed").catch(() => false))

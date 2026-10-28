@@ -36,6 +36,79 @@ pub struct Share {
     #[serde(default)]
     pub auto_apply: bool,
     pub created_ms: u64,
+    /// Who made the pack collaborative: the only one who can remove people. Older shares fill it in from
+    /// the baseline's author (see `owner`).
+    #[serde(default)]
+    pub owner: String,
+    /// People the owner removed, each with the owner's signature. They're refused, and told so.
+    #[serde(default)]
+    pub removed: Vec<Removal>,
+    /// Bumped with each removal, when the pack moves to a new secret (the removed person knows the old one).
+    #[serde(default)]
+    pub epoch: u32,
+    /// Earlier secrets, so members who haven't heard about a removal yet can still connect and catch up.
+    #[serde(default)]
+    pub old_secrets: Vec<String>,
+}
+
+/// The owner's signed note that someone was removed. It also commits to the pack's next secret (by hash), so
+/// a member only switches to a new secret the owner actually chose.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Removal {
+    pub pack_id: String,
+    pub id: String,
+    pub name: String,
+    pub by: String,
+    pub by_name: String,
+    pub at_ms: u64,
+    pub epoch: u32,
+    pub secret_hash: String,
+    pub sig: String,
+}
+
+impl Removal {
+    fn message(&self) -> Vec<u8> {
+        format!("obelisk-remove-v1|{}|{}|{}|{}|{}", self.pack_id, self.id, self.epoch, self.secret_hash, self.at_ms).into_bytes()
+    }
+
+    /// Signed by `owner` (an endpoint id) for this pack.
+    pub fn valid(&self, pack_id: &str, owner: &str) -> bool {
+        let (Ok(key), Ok(sig)) = (owner.parse::<iroh::PublicKey>(), hex_bytes::<64>(&self.sig)) else { return false };
+        self.pack_id == pack_id && self.by == owner && key.verify(&self.message(), &iroh::Signature::from_bytes(&sig)).is_ok()
+    }
+}
+
+fn hex_bytes<const N: usize>(s: &str) -> Result<[u8; N], ()> {
+    if s.len() != N * 2 { return Err(()) }
+    let mut out = [0u8; N];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(s.get(i * 2..i * 2 + 2).ok_or(())?, 16).map_err(|_| ())?;
+    }
+    Ok(out)
+}
+
+pub fn secret_hash(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(format!("obelisk-secret-v1|{secret}").as_bytes()))
+}
+
+/// One member's wish list for the pack: projects they'd like added, to talk over first.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WishList {
+    pub name: String,
+    pub updated_ms: u64,
+    /// `{ hit, addedMs }` as the app stores them; the core only passes them along.
+    pub items: Vec<serde_json::Value>,
+}
+
+/// Shown on a pack after its owner removed us (the pack itself stays as it was).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Ended {
+    pub by_name: String,
+    pub at_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -131,7 +204,8 @@ pub fn start(game: &Path, name: &str, pack_id: &str, secret: &str, me: &Member) 
             history::store(game, &p, &f.hash)?;
         }
     }
-    let share = Share { pack_id: pack_id.into(), name: name.into(), secret: secret.into(), members: vec![me.clone()], auto_apply: false, created_ms: history::now_ms() };
+    let share = Share { pack_id: pack_id.into(), name: name.into(), secret: secret.into(), members: vec![me.clone()], auto_apply: false,
+        created_ms: history::now_ms(), owner: me.id.clone(), removed: vec![], epoch: 0, old_secrets: vec![] };
     let cs = Changeset {
         id: new_id(&me.id), author: me.id.clone(), author_name: me.name.clone(), at_ms: history::now_ms(), label: "Shared the pack".into(),
         entries: files.iter().map(|f| Entry { path: f.path.clone(), hash: Some(f.hash.clone()), size: f.size }).collect(),
@@ -360,7 +434,7 @@ pub fn skip(game: &Path, id: &str) -> Result<(), String> {
 /// Remember who's in the pack (merges what a friend told us).
 pub fn merge_members(game: &Path, seen: &[Member]) -> Result<(), String> {
     let Some(mut s) = get(game) else { return Ok(()) };
-    for m in seen {
+    for m in seen.iter().filter(|m| !s.removed.iter().any(|r| r.id == m.id)) {
         match s.members.iter_mut().find(|x| x.id == m.id) {
             Some(x) => {
                 if !m.name.is_empty() { x.name = m.name.clone(); }
@@ -455,6 +529,157 @@ pub fn create_instance(instances: &Path, share: &Share, cfg: &str, pack_json: &s
     Ok((id, game))
 }
 
+/// The pack's owner: the stored one, or for shares made before owners were kept, the baseline's author.
+pub fn owner(game: &Path, s: &Share) -> String {
+    if !s.owner.is_empty() {
+        return s.owner.clone();
+    }
+    log_ids(game).first().and_then(|id| read_changeset(game, id)).map(|c| c.author).unwrap_or_default()
+}
+
+/// Every secret a member may still be using, newest first.
+pub fn secrets(s: &Share) -> Vec<String> {
+    std::iter::once(s.secret.clone()).chain(s.old_secrets.iter().rev().cloned()).collect()
+}
+
+pub fn is_removed(s: &Share, id: &str) -> bool {
+    s.removed.iter().any(|r| r.id == id)
+}
+
+/// The owner removes someone: they're refused from now on and told so, and the pack moves to a new secret that
+/// only the remaining members get. Returns the removal (already saved).
+pub fn remove_member(game: &Path, key: &iroh::SecretKey, my_name: &str, id: &str, new_secret: &str) -> Result<Removal, String> {
+    let mut s = get(game).ok_or("this pack isn't collaborative")?;
+    let me = key.public().to_string();
+    if owner(game, &s) != me {
+        return Err("Only the person who made the pack collaborative can remove people.".into());
+    }
+    if id == me {
+        return Err("You can't remove yourself. Turn collaboration off instead.".into());
+    }
+    let name = s.members.iter().find(|m| m.id == id).map(|m| m.name.clone()).ok_or("They aren't in this pack.")?;
+    let mut r = Removal {
+        pack_id: s.pack_id.clone(), id: id.into(), name, by: me.clone(), by_name: my_name.into(), at_ms: history::now_ms(),
+        epoch: s.epoch + 1, secret_hash: secret_hash(new_secret), sig: String::new(),
+    };
+    r.sig = key.sign(&r.message()).to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    s.owner = me;
+    s.old_secrets.push(std::mem::replace(&mut s.secret, new_secret.into()));
+    s.epoch = r.epoch;
+    s.members.retain(|m| m.id != id);
+    s.removed.push(r.clone());
+    save(game, &s)?;
+    drop_wishes(game, id)?;
+    Ok(r)
+}
+
+/// Take in removals a member passed along (only ones the owner signed). Returns true when one of them is us,
+/// in which case the pack has stopped being collaborative here and shows who removed us.
+pub fn merge_removals(game: &Path, me: &str, rs: &[Removal]) -> Result<bool, String> {
+    let Some(mut s) = get(game) else { return Ok(false) };
+    let owner = owner(game, &s);
+    let mut changed = false;
+    for r in rs.iter().filter(|r| r.valid(&s.pack_id, &owner)) {
+        if r.id == me {
+            end(game, r)?;
+            return Ok(true);
+        }
+        if !is_removed(&s, &r.id) {
+            s.members.retain(|m| m.id != r.id);
+            s.removed.push(r.clone());
+            drop_wishes(game, &r.id)?;
+            changed = true;
+        }
+    }
+    if s.owner.is_empty() && !owner.is_empty() {
+        s.owner = owner;
+        changed = true;
+    }
+    if changed { save(game, &s)?; }
+    Ok(false)
+}
+
+/// Switch to a newer secret a member handed us, if the owner's newest signed removal names it.
+pub fn adopt_secret(game: &Path, secret: &str) -> Result<bool, String> {
+    let Some(mut s) = get(game) else { return Ok(false) };
+    let owner = owner(game, &s);
+    let Some(r) = s.removed.iter().filter(|r| r.valid(&s.pack_id, &owner)).max_by_key(|r| r.epoch) else { return Ok(false) };
+    if r.epoch <= s.epoch || r.secret_hash != secret_hash(secret) {
+        return Ok(false);
+    }
+    s.epoch = r.epoch;
+    s.old_secrets.push(std::mem::replace(&mut s.secret, secret.into()));
+    save(game, &s)?;
+    Ok(true)
+}
+
+fn ended_path(game: &Path) -> PathBuf {
+    game.join(".obelisk").join("share-ended.json")
+}
+
+/// We were removed: stop collaborating (files stay as they are) and leave a note for the pack's page.
+pub fn end(game: &Path, r: &Removal) -> Result<(), String> {
+    write_json(&ended_path(game), &Ended { by_name: r.by_name.clone(), at_ms: r.at_ms })?;
+    stop(game)
+}
+
+pub fn ended(game: &Path) -> Option<Ended> {
+    read_json(&ended_path(game))
+}
+
+pub fn dismiss_ended(game: &Path) -> Result<(), String> {
+    match fs::remove_file(ended_path(game)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// Everyone's wish lists for this pack, by member id.
+pub fn wishes(game: &Path) -> HashMap<String, WishList> {
+    read_json(&dir(game).join("wishes.json")).unwrap_or_default()
+}
+
+/// Replace my own wish list.
+pub fn set_wishes(game: &Path, me: &Member, items: Vec<serde_json::Value>) -> Result<(), String> {
+    let mut all = wishes(game);
+    all.insert(me.id.clone(), WishList { name: me.name.clone(), updated_ms: history::now_ms(), items });
+    write_json(&dir(game).join("wishes.json"), &all)
+}
+
+/// Take in the lists a member passed along: each person's newest list wins (only they change it). Lists of
+/// people who aren't (or are no longer) members are ignored.
+pub fn merge_wishes(game: &Path, theirs: HashMap<String, WishList>) -> Result<(), String> {
+    let Some(s) = get(game) else { return Ok(()) };
+    let mut all = wishes(game);
+    let mut changed = false;
+    for (id, w) in theirs {
+        if is_removed(&s, &id) || !s.members.iter().any(|m| m.id == id) {
+            continue;
+        }
+        if all.get(&id).is_none_or(|mine| w.updated_ms > mine.updated_ms) {
+            all.insert(id, w);
+            changed = true;
+        }
+    }
+    if changed { write_json(&dir(game).join("wishes.json"), &all)?; }
+    Ok(())
+}
+
+fn drop_wishes(game: &Path, id: &str) -> Result<(), String> {
+    let mut all = wishes(game);
+    if all.remove(id).is_some() {
+        write_json(&dir(game).join("wishes.json"), &all)?;
+    }
+    Ok(())
+}
+
+/// The whole change log, newest first, without file lists: who changed what, and when.
+pub fn history_log(game: &Path) -> Vec<Changeset> {
+    let mut v: Vec<Changeset> = log_ids(game).iter().rev().filter_map(|id| read_changeset(game, id)).collect();
+    for c in &mut v { c.entries.clear(); }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +769,52 @@ mod tests {
         assert_eq!(parse_invite(&invite_code(&inv)).unwrap(), inv);
         assert!(parse_invite("hello").is_err());
         assert_ne!(proof("s", "p", "a", "b"), proof("s", "p", "b", "a"));
+    }
+
+    #[test]
+    fn owner_removes_a_member_and_the_rest_rekey() {
+        let d = tempfile::tempdir().unwrap();
+        let owner_key = iroh::SecretKey::from_bytes(&[1; 32]);
+        let (o, m, x) = (owner_key.public().to_string(), iroh::SecretKey::from_bytes(&[2; 32]).public().to_string(), iroh::SecretKey::from_bytes(&[3; 32]).public().to_string());
+        let game = |n: &str| { let g = d.path().join(n).join("minecraft"); fs::create_dir_all(g.join("mods")).unwrap(); g };
+        let (go, gm, gx) = (game("O"), game("M"), game("X"));
+        let share = start(&go, "Pack", "p1", "old", &me(&o, "Olive")).unwrap();
+        for (g, id) in [(&gm, &m), (&gx, &x)] {
+            let mut s = share.clone();
+            s.owner = String::new(); // as an older share would have it: worked out from the baseline
+            s.members.push(me(id, ""));
+            save(g, &s).unwrap();
+            transfer(&go, g);
+        }
+        merge_members(&go, &[me(&m, "Mia"), me(&x, "Xan")]).unwrap();
+        set_wishes(&gx, &me(&x, "Xan"), vec![serde_json::json!({ "hit": { "project_id": "AANobbMI" } })]).unwrap();
+        merge_wishes(&go, wishes(&gx)).unwrap();
+        assert_eq!(wishes(&go).len(), 1);
+
+        // Only the owner can remove, and a forged removal is ignored.
+        assert!(remove_member(&gm, &iroh::SecretKey::from_bytes(&[2; 32]), "Mia", &x, "new").is_err());
+        let r = remove_member(&go, &owner_key, "Olive", &x, "new").unwrap();
+        let s = get(&go).unwrap();
+        assert_eq!((s.secret.as_str(), s.epoch), ("new", 1));
+        assert!(!s.members.iter().any(|mm| mm.id == x) && wishes(&go).is_empty());
+        merge_members(&go, &[me(&x, "Xan")]).unwrap();
+        assert!(!get(&go).unwrap().members.iter().any(|mm| mm.id == x), "a removed member isn't added back");
+        let mut forged = r.clone();
+        forged.id = o.clone();
+        assert!(!merge_removals(&gm, &m, &[forged]).unwrap());
+
+        // A member hears about it, and takes the new secret only when it's the one the owner signed for.
+        assert!(!merge_removals(&gm, &m, std::slice::from_ref(&r)).unwrap());
+        assert!(!adopt_secret(&gm, "made-up").unwrap());
+        assert!(adopt_secret(&gm, "new").unwrap());
+        let sm = get(&gm).unwrap();
+        assert_eq!((sm.secret.as_str(), sm.old_secrets.clone(), sm.owner.clone()), ("new", vec!["old".to_string()], o.clone()));
+
+        // The removed one stops collaborating and is told who removed them.
+        assert!(merge_removals(&gx, &x, &[r]).unwrap());
+        assert!(get(&gx).is_none());
+        assert_eq!(ended(&gx).unwrap().by_name, "Olive");
+        dismiss_ended(&gx).unwrap();
+        assert!(ended(&gx).is_none());
     }
 }

@@ -8,7 +8,7 @@
 
 use crate::guard::{self, Findings, Scan};
 use crate::packcode::{self, Manifest, PackFile};
-use crate::share::{self, Changeset, Invite, Member, Share};
+use crate::share::{self, Changeset, Invite, Member, Removal, Share, WishList};
 use std::collections::HashMap;
 use iroh::endpoint::{presets, Connection};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
@@ -22,6 +22,7 @@ pub const ALPN: &[u8] = b"obelisk/share/1";
 /// Pack codes (packcode.rs): whoever has a live code gets that pack's file list and files.
 pub const ALPN_PACK: &[u8] = b"obelisk/pack/1";
 const MAX_JSON: usize = 32 << 20;
+const WRONG_KEY: &str = "wrong pack key";
 const MAX_BLOB: usize = 600 << 20;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,6 +33,8 @@ enum Req {
     Changeset { id: String },
     Blob { hash: String },
     Instance,
+    /// Everyone's wish lists (older Obelisk answers "bad request", which is skipped).
+    Wishes,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -231,26 +234,55 @@ impl Net {
         share::publish(game, &self.me(), label)
     }
 
-    /// Connect to a member and prove to each other that we both hold this pack's secret.
-    async fn connect(&self, s: &Share, addr: EndpointAddr) -> Result<(Session, Member), String> {
+    /// The owner removes someone (signed with this PC's key) and moves the pack to a new secret.
+    pub fn remove(&self, game: &Path, id: &str) -> Result<Removal, String> {
+        let secret = hex(&SecretKey::generate().to_bytes());
+        share::remove_member(game, self.endpoint.secret_key(), &self.name.lock().unwrap(), id, &secret)
+    }
+
+    pub fn set_wishes(&self, game: &Path, items: Vec<serde_json::Value>) -> Result<(), String> {
+        share::set_wishes(game, &self.me(), items)
+    }
+
+    /// Connect to a member and prove to each other that we both hold this pack's secret. A member who hasn't
+    /// heard about a removal yet still has the old secret, so older ones are tried after the current one.
+    /// Also returns a newer secret they handed us, if any (adopted only once the owner's removal backs it).
+    async fn connect(&self, s: &Share, addr: EndpointAddr) -> Result<(Session, Member, Option<String>), String> {
         let peer = addr.id;
-        let conn = tokio::time::timeout(Duration::from_secs(20), self.endpoint.connect(addr, ALPN)).await
-            .map_err(|_| "Couldn't reach them (are they online with Obelisk open?)".to_string())?
-            .map_err(|e| format!("Couldn't connect: {e}"))?;
-        let sess = Session { conn };
         let me = self.id();
-        let hello = Req::Hello { pack: s.pack_id.clone(), name: self.name.lock().unwrap().clone(), proof: share::proof(&s.secret, &s.pack_id, &me, &peer.to_string()) };
-        let reply: HelloReply = serde_json::from_value(sess.call(&hello).await?).map_err(|e| e.to_string())?;
-        if reply.proof != share::proof(&s.secret, &s.pack_id, &peer.to_string(), &me) {
-            return Err("They don't have this pack's key.".into());
+        let secrets = share::secrets(s);
+        for (i, secret) in secrets.iter().enumerate() {
+            // A failed Hello ends the connection on their side, so each try gets its own.
+            let conn = tokio::time::timeout(Duration::from_secs(20), self.endpoint.connect(addr.clone(), ALPN)).await
+                .map_err(|_| "Couldn't reach them (are they online with Obelisk open?)".to_string())?
+                .map_err(|e| format!("Couldn't connect: {e}"))?;
+            let sess = Session { conn };
+            let hello = Req::Hello { pack: s.pack_id.clone(), name: self.name.lock().unwrap().clone(), proof: share::proof(secret, &s.pack_id, &me, &peer.to_string()) };
+            let reply: HelloReply = match sess.call(&hello).await {
+                Ok(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
+                Err(e) if e == WRONG_KEY && i + 1 < secrets.len() => continue,
+                Err(e) if e == WRONG_KEY && i > 0 => return Err("This pack's key has changed and they don't have it. Ask its owner for a new invite.".into()),
+                Err(e) => return Err(e),
+            };
+            if let Some(r) = &reply.removed {
+                if r.id == me && share::find(&self.instances, &s.pack_id).is_some_and(|g| share::merge_removals(&g, &me, std::slice::from_ref(r)).unwrap_or(false)) {
+                    return Err(format!("{} removed you from this pack.", r.by_name));
+                }
+                return Err("They refused the connection.".into());
+            }
+            if reply.proof != share::proof(secret, &s.pack_id, &peer.to_string(), &me) {
+                return Err("They don't have this pack's key.".into());
+            }
+            let member = reply.member(peer);
+            return Ok((sess, member, reply.rekey));
         }
-        Ok((sess, reply.member(peer)))
+        Err("They don't have this pack's key.".into())
     }
 
     /// Pull a friend's changesets and the files they need. Returns how many new changesets arrived.
     pub async fn pull(&self, game: &Path, addr: EndpointAddr) -> Result<usize, String> {
         let s = share::get(game).ok_or("this pack isn't shared")?;
-        let (sess, them) = self.connect(&s, addr).await?;
+        let (sess, them, rekey) = self.connect(&s, addr).await?;
         let log: LogReply = serde_json::from_value(sess.call(&Req::Log).await?).map_err(|e| e.to_string())?;
         let have: std::collections::HashSet<String> = share::log_ids(game).into_iter().collect();
         let mut got = 0;
@@ -266,9 +298,28 @@ impl Net {
             share::write_changeset(game, &cs)?;
             got += 1;
         }
+        // The owner (for shares joined before owners were passed along), removals, and a new secret if one came with them.
+        if let (Some(mut mine), Some(o)) = (share::get(game), log.owner.filter(|o| !o.is_empty())) {
+            if mine.owner.is_empty() {
+                mine.owner = o;
+                share::save(game, &mine)?;
+            }
+        }
+        if share::merge_removals(game, &self.id(), &log.removed)? {
+            sess.conn.close(0u32.into(), b"done");
+            return Ok(got);
+        }
+        if let Some(secret) = rekey {
+            share::adopt_secret(game, &secret)?;
+        }
         let mut seen = log.members;
         seen.push(them);
         share::merge_members(game, &seen)?;
+        if let Ok(v) = sess.call(&Req::Wishes).await {
+            if let Ok(w) = serde_json::from_value::<HashMap<String, WishList>>(v) {
+                share::merge_wishes(game, w)?;
+            }
+        }
         sess.conn.close(0u32.into(), b"done");
         Ok(got)
     }
@@ -606,8 +657,9 @@ impl Net {
         let addr: EndpointAddr = serde_json::from_value(inv.addr.clone()).map_err(|_| "The invite code is damaged.")?;
         let host = addr.id;
         let s = Share { pack_id: inv.pack_id.clone(), name: inv.name.clone(), secret: inv.secret.clone(),
-            members: vec![self.me(), Member { id: host.to_string(), name: String::new(), last_seen_ms: now_ms() }], auto_apply: false, created_ms: now_ms() };
-        let (sess, _) = self.connect(&s, addr.clone()).await?;
+            members: vec![self.me(), Member { id: host.to_string(), name: String::new(), last_seen_ms: now_ms() }], auto_apply: false, created_ms: now_ms(),
+            owner: String::new(), removed: vec![], epoch: 0, old_secrets: vec![] };
+        let (sess, _, _) = self.connect(&s, addr.clone()).await?;
         let files: InstanceReply = serde_json::from_value(sess.call(&Req::Instance).await?).map_err(|e| e.to_string())?;
         sess.conn.close(0u32.into(), b"done");
         let (id, game) = share::create_instance(&self.instances, &s, &files.cfg, &files.pack)?;
@@ -629,6 +681,12 @@ impl Net {
 struct HelloReply {
     name: String,
     proof: String,
+    /// They were removed from the pack: here's the owner's signed note (no access follows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    removed: Option<Removal>,
+    /// They used an older secret: the current one (they check it against the owner's removal first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rekey: Option<String>,
 }
 
 impl HelloReply {
@@ -641,6 +699,10 @@ impl HelloReply {
 struct LogReply {
     ids: Vec<String>,
     members: Vec<Member>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    removed: Vec<Removal>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -766,20 +828,33 @@ impl Handler {
         if let Req::Hello { pack, name, proof } = &req {
             let Some(game) = share::find(&self.instances, pack) else { return (err("That pack isn't shared from here any more."), vec![]) };
             let Some(s) = share::get(&game) else { return (err("not shared"), vec![]) };
-            if *proof != share::proof(&s.secret, pack, &peer.to_string(), &self.me.to_string()) {
-                return (err("wrong pack key"), vec![]);
+            let (peer_id, me) = (peer.to_string(), self.me.to_string());
+            let Some((i, secret)) = share::secrets(&s).into_iter().enumerate().find(|(_, k)| *proof == share::proof(k, pack, &peer_id, &me)) else {
+                return (err(WRONG_KEY), vec![]);
+            };
+            let mine = HelloReply { name: self.name.lock().unwrap().clone(), proof: String::new(), removed: None, rekey: None };
+            if let Some(r) = s.removed.iter().find(|r| r.id == peer_id) {
+                return (ok(serde_json::to_value(HelloReply { removed: Some(r.clone()), ..mine }).unwrap_or_default()), vec![]);
             }
-            let _ = share::merge_members(&game, &[Member { id: peer.to_string(), name: name.clone(), last_seen_ms: now_ms() }]);
+            // An older secret works only for people already in the pack (it may be in a removed person's hands);
+            // they get the current one, which they accept only if the owner's signed removal names it.
+            let stale = i > 0;
+            if stale && !s.members.iter().any(|m| m.id == peer_id) {
+                return (err("This invite is no longer valid. Ask for a new one."), vec![]);
+            }
+            let _ = share::merge_members(&game, &[Member { id: peer_id.clone(), name: name.clone(), last_seen_ms: now_ms() }]);
             *authed = Some(game);
-            let reply = HelloReply { name: self.name.lock().unwrap().clone(), proof: share::proof(&s.secret, pack, &self.me.to_string(), &peer.to_string()) };
+            let reply = HelloReply { proof: share::proof(&secret, pack, &me, &peer_id), rekey: stale.then(|| s.secret.clone()), ..mine };
             return (ok(serde_json::to_value(reply).unwrap_or_default()), vec![]);
         }
         let Some(game) = authed.as_ref() else { return (err("say hello first"), vec![]) };
         match req {
             Req::Log => {
-                let members = share::get(game).map(|s| s.members).unwrap_or_default();
-                (ok(serde_json::to_value(LogReply { ids: share::log_ids(game), members }).unwrap_or_default()), vec![])
+                let Some(s) = share::get(game) else { return (err("not shared"), vec![]) };
+                let owner = Some(share::owner(game, &s));
+                (ok(serde_json::to_value(LogReply { ids: share::log_ids(game), members: s.members, owner, removed: s.removed }).unwrap_or_default()), vec![])
             }
+            Req::Wishes => (ok(serde_json::to_value(share::wishes(game)).unwrap_or_default()), vec![]),
             Req::Changeset { id } => match share::read_changeset(game, &id) {
                 Some(cs) => (ok(serde_json::to_value(cs).unwrap_or_default()), vec![]),
                 None => (err("no such change"), vec![]),
@@ -935,5 +1010,44 @@ mod tests {
         a.withdraw(&code);
         assert!(b.preview(&code, None, |_| {}).await.is_err(), "a withdrawn code serves nothing");
         assert!(a.preview(&code, None, |_| {}).await.unwrap_err().contains("your own code"));
+    }
+
+    /// Owner, member and a member who gets removed, over the real network: run by hand with
+    /// `cargo test --lib -- --ignored collab_removal`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn collab_removal_end_to_end() {
+        let t = tempfile::tempdir().unwrap();
+        let inst = |n: &str| t.path().join(n);
+        let game = inst("o").join("Pack/minecraft");
+        std::fs::create_dir_all(game.join("config")).unwrap();
+        std::fs::write(game.join("config/a.toml"), "x=1").unwrap();
+        std::fs::write(inst("o").join("Pack/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        for n in ["m", "x"] { std::fs::create_dir_all(inst(n)).unwrap(); }
+        let o = Net::start(new_key(), inst("o"), "Olive".into()).await.unwrap();
+        let m = Net::start(new_key(), inst("m"), "Mia".into()).await.unwrap();
+        let x = Net::start(new_key(), inst("x"), "Xan".into()).await.unwrap();
+        let code = o.share(&game, "Pack").await.unwrap();
+        let gm = inst("m").join(m.join(&code).await.unwrap()).join("minecraft");
+        let gx = inst("x").join(x.join(&code).await.unwrap()).join("minecraft");
+        assert_eq!(share::get(&gm).unwrap().owner, o.id(), "the owner comes along when joining");
+
+        x.set_wishes(&gx, vec![serde_json::json!({ "hit": { "project_id": "AANobbMI" } })]).unwrap();
+        o.sync_all().await;
+        assert_eq!(share::wishes(&game).get(&x.id()).map(|w| w.name.as_str()), Some("Xan"), "wish lists travel");
+
+        o.remove(&game, &x.id()).unwrap();
+        assert!(m.remove(&gm, &o.id()).is_err(), "only the owner removes people");
+        m.sync_all().await;
+        let sm = share::get(&gm).unwrap();
+        assert_eq!(sm.secret, share::get(&game).unwrap().secret, "the member moved to the new secret");
+        assert!(!sm.members.iter().any(|mm| mm.id == x.id()));
+        x.sync_all().await;
+        assert!(share::get(&gx).is_none(), "the removed one stops collaborating");
+        assert_eq!(share::ended(&gx).unwrap().by_name, "Olive");
+        // Their old invite no longer lets anyone in under a new id.
+        let z = Net::start(new_key(), inst("z"), "Zed".into()).await.unwrap();
+        std::fs::create_dir_all(inst("z")).unwrap();
+        assert!(z.join(&code).await.is_err());
     }
 }

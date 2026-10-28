@@ -14,8 +14,12 @@
   import { manualDownload } from "./cf";
   import { checkDupes, dupeState, flagged, ignoreDupes } from "./dupes.svelte";
   import CollabBadge from "./CollabBadge.svelte";
+  import Favorites from "./Favorites.svelte";
+  import { favorites } from "./favstore.svelte";
+  import WishLists from "./WishLists.svelte";
+  import { collab, loadCollab } from "./collab.svelte";
 
-  type Sub = Kind | "worlds";
+  type Sub = Kind | "worlds" | "favorites" | "wishes";
   type SortKey = "name" | "date" | "authors" | "source" | "enabled" | "env" | "update";
   type TrashEntry = { id: string; kind: Kind; fileName: string; name: string; version: string; authors: string; source: Item["source"]; deletedMs: number };
 
@@ -27,6 +31,14 @@
   const SOURCE_LABEL = { curseforge: "CurseForge", modrinth: "Modrinth", local: "Local" };
 
   let current = $derived(app.current!);
+  let co = $derived(collab[current.id]);
+  let wishCount = $derived(new Set(Object.values(co?.wishes ?? {}).flatMap((w) => w.items.map((i) => i.hit.project_id))).size);
+  // Who's in a collaborative pack, or the note that its owner removed us: re-read when the pack opens or shares change.
+  $effect(() => { void app.shareIncoming; loadCollab(current.id); });
+  async function dismissEnded() {
+    await invoke("share_dismiss_ended", { instanceId: current.id }).catch(() => {});
+    loadCollab(current.id);
+  }
   let content = $state<Record<Kind, Item[]>>({ mods: [], resourcepacks: [], shaderpacks: [] });
   let icons = $state<Record<string, string>>({});
   let worlds = $state<World[]>([]);
@@ -134,7 +146,7 @@
   const infoOf = (i: Item) => infos.get(`${kind}/${plain(i.fileName)}`);
   const ENV_LABEL: Record<string, string> = { client: "Client", server: "Server", both: "Client & server", "": "Unknown" };
 
-  let kind = $derived<Kind>(sub === "worlds" ? "mods" : sub);
+  let kind = $derived<Kind>(sub === "worlds" || sub === "favorites" || sub === "wishes" ? "mods" : sub);
   let rows = $derived.by(() => {
     const q = query.trim().toLowerCase();
     let list: Item[] = viewTrash
@@ -537,6 +549,13 @@
         <div>
           <h2>{current.name}</h2>
           <p class="sub">Prism instance · {current.id}</p>
+          {#if co?.shared && co.members?.length}
+            <p class="collab-with">
+              <span class="muted">Collaborating with</span>
+              {#each co.members.filter((m) => m.id !== co.me) as m (m.id)}<span class="who">{m.name || "Friend"}{m.id === co.owner ? " (owner)" : ""}</span>{:else}<span class="muted">nobody yet</span>{/each}
+              {#if co.owner === co.me}<button class="gear" title="Collaboration: invite people, see who's in, remove someone" aria-label="Collaboration settings" onclick={() => (app.sharePack = current)}>⚙</button>{/if}
+            </p>
+          {/if}
         </div>
         <div class="hero-actions">
           <button class="ghost" title="Share this pack: a code for a friend, or a zip" onclick={() => (app.packShare = current)}>⇪ Share</button>
@@ -556,6 +575,12 @@
       </div>
     </div>
   </section>
+  {#if co?.ended}
+    <div class="ended">
+      <span><b>{co.ended.byName || "The owner"}</b> removed you from this collaborative pack ({ago(co.ended.atMs).toLowerCase()}). It's a normal pack now: your files stay as they are, and changes no longer come or go.</span>
+      <button class="ghost" onclick={dismissEnded}>OK</button>
+    </div>
+  {/if}
 
   <div class="tabs" role="tablist">
     <button role="tab" class:on={page === "content"} onclick={() => (page = "content")}><Icon name="cube" /> Content <span class="count">({total})</span></button>
@@ -615,9 +640,15 @@
         <button role="tab" class:on={sub === k.kind} onclick={() => setSub(k.kind)}>{k.label} ({content[k.kind].length})</button>
       {/each}
       <button role="tab" class:on={sub === "worlds"} onclick={() => setSub("worlds")}>Worlds ({worlds.length})</button>
+      <button role="tab" class:on={sub === "favorites"} onclick={() => setSub("favorites")}>♥ Favorites ({favorites.saved.length})</button>
+      {#if co?.shared}<button role="tab" class:on={sub === "wishes"} onclick={() => setSub("wishes")}>★ Wish lists ({wishCount})</button>{/if}
     </div>
 
-    {#if sub === "worlds"}
+    {#if sub === "favorites"}
+      <Favorites />
+    {:else if sub === "wishes" && co?.shared}
+      <WishLists instId={current.id} />
+    {:else if sub === "worlds"}
       <div class="grid-wrap">
         <div class="worlds">
           {#each worlds as w (w.folder)}
@@ -846,7 +877,7 @@
   </div>
 {/if}
 
-{#if viewTrash && page === "content" && sub !== "worlds"}
+{#if viewTrash && page === "content" && (sub === "mods" || sub === "resourcepacks" || sub === "shaderpacks")}
   <button class="back-float" onclick={() => { viewTrash = false; selected = new Set(); }}>‹ Back to {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()}</button>
 {/if}
 
@@ -862,6 +893,13 @@
   .hero { display: flex; gap: 18px; margin-top: 16px; padding: 14px; background: var(--panel); border-radius: 10px; flex: none; }
   .hero-icon { position: relative; width: 104px; height: 104px; flex: none; border-radius: 8px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; font-size: 28px; }
   .hero-icon img { width: 100%; height: 100%; object-fit: cover; }
+  .collab-with { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 13px; }
+  .collab-with .who { padding: 1px 8px; border-radius: 999px; background: var(--panel-2); }
+  .collab-with .muted { color: var(--muted); }
+  .gear { width: 26px; height: 26px; padding: 0; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font-size: 15px; line-height: 1; }
+  .gear:hover { color: var(--text); }
+  .ended { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 10px 14px; border-radius: 8px; background: var(--err-bg); color: var(--err-text); }
+  .ended span { flex: 1; }
   .hero-body { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
   .instance { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; align-items: center; }

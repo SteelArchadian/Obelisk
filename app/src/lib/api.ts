@@ -60,6 +60,10 @@ export const TYPES: { type: ProjectType; label: string }[] = [
   { type: "datapack", label: "Data Packs" },
 ];
 
+/** One project's type, for a chip ("Resource pack"). */
+export const typeName = (t: string) =>
+  ({ modpack: "Modpack", mod: "Mod", resourcepack: "Resource pack", shader: "Shader", datapack: "Data pack" } as Record<string, string>)[t] ?? t;
+
 export const api = {
   instances: () => invoke<Instance[]>("list_instances"),
   instanceIcon: (iconKey: string) => invoke<string | null>("instance_icon", { iconKey }),
