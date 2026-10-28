@@ -85,8 +85,8 @@ export const api = {
   cfProject: (id: number) => invoke<{ project: any; description: string }>("cf_project", { id }),
   cfFiles: (id: number) => invoke<any[]>("cf_files", { id }),
   cfChangelog: (modId: number, fileId: number) => invoke<string>("cf_changelog", { modId, fileId }),
-  cfInstall: (instanceId: string, modId: number, fileId?: number, world?: string) =>
-    invoke<{ status: "done"; names: string[] } | ({ status: "blocked"; names: string[] } & ManualDownload)>("cf_install", { instanceId, modId, fileId, world }),
+  cfInstall: (instanceId: string, modId: number, fileId?: number, world?: string, loaderOverride?: string) =>
+    invoke<{ status: "done"; names: string[] } | ({ status: "blocked"; names: string[] } & ManualDownload)>("cf_install", { instanceId, modId, fileId, world, loaderOverride }),
   cfFeatured: () => invoke<any>("cf_featured"),
   importPack: (source: string) => invoke("import_pack", { source }),
 };

@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// CurseForge project id of Fabric API (under Connector, Forgified Fabric API stands in for it).
+pub const FABRIC_API: u64 = 306612;
+
 const API: &str = "https://api.curseforge.com/v1";
 pub const MINECRAFT: u32 = 432;
 

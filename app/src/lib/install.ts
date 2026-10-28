@@ -134,7 +134,7 @@ export async function install(p: PendingInstall): Promise<boolean> {
     const into = p.world ? `${p.world} (${target.name})` : target.name;
     // CurseForge-only projects (and CurseForge versions picked on a CurseForge page).
     if (hit.project_id.startsWith("cf:")) {
-      const r = await api.cfInstall(target.id, hit.cf_id!, p.versionId ? Number(p.versionId) : undefined, p.world);
+      const r = await api.cfInstall(target.id, hit.cf_id!, p.versionId ? Number(p.versionId) : undefined, p.world, p.loaderOverride);
       if (r.status === "blocked") {
         if (r.names.length) toast(`Installed ${r.names.join(", ")} into ${into}.`);
         await manualDownload(target.id, r, refreshInstalled);

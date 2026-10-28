@@ -1143,15 +1143,20 @@ async fn cf_changelog(mod_id: u64, file_id: u64) -> Result<String, String> {
 
 /// Install a CurseForge project into a profile. Returns a manual download when the author blocks direct downloads.
 #[tauri::command]
-async fn cf_install(app: tauri::AppHandle, mr: tauri::State<'_, Mr>, instance_id: String, mod_id: u64, file_id: Option<u64>, world: Option<String>) -> Result<serde_json::Value, String> {
+async fn cf_install(app: tauri::AppHandle, mr: tauri::State<'_, Mr>, instance_id: String, mod_id: u64, file_id: Option<u64>, world: Option<String>, loader_override: Option<String>) -> Result<serde_json::Value, String> {
     let cf = cf_required()?;
     let mr = mr.inner().clone();
     let inst = instance(&instance_id)?;
     let (game, cache) = (game(&instance_id)?, hash_cache(&app)?);
+    // A Fabric mod on NeoForge through Connector: Fabric files and dependencies, with Forgified Fabric API standing
+    // in for Fabric API.
+    let loader = loader_override.unwrap_or_else(|| inst.loader.clone());
+    let cross = !loader.eq_ignore_ascii_case(&inst.loader);
+    let skip = move |mut s: std::collections::HashSet<u64>| { if cross { s.insert(prism::curseforge::FABRIC_API); } s };
     blocking(move || {
         if let Some(world) = world {
             let root = prism::world_dir(&game, &world)?;
-            let outcome = cf.install(&root, mod_id, file_id, &inst.loader, &inst.minecraft, &Default::default())?;
+            let outcome = cf.install(&root, mod_id, file_id, &loader, &inst.minecraft, &skip(Default::default()))?;
             let mut v = serde_json::to_value(outcome).map_err(|e| e.to_string())?;
             v["world"] = world.into();
             return Ok(v);
@@ -1159,7 +1164,7 @@ async fn cf_install(app: tauri::AppHandle, mr: tauri::State<'_, Mr>, instance_id
         // Everything already in the profile, whichever site it came from, counts as installed.
         let known: std::collections::HashSet<u64> = prism::updates::check(&game, &cache, &mr, Some(&cf), &inst.loader, &inst.minecraft)?
             .into_iter().filter(|i| i.provider == "curseforge").filter_map(|i| i.project_id.parse().ok()).collect();
-        let outcome = cf.install(&game, mod_id, file_id, &inst.loader, &inst.minecraft, &known)?;
+        let outcome = cf.install(&game, mod_id, file_id, &loader, &inst.minecraft, &skip(known))?;
         serde_json::to_value(outcome).map_err(|e| e.to_string())
     }).await
 }

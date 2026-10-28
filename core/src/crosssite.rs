@@ -109,3 +109,23 @@ mod tests {
         assert!(mr_id.is_some() && cf_id == Some(398521));
     }
 }
+
+#[cfg(test)]
+mod connector_tests {
+    /// Live: cargo test --lib connector -- --ignored. A Fabric-only CurseForge mod onto NeoForge through Connector.
+    #[test]
+    #[ignore]
+    fn curseforge_fabric_mod_via_connector() {
+        let key = keyring::Entry::new("Obelisk", "curseforge-api-key").unwrap().get_password().unwrap();
+        let cf = crate::curseforge::Client::new(&key).unwrap();
+        let q = crate::curseforge::SearchQuery { query: "Camera Unbound".into(), project_type: "mod".into(), sort: "relevance".into(), limit: 5, ..Default::default() };
+        let hits = cf.search(&q).unwrap();
+        let id = hits["data"].as_array().unwrap().iter().find(|h| h["name"] == "Camera Unbound").unwrap()["id"].as_u64().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let skip = std::collections::HashSet::from([crate::curseforge::FABRIC_API]);
+        let out = cf.install(tmp.path(), id, None, "fabric", "1.21.1", &skip).unwrap();
+        let files: Vec<_> = std::fs::read_dir(tmp.path().join("mods")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        println!("{out:?} {files:?}");
+        assert!(!files.is_empty());
+    }
+}

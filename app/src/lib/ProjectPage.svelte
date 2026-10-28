@@ -10,6 +10,7 @@
   import InstallButton from "./InstallButton.svelte";
   import TargetChip from "./TargetChip.svelte";
   import Relations from "./Relations.svelte";
+  import { settings } from "./settings.svelte";
   import { mr, toggleFollow, openLink } from "./account.svelte";
 
   let { hit }: { hit: Hit } = $props();
@@ -52,7 +53,10 @@
   let fits = (v: Version) => {
     const t = app.target;
     if (!t) return true;
-    const loaderOk = hit.project_type !== "mod" && hit.project_type !== "modpack" ? true : v.loaders.includes(t.loader.toLowerCase());
+    const loader = t.loader.toLowerCase();
+    // With "Offer Fabric mods on NeoForge" on, a Fabric file fits a NeoForge profile (through Connector).
+    const loaderOk = hit.project_type !== "mod" && hit.project_type !== "modpack" ? true
+      : v.loaders.includes(loader) || (hit.project_type === "mod" && settings.connector && loader === "neoforge" && v.loaders.includes("fabric"));
     return loaderOk && v.game_versions.includes(t.minecraft);
   };
   let listed = $derived(showAll ? versions : versions.filter(fits));
@@ -103,7 +107,7 @@
 
   async function installVersion(v: Version) {
     busyVersion = v.id;
-    const cross = !isCf && app.target && hit.project_type === "mod" && !v.loaders.includes(app.target.loader.toLowerCase());
+    const cross = app.target && hit.project_type === "mod" && !v.loaders.includes(app.target.loader.toLowerCase());
     if (cross && v.loaders.includes("fabric") && app.target?.loader.toLowerCase() === "neoforge") {
       app.connector = { hit, versionId: v.id, loaderOverride: "fabric" };
     } else {

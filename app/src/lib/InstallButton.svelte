@@ -49,7 +49,7 @@
   <span class="state" class:big>Installed</span>
 {:else if busy}
   <button class="btn" class:big disabled>Installing…</button>
-{:else if !c.ok && c.connector && settings.connector && !hit.project_id.startsWith("cf:")}
+{:else if !c.ok && c.connector && settings.connector}
   <div class="pair">
     <span class="why" title="No NeoForge build">{c.reason}</span>
     <button class="btn alt" class:big onclick={() => (app.connector = { hit })}>Via Connector</button>
