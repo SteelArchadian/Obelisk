@@ -31,6 +31,8 @@ fn tools() -> Value {
                     "properties": {
                         "layers": { "type": "array", "description": "Bottom first from y=-64, e.g. [{block:\"bedrock\",height:1},{block:\"sand\",height:3}]. Default bedrock, 2 dirt, grass. [] = void",
                             "items": { "type": "object", "properties": { "block": { "type": "string" }, "height": { "type": "integer" } } } },
+                        "terrain": { "type": "string", "enum": ["flat", "normal"], "description": "normal: real overworld terrain (hills, water, caves, structures) from seed, the player starting at y 200 (use game_mode spectator to fly with tp events). Default flat" },
+                        "seed": { "description": "With terrain normal: a number or text, as in Minecraft's create-world screen (default 0)" },
                         "biome": { "type": "string", "description": "Default plains (the_void when layers is [])" },
                         "border": { "type": "integer", "description": "World border width in blocks (16-60000000), centred on the spawn" },
                         "platform": { "type": "object", "description": "A square slab built when the world starts, e.g. a sky island: {y:150,size:32,block:\"stone\"} (size up to 1024). The player starts on it",
@@ -53,7 +55,7 @@ fn tools() -> Value {
                 "disable_mods": { "type": "array", "items": { "type": "string" }, "description": "Jar file names in mods/ to set aside for this run only" },
                 "add_mods": { "type": "array", "items": { "type": "string" }, "description": "Jars in the test bench to add for this run only" },
                 "config": { "type": "array", "items": { "type": "object", "properties": { "file": { "type": "string" }, "key": { "type": "string" }, "value": { "type": "string" } }, "required": ["file", "key", "value"] }, "description": "TOML settings for this run only: file relative to the copy, dotted key (section.key, must exist), value as TOML (true, 12, \"text\"). Restored byte-for-byte after" },
-                "java": { "type": "integer", "description": "21 (default) or 25 (jdk-25* in the test bench's java folder)" },
+                "java": { "type": "integer", "description": "Leave out to use the Java of the profile the copy came from (its JVM args and memory are always used). 21 = the install's Java, 25 = jdk-25* in the test bench's java folder" },
                 "compact_headers": { "type": "boolean", "description": "Java 25 only: -XX:+UseCompactObjectHeaders" },
                 "perf": { "type": "boolean", "description": "A performance test (FPS, load times, memory): waits until no other test runs and has the bench to itself. Only when the user asked for one. Default false: shares the bench with other non-performance runs, one run per copy" } }), &["copy", "owner", "purpose"])),
         t("gate", "Run the full-pack gate (gate.py in the test bench's scripts) in its gate copy, optionally swapping in a candidate jar.",

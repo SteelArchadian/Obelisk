@@ -73,6 +73,8 @@ struct Spec {
     setup: Vec<String>,
     events: Vec<(u32, Option<u32>, String)>,
     hold: Option<u32>,
+    /// Real Minecraft terrain (hills, water, caves, structures) from this seed instead of flat layers.
+    seed: Option<i64>,
 }
 
 fn block_id(v: &str, what: &str) -> Result<String, String> {
@@ -149,7 +151,27 @@ fn parse(v: &Value) -> Result<Spec, String> {
         return Err("at most 500 setup commands and events".into());
     }
     let hold = int(v, "hold", 5, 3600)?.map(|n| n as u32);
-    Ok(Spec { layers, biome, border, platform, spawn, game_mode, setup, events, hold })
+    // terrain: "normal" (or a seed given) makes a real overworld; text seeds hash the way Minecraft's own box does.
+    let seed = match (v.get("terrain").and_then(Value::as_str), v.get("seed")) {
+        (Some("flat") | None, None) => None,
+        (Some("flat"), Some(_)) => return Err("seed only goes with terrain \"normal\"".into()),
+        (Some("normal") | None, s) => Some(match s {
+            None | Some(Value::Null) => 0,
+            Some(Value::Number(n)) => n.as_i64().ok_or("seed must be a whole number or text")?,
+            Some(Value::String(t)) => t.trim().parse::<i64>().unwrap_or_else(|_| java_hash(t) as i64),
+            _ => return Err("seed must be a whole number or text".into()),
+        }),
+        (Some(t), _) => return Err(format!("terrain must be \"flat\" or \"normal\", not \"{t}\"")),
+    };
+    if seed.is_some() && v.get("layers").is_some() {
+        return Err("layers are for flat worlds; leave them out with terrain \"normal\"".into());
+    }
+    Ok(Spec { layers, biome, border, platform, spawn, game_mode, setup, events, hold, seed })
+}
+
+/// Java's String.hashCode, which is how Minecraft turns a text seed into a number.
+fn java_hash(s: &str) -> i32 {
+    s.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
 }
 
 /// Minecraft's save format number for each version a test copy may run.
@@ -194,6 +216,9 @@ pub fn build(copy: &Path, minecraft: &str, v: &Value, stamp: u64) -> Result<(Str
 fn spawn_of(s: &Spec) -> (i32, i32, i32) {
     s.spawn.unwrap_or_else(|| match &s.platform {
         Some((y, _, _)) => (0, y + 1, 0),
+        // Real terrain's height isn't known before it generates: start above the hills (creative and
+        // spectator players don't take fall damage).
+        None if s.seed.is_some() => (0, 200, 0),
         None => (0, -64 + s.layers.iter().map(|l| l.1).sum::<i32>().max(1), 0),
     })
 }
@@ -207,9 +232,13 @@ fn level_dat(dir: &Path, name: &str, s: &Spec, dv: i32) -> Result<(), String> {
         ("layers", Tag::List(layers.iter().map(|(b, h)| c(vec![("block", st(b)), ("height", Tag::Int(*h))])).collect())),
         ("structure_overrides", Tag::List(vec![])),
     ]);
+    let overworld = match s.seed {
+        Some(_) => c(vec![("type", st("minecraft:noise")), ("settings", st("minecraft:overworld")),
+            ("biome_source", c(vec![("type", st("minecraft:multi_noise")), ("preset", st("minecraft:overworld"))]))]),
+        None => c(vec![("type", st("minecraft:flat")), ("settings", flat)]),
+    };
     let dims = c(vec![
-        ("minecraft:overworld", c(vec![("type", st("minecraft:overworld")),
-            ("generator", c(vec![("type", st("minecraft:flat")), ("settings", flat)]))])),
+        ("minecraft:overworld", c(vec![("type", st("minecraft:overworld")), ("generator", overworld)])),
         ("minecraft:the_nether", c(vec![("type", st("minecraft:the_nether")),
             ("generator", c(vec![("type", st("minecraft:noise")), ("settings", st("minecraft:nether")),
                 ("biome_source", c(vec![("type", st("minecraft:multi_noise")), ("preset", st("minecraft:nether"))]))]))])),
@@ -235,7 +264,7 @@ fn level_dat(dir: &Path, name: &str, s: &Spec, dv: i32) -> Result<(), String> {
         ("DataPacks", c(vec![("Enabled", Tag::List(vec![st("vanilla"), st("file/obelisk_test")])), ("Disabled", Tag::List(vec![]))])),
         ("enabled_features", Tag::List(vec![st("minecraft:vanilla")])),
         ("DragonFight", c(vec![("NeedsStateScanning", Tag::Byte(1)), ("DragonKilled", Tag::Byte(0)), ("PreviouslyKilled", Tag::Byte(0))])),
-        ("WorldGenSettings", c(vec![("seed", Tag::Long(0)), ("generate_features", Tag::Byte(0)), ("bonus_chest", Tag::Byte(0)), ("dimensions", dims)])),
+        ("WorldGenSettings", c(vec![("seed", Tag::Long(s.seed.unwrap_or(0))), ("generate_features", Tag::Byte(s.seed.is_some() as i8)), ("bonus_chest", Tag::Byte(0)), ("dimensions", dims)])),
     ]);
     let root = c(vec![("Data", data)]);
     let mut raw = vec![10u8];

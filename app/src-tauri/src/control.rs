@@ -894,7 +894,12 @@ fn bench(args: &[&str]) -> Command {
 /// Test rules for every test bench copy (user, 2026-10-24): the game keeps running when the user's mouse or keys go
 /// elsewhere, and Absolute AFK Cinema can't take over the camera after 15 s idle. Only ever called on test copies.
 fn test_rules(dir: &Path) {
-    set_option(&dir.join("options.txt"), "pauseOnLostFocus", "false");
+    let options = dir.join("options.txt");
+    if !options.exists() {
+        let _ = std::fs::write(&options, ""); // a copy without one would stop at the first-start accessibility screen
+    }
+    set_option(&options, "pauseOnLostFocus", "false");
+    set_option(&options, "onboardAccessibility", "false");
     // Windowed: a borderless or fullscreen game copied from the play instance covers the desktop and
     // glitches Wallpaper Engine while it's parked off-screen.
     let _ = prism::window::set(dir, prism::window::Mode::Windowed);
@@ -1327,7 +1332,8 @@ impl Profile {
         let on = |k: &str| cfg.get(k).is_some_and(|v| v == "true");
         let num = |k: &str| cfg.get(k).and_then(|v| v.parse().ok());
         Profile {
-            java: cfg.get("JavaPath").filter(|_| on("OverrideJavaLocation")).filter(|p| Path::new(p).is_file()).map(|p| p.replace('\\', "/")),
+            java: cfg.get("JavaPath").filter(|_| on("OverrideJavaLocation")).map(|p| prism::java::resolve(&prism::data_dir(), p))
+                .filter(|p| p.is_file()).map(|p| p.to_string_lossy().replace('\\', "/")),
             args: if on("OverrideJavaArgs") { cfg.get("JvmArgs").map(|a| a.split_whitespace().map(String::from).collect()).unwrap_or_default() } else { vec![] },
             max_mem_mb: if on("OverrideMemory") { num("MaxMemAlloc") } else { None },
             min_mem_mb: if on("OverrideMemory") { num("MinMemAlloc") } else { None },

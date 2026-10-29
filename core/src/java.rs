@@ -137,7 +137,7 @@ pub fn check_before_launch(data: &Path, id: &str) -> Result<Option<String>, Stri
     let Some(inst) = crate::list_instances(data).into_iter().find(|i| i.id == id) else { return Ok(None) };
     let need = crate::sides::java_for(&inst.minecraft);
     let list = installs(data);
-    let path = cfg.get("JavaPath").cloned().unwrap_or_default();
+    let path = resolve(data, cfg.get("JavaPath").map(String::as_str).unwrap_or_default()).to_string_lossy().into_owned();
     let canon = |p: &str| fs::canonicalize(p).unwrap_or_else(|_| p.into());
     // A Java outside the scanned folders (picked with Other Java) still counts.
     let outside = list.iter().all(|j| canon(&j.path) != canon(&path)).then(|| at(Path::new(&path))).flatten();
@@ -169,6 +169,13 @@ pub fn check_before_launch(data: &Path, id: &str) -> Result<Option<String>, Stri
             Ok(Some(format!("{why}, and none is installed, so Prism will pick or download one.")))
         }
     }
+}
+
+/// A profile's JavaPath as a real path: Prism writes the Javas it downloads itself relative to its data folder
+/// ("java/temurin-25-jre/bin/javaw.exe").
+pub fn resolve(data: &Path, java_path: &str) -> PathBuf {
+    let p = Path::new(java_path.trim());
+    if p.as_os_str().is_empty() || p.is_absolute() { p.to_path_buf() } else { data.join(p) }
 }
 
 /// The Java majors Prism's metadata lists for a Minecraft version (empty when it hasn't fetched them).
