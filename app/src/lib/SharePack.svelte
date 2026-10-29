@@ -11,7 +11,7 @@
   type Change = { kind: "added" | "removed" | "changed"; area: string; path: string; label: string };
   type Member = { id: string; name: string; lastSeenMs: number };
   type Changeset = { id: string; author: string; authorName: string; atMs: number; label: string; changes: Change[] };
-  type Status = { shared: boolean; me: string; owner: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[]; held?: Held[] };
+  type Status = { shared: boolean; me: string; owner: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean; autoSend?: boolean } | null; incoming: Changeset[]; local: Change[]; held?: Held[] };
   type Held = { path: string; size: number; from: string; reasons: string[] };
 
   let { inst }: { inst: Instance } = $props();
@@ -79,6 +79,7 @@
   const review = () => window.dispatchEvent(new CustomEvent("held-review", { detail: inst.id }));
   $effect(() => { window.addEventListener("held-changed", load); return () => window.removeEventListener("held-changed", load); });
   const setAuto = (on: boolean) => run("auto", async () => { await invoke("share_set_auto", { instanceId: inst.id, on }); await load(); });
+  const setAutoSend = (on: boolean) => run("autoSend", async () => { await invoke("share_set_auto_send", { instanceId: inst.id, on }); await load(); });
   const remove = (m: Member) => run("remove", async () => {
     await invoke("share_remove", { instanceId: inst.id, member: m.id });
     confirmRemove = null;
@@ -190,6 +191,7 @@
           {/each}
         </div>
         <label class="row small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /> Apply friends' changes automatically (still backed up first)</label>
+        <label class="row small"><input type="checkbox" checked={st.share.autoSend ?? false} onchange={(e) => setAutoSend(e.currentTarget.checked)} /> Send my changes automatically (once they've settled, never while the game runs)</label>
       </section>
 
       {#if st.held?.length}

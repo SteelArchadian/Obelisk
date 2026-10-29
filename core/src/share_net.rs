@@ -756,7 +756,7 @@ impl Net {
         let addr: EndpointAddr = serde_json::from_value(inv.addr.clone()).map_err(|_| "The invite code is damaged.")?;
         let host = addr.id;
         let s = Share { pack_id: inv.pack_id.clone(), name: inv.name.clone(), secret: inv.secret.clone(),
-            members: vec![self.me(), Member { id: host.to_string(), name: String::new(), last_seen_ms: now_ms() }], auto_apply: false, created_ms: now_ms(),
+            members: vec![self.me(), Member { id: host.to_string(), name: String::new(), last_seen_ms: now_ms() }], auto_apply: false, auto_send: false, created_ms: now_ms(),
             owner: String::new(), removed: vec![], epoch: 0, old_secrets: vec![], readmitted: Default::default() };
         let (sess, _, _) = self.connect(&s, addr.clone()).await.inspect_err(|e| trace(format!("couldn't connect to the host: {e}")))?;
         trace("connected to the host");

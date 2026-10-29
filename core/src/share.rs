@@ -35,6 +35,9 @@ pub struct Share {
     pub members: Vec<Member>,
     #[serde(default)]
     pub auto_apply: bool,
+    /// Send my changes by myself once they've settled (Obelisk checks every minute), instead of pressing Send.
+    #[serde(default)]
+    pub auto_send: bool,
     pub created_ms: u64,
     /// Who made the pack collaborative: the only one who can remove people. Older shares fill it in from
     /// the baseline's author (see `owner`).
@@ -232,7 +235,7 @@ pub fn start(game: &Path, name: &str, pack_id: &str, secret: &str, me: &Member) 
             history::store(game, &p, &f.hash)?;
         }
     }
-    let share = Share { pack_id: pack_id.into(), name: name.into(), secret: secret.into(), members: vec![me.clone()], auto_apply: false,
+    let share = Share { pack_id: pack_id.into(), name: name.into(), secret: secret.into(), members: vec![me.clone()], auto_apply: false, auto_send: false,
         created_ms: history::now_ms(), owner: me.id.clone(), removed: vec![], epoch: 0, old_secrets: vec![], readmitted: Default::default() };
     let cs = Changeset {
         id: new_id(&me.id), author: me.id.clone(), author_name: me.name.clone(), at_ms: history::now_ms(), label: "Shared the pack".into(),
