@@ -3,6 +3,7 @@ use obelisk_core as prism;
 mod bridge;
 mod cleanup;
 mod control;
+mod watch;
 mod datadir;
 mod devrun;
 mod mcp;
@@ -2085,7 +2086,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, datadir::data_dir_get, datadir::data_dir_set,
-            list_instances, instance_icon, set_instance_icon, list_content, content_icons, set_enabled, delete_content,
+            list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,

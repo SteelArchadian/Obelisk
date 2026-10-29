@@ -89,7 +89,7 @@ export function applyBlockTheme(id: string) {
     else s.removeProperty(k);
   }
 }
-const ART = ["bg", "frame", "button", "row", "header", "green", "plank", "well", "win-min", "win-max", "win-close", "garland", "leaves", "daisies"];
+const ART = ["bg", "frame", "button", "row", "header", "green", "red", "plank", "well", "win-min", "win-max", "win-close", "garland", "leaves", "daisies"];
 const ALL_VARS = ["--bg", "--rail", "--panel", "--panel-2", "--line", "--text", "--text-2", "--muted", "--row-line", "--scroll", "--switch-off",
   "--accent", "--accent-hover", "--accent-text", "--glow", "--heading", "--edge-light", "--edge-dark", "--logo-filter",
   "--tex-frame", "--tex-plate", "--tex-panel", ...ART.map((n) => `--art-${n}`)];

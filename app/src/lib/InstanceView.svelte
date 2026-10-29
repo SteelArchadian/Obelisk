@@ -1,6 +1,7 @@
 <script lang="ts">
   import { crisp } from "./crisp";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { ago, api, initials, type FileInfo, type Item, type Kind, type World } from "./api";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { cached, recheck, updateState, updatesFor } from "./updates.svelte";
@@ -434,8 +435,17 @@
   $effect(() => {
     const id = current.id;
     const onFocus = () => refreshContent(id);
+    // Ctrl+R: everything on this page is read again (worlds, blocked files, the lists).
+    const onRefresh = () => { refreshContent(id); loadHeld(); };
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    window.addEventListener("obelisk-refresh", onRefresh);
+    // Files added or removed while the window stays open (by hand, or by another program) show up by themselves.
+    invoke("watch_content", { instanceId: id }).catch(() => {});
+    const unwatch = listen<string>("content-changed", (e) => { if (e.payload === id) refreshContent(id); });
+    return () => {
+      window.removeEventListener("focus", onFocus); window.removeEventListener("obelisk-refresh", onRefresh);
+      unwatch.then((f) => f());
+    };
   });
   /** A file in the list no longer exists: show what's really there. */
   async function stale(e: unknown, item: Item) {
@@ -455,7 +465,9 @@
         content[kind] = content[kind].filter((i) => i !== item);
         selected.delete(item.fileName);
       } catch (e) {
-        await stale(e, item);
+        // Already gone (removed outside Obelisk): that's what was asked for, so the list just catches up.
+        if (String(e).includes("not found")) { await refreshContent(current.id); selected.delete(item.fileName); }
+        else error = String(e);
       }
     }
     selected = new Set(selected);
@@ -859,8 +871,8 @@
 {#if confirmDelete}
   <div class="modal-back" role="presentation" onclick={() => (confirmDelete = null)}>
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && (confirmDelete = null)}>
-      <h3>Move {confirmDelete.length === 1 ? confirmDelete[0].name : `${confirmDelete.length} items`} to the Recycle Bin?</h3>
-      <p class="muted">You can restore {confirmDelete.length === 1 ? "it" : "them"} from the Recycle Bin.</p>
+      <h3>Move {confirmDelete.length === 1 ? confirmDelete[0].name : `${confirmDelete.length} items`} to this profile's trash?</h3>
+      <p class="muted">You can restore {confirmDelete.length === 1 ? "it" : "them"} from Trash for {trashLabel(settings.trashHours)}.</p>
       <div class="modal-actions">
         <button class="ghost" onclick={() => (confirmDelete = null)}>Cancel</button>
         <button class="play danger-fill" onclick={doDelete}>Delete</button>

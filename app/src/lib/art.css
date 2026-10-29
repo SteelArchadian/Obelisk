@@ -134,8 +134,8 @@
 :root[data-art][data-skin="block"] :is(.play, .primary, .upd, .btn:not(.muted):not(.alt), .back-float):hover:not(:disabled) { filter: drop-shadow(0 0 9px rgb(110 235 80 / 0.55)) drop-shadow(0 2px 3px rgb(0 0 0 / 0.4)) brightness(1.06); }
 :root[data-art][data-skin="block"] .play { font-size: 22px !important; padding: 0 30px !important; }
 /* Stop/Abort: the green plate turned red. */
-:root[data-art][data-skin="block"] .play.stop { filter: hue-rotate(245deg) saturate(1.4) drop-shadow(0 0 6px rgb(230 60 50 / 0.4)) drop-shadow(0 2px 3px rgb(0 0 0 / 0.4)); }
-:root[data-art][data-skin="block"] .play.stop:hover:not(:disabled) { filter: hue-rotate(245deg) saturate(1.4) drop-shadow(0 0 9px rgb(235 80 70 / 0.55)) brightness(1.06); }
+:root[data-art][data-skin="block"] .play.stop:not(.muted):not(.alt) { border-image: var(--art-red) 34 fill / 11px stretch !important; filter: drop-shadow(0 0 6px rgb(230 60 50 / 0.4)) drop-shadow(0 2px 3px rgb(0 0 0 / 0.4)); }
+:root[data-art][data-skin="block"] .play.stop:not(.muted):not(.alt):hover:not(:disabled) { filter: drop-shadow(0 0 9px rgb(235 80 70 / 0.55)) drop-shadow(0 2px 3px rgb(0 0 0 / 0.4)) brightness(1.06); }
 
 /* ---- inputs: dark wells with a wood rim ---- */
 :root[data-art][data-skin="block"] :is(.search, .searchbox, .select, select, .val, .fsearch, input.num, .args) {

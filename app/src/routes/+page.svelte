@@ -279,11 +279,18 @@
     // Ctrl+R / F5: refresh Obelisk's data instead of reloading the window.
     if ((e.ctrlKey && e.key.toLowerCase() === "r") || e.key === "F5") {
       e.preventDefault();
+      // Everything is read again: packs, installed mods, accounts, running games, shares, and both kinds of updates.
       syncInstances();
+      refreshInstalled();
+      loadAccounts().catch(() => {});
+      refreshRunning();
+      window.dispatchEvent(new Event("share-changed"));
       window.dispatchEvent(new Event("obelisk-refresh"));
+      lastCheck = 0;
+      checkSelfUpdate();
       if (app.page === "instance" && app.current) {
-        recheck(app.current.id).then(() => toast("Checked for updates.")).catch((err) => toastError(err));
-      }
+        recheck(app.current.id).then(() => toast("Refreshed and checked for updates.")).catch((err) => toastError(err));
+      } else toast("Refreshed.");
       return;
     }
     if (e.altKey && e.key === "ArrowLeft") travel(past, future);
