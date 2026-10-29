@@ -295,8 +295,8 @@
               <strong>{inst.name}</strong>{#if running[inst.id]}<small class="now"><i></i>Playing now</small>{:else}<small>Played {ago(inst.lastLaunchMs).toLowerCase()}</small>{/if}
             </button>
             <button class="tile-play" class:busy={starting[inst.id]} class:live={running[inst.id]} class:armed={stopArmed === inst.id}
-              title={running[inst.id] ? (stopArmed === inst.id ? "Click again to close the game (unsaved progress since the last autosave is lost)" : `Stop ${inst.name}`) : starting[inst.id] ? "Starting… click to cancel" : `Play ${inst.name}`}
-              aria-label={running[inst.id] ? `Stop ${inst.name}` : starting[inst.id] ? `Cancel starting ${inst.name}` : `Play ${inst.name}`} onclick={() => (running[inst.id] ? stop(inst) : starting[inst.id] ? cancel(inst) : play(inst))}>
+              title={running[inst.id] ? (stopArmed === inst.id ? "Click again to close the game (unsaved progress since the last autosave is lost)" : `Stop ${inst.name}`) : starting[inst.id] ? "Loading… click to abort" : `Play ${inst.name}`}
+              aria-label={running[inst.id] ? `Stop ${inst.name}` : starting[inst.id] ? `Abort starting ${inst.name}` : `Play ${inst.name}`} onclick={() => (running[inst.id] ? stop(inst) : starting[inst.id] ? cancel(inst) : play(inst))}>
               {#if running[inst.id] && stopArmed === inst.id}<span class="sure">Stop?</span>
               {:else if running[inst.id]}<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" /></svg><span class="sure">Stop</span>
               {:else if starting[inst.id]}<span class="spin"></span><svg class="x" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" /></svg>{:else}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>{/if}

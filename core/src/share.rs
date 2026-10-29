@@ -633,6 +633,26 @@ pub fn discard(inst: &Path) {
     }
 }
 
+/// Packs that claim the same shared pack (copies made before cloning left collaboration behind): the oldest
+/// profile keeps it, the others stop collaborating (their files stay as they are). Returns the ones stopped.
+pub fn dedupe(instances: &Path) -> Vec<String> {
+    let mut by_pack: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
+    for (id, game, s) in all(instances) {
+        by_pack.entry(s.pack_id).or_default().push((id, game));
+    }
+    let mut stopped = Vec::new();
+    for (_, mut v) in by_pack.into_iter().filter(|(_, v)| v.len() > 1) {
+        let born = |g: &PathBuf| g.parent().and_then(|i| fs::metadata(i).ok()).and_then(|m| m.created().ok());
+        v.sort_by_key(|(_, g)| born(g));
+        for (id, game) in v.into_iter().skip(1) {
+            if stop(&game).is_ok() {
+                stopped.push(id);
+            }
+        }
+    }
+    stopped
+}
+
 /// Every shared pack here: (instance folder name, game folder, share).
 pub fn all(instances: &Path) -> Vec<(String, PathBuf, Share)> {
     let mut v = Vec::new();
@@ -932,6 +952,26 @@ mod tests {
         crate::held::allow(&b, "mods/essential.jar").unwrap();
         assert!(b.join("mods/essential.jar").is_file() && crate::held::list(&b).is_empty());
         assert!(local_changes(&b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_copy_of_a_shared_pack_stops_collaborating() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("Orig/minecraft");
+        fs::create_dir_all(a.join("config")).unwrap();
+        fs::write(a.join("config/a.toml"), "x").unwrap();
+        fs::write(d.path().join("Orig/instance.cfg"), "name=Orig\n").unwrap();
+        fs::write(d.path().join("Orig/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        start(&a, "Pack", "p1", "s1", &me("aaaaaaaaaaaa", "Alex")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // An older Obelisk's clone: the share came along.
+        let b = d.path().join("Copy/minecraft/.obelisk/share");
+        fs::create_dir_all(&b).unwrap();
+        fs::copy(dir(&a).join("share.json"), b.join("share.json")).unwrap();
+        fs::write(d.path().join("Copy/instance.cfg"), "name=Copy\n").unwrap();
+        assert_eq!(dedupe(d.path()), vec!["Copy".to_string()]);
+        assert!(get(&a).is_some() && get(&d.path().join("Copy/minecraft")).is_none());
+        assert!(dedupe(d.path()).is_empty());
     }
 
     #[test]

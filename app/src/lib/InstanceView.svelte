@@ -569,7 +569,7 @@
             <button class="play stop" onclick={stop} title="Force-close the game (for when it's frozen)">{confirmKill ? "Click again to force-close" : "■ Stop"}</button>
           {:else}
             {#if starting[current.id]}
-              <button class="play stop" onclick={() => cancel(current)} title="Stop it starting (nothing is lost)">Starting… ✕ Cancel</button>
+              <button class="play stop" onclick={() => cancel(current)} title="Stop it loading (nothing is lost)">■ Abort</button>
             {:else}
               <button class="play" onclick={play}>Play</button>
             {/if}

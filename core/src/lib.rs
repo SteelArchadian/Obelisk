@@ -543,9 +543,10 @@ pub fn clone_instance(data: &Path, id: &str, new_name: &str) -> Result<String, S
     Ok(new_id)
 }
 
-/// A clone starts with no backup history of its own.
+/// A clone starts with no backup history of its own, and isn't collaborative (a shared pack's identity and key
+/// belong to the original: two packs with one identity answer friends with each other's key).
 fn clone_skips(dir: &Path, name: &std::ffi::OsStr) -> bool {
-    name == "history" && dir.file_name().is_some_and(|n| n == ".obelisk")
+    (name == "history" || name == "share") && dir.file_name().is_some_and(|n| n == ".obelisk")
 }
 
 fn count_files(dir: &Path) -> usize {

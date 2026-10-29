@@ -127,6 +127,10 @@
   font-weight: 700;
 }
 :root[data-skin="block"] .play { font-size: 22px !important; padding: 12px 36px !important; }
+:root[data-skin="block"] .play.stop {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 80%, #fff) 0%, var(--danger) 50%, color-mix(in srgb, var(--danger) 75%, #000) 100%) !important;
+  box-shadow: inset 2px 2px 0 rgb(255 255 255 / 0.4), inset -2px -3px 0 rgb(0 0 0 / 0.35), var(--outline), 0 0 0 4px color-mix(in srgb, var(--danger) 35%, transparent) !important;
+}
 :root[data-skin="block"] :is(.play, .primary, .upd):hover:not(:disabled) { filter: brightness(1.12); }
 :root[data-skin="block"] :is(.play, .primary, .upd):active:not(:disabled) { transform: translateY(2px); }
 

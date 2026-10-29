@@ -65,7 +65,7 @@ export async function cancel(inst: Instance) {
   delete progress[inst.id];
   try {
     await invoke("cancel_launch", { instanceId: inst.id });
-    toast(`Cancelled starting ${inst.name}.`);
+    toast(`Aborted starting ${inst.name}.`);
   } catch (e) {
     toast(String(e));
   }

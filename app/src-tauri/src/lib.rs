@@ -524,7 +524,7 @@ async fn pack_code_stop(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, 
 #[tauri::command]
 async fn pack_code_preview(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<prism::share_net::PackPreview, String> {
     use tauri::Emitter;
-    prism::share_net::trace_start("checking a pack code");
+    prism::share_net::trace_start("checking a pack code", &app.package_info().version.to_string());
     let code = prism::packcode::normalize(&code)?;
     sweep_half_made().await;
     let cf = cf_client().map(std::sync::Arc::new);
@@ -543,7 +543,7 @@ fn pack_code_cancel() {
 #[tauri::command]
 async fn pack_code_import(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String, with_custom: bool) -> Result<prism::share_net::ImportReport, String> {
     use tauri::Emitter;
-    prism::share_net::trace_start("importing a pack code");
+    prism::share_net::trace_start("importing a pack code", &app.package_info().version.to_string());
     let code = prism::packcode::normalize(&code)?;
     sweep_half_made().await;
     let a = app.clone();
@@ -557,9 +557,12 @@ async fn pack_code_import(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>
 /// removed): it goes to the Recycle Bin, so it can't block joining that pack again.
 async fn sweep_half_made() {
     let _ = blocking(|| {
-        for p in prism::share::half_made(&prism::instances_dir(&prism::data_dir())) {
+        let instances = prism::instances_dir(&prism::data_dir());
+        for p in prism::share::half_made(&instances) {
             let _ = trash::delete(&p);
         }
+        // Copies of a collaborative pack made before clones left collaboration behind: only the original keeps it.
+        prism::share::dedupe(&instances);
         Ok(())
     }).await;
 }
@@ -717,6 +720,7 @@ async fn share_stop(instance_id: String) -> Result<(), String> {
 /// Collaborate → Get a code: a short code (like Share's) that carries the invite; the friend pastes it into Import.
 #[tauri::command]
 async fn collab_code(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String) -> Result<serde_json::Value, String> {
+    sweep_half_made().await;
     let game = game(&instance_id)?;
     let name = instance(&instance_id)?.name;
     let (code, expires) = share_net(&app, &net).await?.offer_invite(&game, &name).await?;
@@ -725,7 +729,7 @@ async fn collab_code(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, ins
 
 #[tauri::command]
 async fn share_join(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<String, String> {
-    prism::share_net::trace_start("joining a collaborative pack");
+    prism::share_net::trace_start("joining a collaborative pack", &app.package_info().version.to_string());
     sweep_half_made().await;
     let id = share_net(&app, &net).await?.join(&code).await?;
     announce_held(&app, &id);

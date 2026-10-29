@@ -43,10 +43,10 @@ pub fn heal_stores(instances: &Path, me: Option<&Member>) {
 static TRACE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Start a new readout (an import, preview or join begins).
-pub fn trace_start(what: &str) {
+pub fn trace_start(what: &str, version: &str) {
     let mut t = TRACE.lock().unwrap();
     t.clear();
-    t.push(format!("{} · Obelisk {} · {what}", chrono_now(), env!("CARGO_PKG_VERSION")));
+    t.push(format!("{} · Obelisk {version} · {what}", chrono_now()));
 }
 
 pub(crate) fn trace(line: impl Into<String>) {
@@ -749,7 +749,7 @@ impl Net {
             &long
         };
         let inv = share::parse_invite(code)?;
-        trace(format!("joining \"{}\" (pack {})", inv.name, inv.pack_id));
+        trace(format!("joining \"{}\" (pack {}) hosted by {}", inv.name, inv.pack_id, inv.addr.get("id").and_then(|v| v.as_str()).unwrap_or("?")));
         if let Some(game) = share::find(&self.instances, &inv.pack_id) {
             return Err(format!("You already have this pack ({}).", game.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
         }
@@ -1266,7 +1266,7 @@ name=Pack
         std::fs::write(game.join("mods/boundless.jar"), "build 2").unwrap();
         std::fs::write(crate::history::object(&game, &old), "build 2").unwrap();
 
-        trace_start("test join");
+        trace_start("test join", "test");
         let id = m.join(&short).await.unwrap_or_else(|e| panic!("{e}\n{}", trace_log().join("\n")));
         let gm = inst("m").join(&id).join("minecraft");
         assert_eq!(std::fs::read_to_string(gm.join("mods/boundless.jar")).unwrap(), "build 2");
