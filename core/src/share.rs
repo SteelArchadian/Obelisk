@@ -140,6 +140,21 @@ struct State {
     applied: Vec<String>,
     /// The shared state as of the last publish/apply: local edits since then are "my changes".
     base: Vec<FileEntry>,
+    /// Friends' files that showed signs of malware: not written, kept until the user allows one or a newer
+    /// change replaces it. They're in base (as the shared version) but never count as my changes.
+    #[serde(default)]
+    held: Vec<Held>,
+}
+
+/// A friend's file Obelisk blocked, and why. Only the user can let it in (see allow_held).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Held {
+    pub path: String,
+    pub hash: String,
+    pub size: u64,
+    pub author_name: String,
+    pub reasons: Vec<String>,
 }
 
 fn dir(game: &Path) -> PathBuf {
@@ -213,7 +228,7 @@ pub fn start(game: &Path, name: &str, pack_id: &str, secret: &str, me: &Member) 
     };
     write_changeset(game, &cs)?;
     save(game, &share)?;
-    save_state(game, &State { applied: vec![cs.id.clone()], base: files })?;
+    save_state(game, &State { applied: vec![cs.id.clone()], base: files, held: vec![] })?;
     Ok(share)
 }
 
@@ -280,14 +295,41 @@ pub fn referenced(game: &Path) -> HashSet<String> {
 
 /// My changes since I last published or applied.
 pub fn local_changes(game: &Path) -> Result<Vec<Change>, String> {
-    let st = state(game);
+    let mut st = state(game);
+    unheld(&mut st);
     let now = shared_files(game, &st.base)?;
     Ok(history::diff(game, &st.base, &now, true))
+}
+
+/// Leave blocked files out of base, so their absence here isn't sent to friends as a deletion.
+fn unheld(st: &mut State) {
+    let held: HashSet<&str> = st.held.iter().map(|h| h.path.as_str()).collect();
+    st.base.retain(|b| !held.contains(b.path.as_str()));
+}
+
+/// Friends' files Obelisk blocked in this pack.
+pub fn held(game: &Path) -> Vec<Held> {
+    state(game).held
+}
+
+/// The user lets one blocked file in (after Obelisk showed them why it was blocked). Takes a safety backup first.
+pub fn allow_held(game: &Path, path: &str) -> Result<(), String> {
+    let mut st = state(game);
+    let h = st.held.iter().find(|h| h.path == path).cloned().ok_or("That file isn't blocked any more.")?;
+    if !blob_path(game, &h.hash).is_some_and(|b| b.is_file()) {
+        return Err("The blocked file's download is missing. Ask your friend to send their changes again.".into());
+    }
+    history::create(game, "safety", &format!("Before allowing {}", h.path), true)?;
+    history::put(game, &h.path, Some(&FileEntry { path: h.path.clone(), size: h.size, mtime_ms: 0, hash: h.hash.clone() }))?;
+    st.held.retain(|x| x.path != path);
+    save_state(game, &st)
 }
 
 /// Publish my changes as a changeset friends will pull. None when there's nothing to share.
 pub fn publish(game: &Path, me: &Member, label: &str) -> Result<Option<Changeset>, String> {
     let mut st = state(game);
+    let kept: Vec<FileEntry> = st.base.iter().filter(|b| st.held.iter().any(|h| h.path == b.path)).cloned().collect();
+    unheld(&mut st);
     let now = shared_files(game, &st.base)?;
     let changes = history::diff(game, &st.base, &now, true);
     if changes.is_empty() {
@@ -315,7 +357,10 @@ pub fn publish(game: &Path, me: &Member, label: &str) -> Result<Option<Changeset
     };
     write_changeset(game, &cs)?;
     st.applied.push(cs.id.clone());
+    let kept: Vec<FileEntry> = kept.into_iter().filter(|k| !now.iter().any(|n| n.path == k.path)).collect();
     st.base = now;
+    st.base.extend(kept);
+    st.base.sort_by(|a, c| a.path.cmp(&c.path));
     save_state(game, &st)?;
     Ok(Some(cs))
 }
@@ -340,6 +385,8 @@ pub struct Applied {
     pub applied: usize,
     /// Files I had changed myself that a friend's change replaced (my version is in the safety backup).
     pub conflicts: Vec<String>,
+    /// Friends' files Obelisk blocked (see held).
+    pub blocked: Vec<String>,
 }
 
 /// Apply friends' changesets (all incoming ones when `ids` is empty). Takes a safety backup first.
@@ -351,7 +398,7 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     if let Some(missing) = todo.iter().find(|c| !missing_blobs(game, c).is_empty()) {
         return Err(format!("Still downloading the files for {}'s changes. Try again in a moment.", missing.author_name));
     }
-    vet_incoming(game, &todo)?;
+    let blocked = vet_incoming(game, &todo)?;
     let who: Vec<&str> = todo.iter().map(|c| c.author_name.as_str()).collect::<HashSet<_>>().into_iter().collect();
     history::create(game, "safety", &format!("Before applying changes from {}", who.join(", ")), true)?;
 
@@ -360,10 +407,20 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     let mut out = Applied::default();
     for cs in &todo {
         for e in &cs.entries {
+            let was_held = st.held.iter().any(|h| h.path == e.path);
+            st.held.retain(|h| h.path != e.path);
+            if let Some(reasons) = e.hash.as_ref().and_then(|h| blocked.get(&(e.path.clone(), h.clone()))) {
+                // Not written: the user sees why on the pack's Collaborate page and may allow it there.
+                let hash = e.hash.clone().unwrap_or_default();
+                base.insert(e.path.clone(), FileEntry { path: e.path.clone(), size: e.size, mtime_ms: 0, hash: hash.clone() });
+                st.held.push(Held { path: e.path.clone(), hash, size: e.size, author_name: cs.author_name.clone(), reasons: reasons.clone() });
+                out.blocked.push(e.path.clone());
+                continue;
+            }
             let dest = history::real(game, &e.path).ok_or("invalid path")?;
             let mine = if dest.is_file() { history::hash_file(&dest).ok() } else { None };
             let shared = base.get(&e.path).map(|b| b.hash.clone());
-            if mine != shared && mine != e.hash {
+            if mine != shared && mine != e.hash && !was_held {
                 out.conflicts.push(e.path.clone());
             }
             let entry = e.hash.as_ref().map(|h| FileEntry { path: e.path.clone(), size: e.size, mtime_ms: 0, hash: h.clone() });
@@ -377,16 +434,24 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
         out.applied += 1;
     }
     // Re-read sizes/mtimes so the next "my changes" check doesn't rehash everything.
+    let held: HashSet<String> = st.held.iter().map(|h| h.path.clone()).collect();
     let mut b: Vec<FileEntry> = base.into_values().collect();
     b.sort_by(|a, c| a.path.cmp(&c.path));
     st.base = shared_files(game, &b)?.into_iter().filter(|f| b.iter().any(|x| x.path == f.path && x.hash == f.hash)).collect();
     // Files that differ from the shared state stay "my changes"; keep their shared version in base.
+    // Blocked files keep their shared version too (they never count as my changes).
     for x in b {
-        if !st.base.iter().any(|f| f.path == x.path) {
+        if held.contains(&x.path) {
+            st.base.retain(|f| f.path != x.path);
+            st.base.push(x);
+        } else if !st.base.iter().any(|f| f.path == x.path) {
             st.base.push(x);
         }
     }
     st.base.sort_by(|a, c| a.path.cmp(&c.path));
+    out.blocked.sort();
+    out.blocked.dedup();
+    out.blocked.retain(|p| held.contains(p));
     out.conflicts.sort();
     out.conflicts.dedup();
     save_state(game, &st)?;
@@ -394,8 +459,10 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
 }
 
 /// Friends' files are checked before they land, the same way as a share code's custom files: code is opened
-/// and refused on signs of malware (guard.rs), and Windows Defender scans everything that would arrive.
-fn vet_incoming(game: &Path, todo: &[Changeset]) -> Result<(), String> {
+/// and blocked on signs of malware (guard.rs), and Windows Defender scans everything that would arrive.
+/// Returns the blocked files ((path, hash) → why); a Defender threat stops the whole apply.
+fn vet_incoming(game: &Path, todo: &[Changeset]) -> Result<HashMap<(String, String), Vec<String>>, String> {
+    let mut blocked = HashMap::new();
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     for cs in todo {
         for e in &cs.entries {
@@ -408,7 +475,8 @@ fn vet_incoming(game: &Path, todo: &[Changeset]) -> Result<(), String> {
             if crate::guard::risky(&e.path) {
                 let f = crate::guard::inspect(&e.path, &bytes);
                 if !f.serious.is_empty() {
-                    return Err(format!("Not applying {}'s changes: {} {}.", cs.author_name, e.path, f.serious.join(", ")));
+                    blocked.insert((e.path.clone(), hash.clone()), f.serious);
+                    continue;
                 }
             }
             let to = dir.path().join(&e.path);
@@ -419,7 +487,7 @@ fn vet_incoming(game: &Path, todo: &[Changeset]) -> Result<(), String> {
     if let crate::guard::Scan::Threat(t) = crate::guard::defender_scan(dir.path()) {
         return Err(format!("Not applying these changes: Windows Defender found a threat in them ({t})."));
     }
-    Ok(())
+    Ok(blocked)
 }
 
 /// Don't apply a friend's changeset (keep my version). It won't be offered again.
@@ -749,6 +817,46 @@ mod tests {
         assert_eq!(inc.len(), 1);
         skip(&a, &inc[0].id).unwrap();
         assert!(incoming(&a).is_empty() && !a.join("mods/jei.jar").exists());
+    }
+
+    #[test]
+    fn blocked_files_wait_for_the_user() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("A/minecraft");
+        fs::create_dir_all(a.join("mods")).unwrap();
+        fs::write(a.join("mods/create.jar"), "create v1").unwrap();
+        fs::write(d.path().join("A/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        let mut jar = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        jar.start_file("x/Accounts.class", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut jar, b"\xca\xfe\xba\xbe .minecraft/microsoft_accounts.json").unwrap();
+        fs::write(a.join("mods/essential.jar"), jar.finish().unwrap().into_inner()).unwrap();
+        let alex = me("aaaaaaaaaaaa", "Alex");
+        let sam = me("bbbbbbbbbbbb", "Sam");
+        let share = start(&a, "Pack", "p1", "s3cret", &alex).unwrap();
+
+        let instances = d.path().join("B-instances");
+        fs::create_dir_all(&instances).unwrap();
+        let (cfg, pj) = instance_files(&a, "Pack").unwrap();
+        let (_, b) = create_instance(&instances, &share, &cfg, &pj).unwrap();
+        transfer(&a, &b);
+        let r = apply(&b, &[]).unwrap();
+        assert_eq!(r.blocked, vec!["mods/essential.jar".to_string()]);
+        assert!(b.join("mods/create.jar").is_file() && !b.join("mods/essential.jar").exists());
+        let h = held(&b);
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].author_name, "Alex");
+        assert!(h[0].reasons[0].contains("Microsoft accounts"), "{:?}", h[0].reasons);
+        // Its absence isn't sent back to friends as a deletion.
+        assert!(local_changes(&b).unwrap().is_empty());
+        fs::write(b.join("mods/jei.jar"), "jei").unwrap();
+        let cs = publish(&b, &sam, "").unwrap().unwrap();
+        assert!(cs.entries.iter().all(|e| e.path == "mods/jei.jar"), "{:?}", cs.entries);
+        assert_eq!(held(&b).len(), 1);
+
+        // The user allows it.
+        allow_held(&b, "mods/essential.jar").unwrap();
+        assert!(b.join("mods/essential.jar").is_file() && held(&b).is_empty());
+        assert!(local_changes(&b).unwrap().is_empty());
     }
 
     #[test]

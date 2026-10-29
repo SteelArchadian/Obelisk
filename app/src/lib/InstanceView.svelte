@@ -5,7 +5,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { cached, recheck, updateState, updatesFor } from "./updates.svelte";
   import { settings } from "./settings.svelte";
-  import { kill, play as startGame, running, starting } from "./play.svelte";
+  import { cancel, kill, play as startGame, running, starting } from "./play.svelte";
   import ConfigEditor from "./ConfigEditor.svelte";
   import Diagnosis from "./Diagnosis.svelte";
   import Icon from "./Icon.svelte";
@@ -563,7 +563,11 @@
           {#if running[current.id]}
             <button class="play stop" onclick={stop} title="Force-close the game (for when it's frozen)">{confirmKill ? "Click again to force-close" : "■ Stop"}</button>
           {:else}
-            <button class="play" disabled={starting[current.id]} onclick={play}>{starting[current.id] ? "Starting…" : "Play"}</button>
+            {#if starting[current.id]}
+              <button class="play stop" onclick={() => cancel(current)} title="Stop it starting (nothing is lost)">Starting… ✕ Cancel</button>
+            {:else}
+              <button class="play" onclick={play}>Play</button>
+            {/if}
           {/if}
         </div>
       </div>

@@ -52,7 +52,21 @@ export async function play(inst: Instance) {
     if (javaNote) toast(javaNote);
     toast(`Starting ${inst.name}… big packs can take a minute or two.`);
   } catch (e) {
+    const cancelled = !starting[inst.id];
     delete starting[inst.id];
+    if (!cancelled) toast(String(e));
+  }
+}
+
+/** Stop a game that's still starting (a misclick): nothing is lost, no world is open yet. */
+export async function cancel(inst: Instance) {
+  if (!starting[inst.id]) return;
+  delete starting[inst.id];
+  delete progress[inst.id];
+  try {
+    await invoke("cancel_launch", { instanceId: inst.id });
+    toast(`Cancelled starting ${inst.name}.`);
+  } catch (e) {
     toast(String(e));
   }
 }

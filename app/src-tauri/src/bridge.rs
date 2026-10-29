@@ -2,7 +2,7 @@
 //! app's own commands through the Obelisk window, exactly as a click would, so the window stays in step
 //! (lists refresh, settings saved by the UI aren't overwritten). `app-commands` lists them with their
 //! arguments and descriptions, read from this program's own source so the list never goes stale.
-//! Account sign-outs, the CurseForge key and permanent deletes stay with the user.
+//! Account sign-outs, the CurseForge key, permanent deletes and letting in blocked files stay with the user.
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -13,8 +13,8 @@ use tauri::Emitter;
 
 const SOURCES: &[&str] = &[include_str!("lib.rs"), include_str!("datadir.rs"), include_str!("selfupdate.rs"), include_str!("mcp.rs")];
 
-/// Never run for an assistant: secrets, accounts and deletes that can't be undone.
-const DENY: &[&str] = &["set_cf_key", "logout_account", "switch_account", "remove_pack", "remove_trash", "control_reply", "ai_connect"];
+/// Never run for an assistant: secrets, accounts, deletes that can't be undone, and letting in a file Obelisk blocked.
+const DENY: &[&str] = &["set_cf_key", "logout_account", "switch_account", "remove_pack", "remove_trash", "control_reply", "ai_connect", "share_allow_held"];
 
 /// Handled by the window itself rather than a Rust command.
 const UI: &[(&str, &str)] = &[
@@ -91,7 +91,7 @@ pub fn commands() -> Value {
 pub fn call(app: &tauri::AppHandle, args: &Value) -> Result<Value, String> {
     let command = args.get("command").and_then(|v| v.as_str()).ok_or("missing command")?.to_string();
     if DENY.contains(&command.as_str()) {
-        return Err(format!("{command} is for the user only (accounts, keys and permanent deletes)."));
+        return Err(format!("{command} is for the user only (accounts, keys, permanent deletes and blocked files)."));
     }
     if !UI.iter().any(|(n, _)| *n == command) && !names().contains(&command) {
         return Err(format!("no command {command}; see app-commands"));

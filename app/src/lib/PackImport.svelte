@@ -108,9 +108,11 @@
     stage = "installing";
     startWatch();
     try {
-      await invoke("share_join", { code: preview.invite });
+      const id = await invoke<string>("share_join", { code: preview.invite });
       await syncInstances();
-      toast(`You're collaborating on ${preview.name}. It's in your Library; changes come and go from Collaborate.`);
+      const held = (await invoke<{ held?: unknown[] }>("share_status", { instanceId: id }).catch(() => null))?.held?.length ?? 0;
+      toast(`You're collaborating on ${preview.name}. It's in your Library; changes come and go from Collaborate.`
+        + (held ? ` Obelisk blocked ${held} file${held === 1 ? "" : "s"}: review ${held === 1 ? "it" : "them"} under Collaborate → Blocked files.` : ""));
       close();
     } catch (e) { toast(String(e)); stage = "enter"; } finally { joining = false; }
   }

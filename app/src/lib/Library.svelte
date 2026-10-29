@@ -6,7 +6,7 @@
   import { openPackMenu } from "./PackMenu.svelte";
   import { syncInstances } from "./install";
   import { settings } from "./settings.svelte";
-  import { kill, play, progress, running, starting } from "./play.svelte";
+  import { cancel, kill, play, progress, running, starting } from "./play.svelte";
   import { checkAllDupes, dupeState, flagged } from "./dupes.svelte";
   import CollabBadge from "./CollabBadge.svelte";
 
@@ -227,9 +227,9 @@
   {#if joining !== null}
     <div class="join">
       <strong>Join a friend's shared pack</strong>
-      <span class="muted">Paste the invite code they sent you. Obelisk creates the profile and downloads the pack straight from them (they need Obelisk open).</span>
+      <span class="muted">Paste the Collaborate code they sent you. Obelisk creates the profile and downloads the pack straight from them (they need Obelisk open).</span>
       <div class="jrow">
-        <input class="search jcode" placeholder="obelisk1.…" bind:value={joining} onkeydown={(e) => e.key === "Enter" && join()} />
+        <input class="search jcode" placeholder="K7MQ2X" bind:value={joining} onkeydown={(e) => e.key === "Enter" && join()} />
         <button class="tool restore" disabled={joinBusy || !joining.trim()} onclick={join}>{joinBusy ? "Downloading the pack…" : "Join"}</button>
         <button class="tool" disabled={joinBusy} onclick={() => (joining = null)}>Cancel</button>
       </div>
@@ -284,11 +284,11 @@
               <strong>{inst.name}</strong>{#if running[inst.id]}<small class="now"><i></i>Playing now</small>{:else}<small>Played {ago(inst.lastLaunchMs).toLowerCase()}</small>{/if}
             </button>
             <button class="tile-play" class:busy={starting[inst.id]} class:live={running[inst.id]} class:armed={stopArmed === inst.id}
-              title={running[inst.id] ? (stopArmed === inst.id ? "Click again to close the game (unsaved progress since the last autosave is lost)" : `Stop ${inst.name}`) : starting[inst.id] ? "Starting…" : `Play ${inst.name}`}
-              aria-label={running[inst.id] ? `Stop ${inst.name}` : `Play ${inst.name}`} onclick={() => (running[inst.id] ? stop(inst) : play(inst))}>
+              title={running[inst.id] ? (stopArmed === inst.id ? "Click again to close the game (unsaved progress since the last autosave is lost)" : `Stop ${inst.name}`) : starting[inst.id] ? "Starting… click to cancel" : `Play ${inst.name}`}
+              aria-label={running[inst.id] ? `Stop ${inst.name}` : starting[inst.id] ? `Cancel starting ${inst.name}` : `Play ${inst.name}`} onclick={() => (running[inst.id] ? stop(inst) : starting[inst.id] ? cancel(inst) : play(inst))}>
               {#if running[inst.id] && stopArmed === inst.id}<span class="sure">Stop?</span>
               {:else if running[inst.id]}<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" /></svg><span class="sure">Stop</span>
-              {:else if starting[inst.id]}<span class="spin"></span>{:else}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>{/if}
+              {:else if starting[inst.id]}<span class="spin"></span><svg class="x" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" /></svg>{:else}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>{/if}
             </button>
           </div>
         </div>
@@ -372,6 +372,10 @@
   .tile-play svg { margin-left: 2px; }
   .tile-play.busy, .tile-play.live { opacity: 1; transform: scale(1); }
   .tile-play.live { background: var(--danger); }
+  .tile-play .x { display: none; margin-left: 0; }
+  .tile-play.busy:hover { background: var(--danger); }
+  .tile-play.busy:hover .spin { display: none; }
+  .tile-play.busy:hover .x { display: block; }
   .tile-play.live { width: auto; padding: 0 14px; border-radius: 20px; display: flex; gap: 6px; }
   .tile-play.live svg { margin-left: 0; }
   .sure { font-size: 13px; font-weight: 700; }

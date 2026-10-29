@@ -460,13 +460,15 @@ struct ShareStatus {
     share: Option<prism::share::Share>,
     incoming: Vec<prism::share::Changeset>,
     local: Vec<prism::history::Change>,
+    /// Friends' files Obelisk blocked (signs of malware), and why.
+    held: Vec<prism::share::Held>,
 }
 
 #[tauri::command]
 async fn share_status(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String) -> Result<ShareStatus, String> {
     let game = game(&instance_id)?;
     let Some(share) = prism::share::get(&game) else {
-        return Ok(ShareStatus { shared: false, me: String::new(), owner: String::new(), ended: prism::share::ended(&game), share: None, incoming: vec![], local: vec![] });
+        return Ok(ShareStatus { shared: false, me: String::new(), owner: String::new(), ended: prism::share::ended(&game), share: None, incoming: vec![], local: vec![], held: vec![] });
     };
     let me = share_net(&app, &net).await?.id();
     blocking(move || {
@@ -474,7 +476,7 @@ async fn share_status(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, in
         // Don't ship whole baselines to the UI: the changelog is what it shows.
         for c in &mut incoming { c.entries.clear(); }
         let owner = prism::share::owner(&game, &share);
-        Ok(ShareStatus { shared: true, me, owner, ended: None, local: prism::share::local_changes(&game)?, incoming, share: Some(share) })
+        Ok(ShareStatus { shared: true, me, owner, ended: None, local: prism::share::local_changes(&game)?, held: prism::share::held(&game), incoming, share: Some(share) })
     }).await
 }
 
@@ -597,6 +599,30 @@ async fn share_set_auto(instance_id: String, on: bool) -> Result<(), String> {
     let mut s = prism::share::get(&game).ok_or("not shared")?;
     s.auto_apply = on;
     prism::share::save(&game, &s)
+}
+
+/// Collaborate → Blocked files → Allow: let one blocked file in. Only the user can: Windows itself asks them, in a
+/// box that says why Obelisk blocked it, and the file is written only if they press Allow there. (Also never run
+/// for an assistant: see bridge.rs.)
+#[tauri::command]
+async fn share_allow_held(app: tauri::AppHandle, window: tauri::WebviewWindow, instance_id: String, path: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let game = game(&instance_id)?;
+    let h = prism::share::held(&game).into_iter().find(|h| h.path == path).ok_or("That file isn't blocked any more.")?;
+    let file = h.path.rsplit('/').next().unwrap_or(&h.path).to_string();
+    let text = format!(
+        "{} sent {file}, and Obelisk blocked it because it {}.
+
+That is how programs that steal accounts and passwords behave.         Some real mods do it for their own sign-in features, so allow it only if you know this mod and trust where it came from.
+
+        Allow {file} into this pack?",
+        if h.author_name.is_empty() { "A friend" } else { &h.author_name }, h.reasons.join(", and it "));
+    let allow = blocking(move || Ok(app.dialog().message(text).title("Blocked file").kind(MessageDialogKind::Warning).parent(&window)
+        .buttons(MessageDialogButtons::OkCancelCustom("Allow this file".into(), "Keep it blocked".into())).blocking_show())).await?;
+    if allow {
+        blocking(move || prism::share::allow_held(&game, &path)).await?;
+    }
+    Ok(allow)
 }
 
 /// The owner removes someone from a collaborative pack.
@@ -1334,6 +1360,7 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
         return Err("Another game is starting. Wait for it to open, or close it first.".into());
     }
     let mut starting = Starting(true);
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
     if let Some(other) = blocking(|| Ok(running_java())).await?.into_iter().map(|(id, _)| id).find(|id| game(id).is_ok()) {
         let name = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == other).map(|i| i.name).unwrap_or(other);
         return Err(format!("{name} is already running. Close it before starting another game."));
@@ -1371,6 +1398,10 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
     if healed { close_idle_prism().await?; }
     let before = game_windows();
     let click_ms = prism::timeline::now_ms();
+    // Cancelled during the checks and backup above: don't start it at all.
+    if CANCEL.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Err("Cancelled.".into());
+    }
     std::process::Command::new(prism::launcher_exe())
         .args(["--launch", &instance_id])
         .spawn()
@@ -1380,6 +1411,10 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
         use tauri::Emitter;
         let found = watch_launch(&app, &instance_id, quiet, &before);
         LAUNCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        if CANCEL.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": false, "cancelled": true }));
+            return;
+        }
         let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": found.is_some() }));
         // A crash report written since Play was clicked: the UI offers its diagnosis.
         let crashed = |app: &tauri::AppHandle| {
@@ -1505,6 +1540,27 @@ fn game_windows() -> Vec<isize> {
 /// is read for the profile tile ("launch-progress" {id, pct, text}) and, when quiet, moved off-screen
 /// and out of the taskbar; it stays "shown" there so its progress can still be read.
 /// None if Prism closed or nothing appeared within 30 minutes (a first launch can download a lot).
+/// The player pressed Cancel while their game was starting: the watcher stops and reports it.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Play → Cancel: stop a game that's still starting (a misclick, or the wrong pack). Prism's download/prepare
+/// step and the game's own process are both ended; nothing is lost, since no world is open yet.
+#[tauri::command]
+async fn cancel_launch(instance_id: String) -> Result<(), String> {
+    CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+    blocking(move || {
+        for (_, pid) in running_java().into_iter().filter(|(id, _)| *id == instance_id) {
+            kill_tree(pid.as_u32());
+        }
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        for (pid, _) in sys.processes().iter().filter(|(_, p)| p.name().eq_ignore_ascii_case("prismlauncher.exe")) {
+            kill_tree(pid.as_u32());
+        }
+        Ok(())
+    }).await
+}
+
 fn watch_launch(app: &tauri::AppHandle, id: &str, quiet: bool, before: &[isize]) -> Option<(u32, isize)> {
     use tauri::Emitter;
     let ui = uiautomation::UIAutomation::new().ok();
@@ -1515,6 +1571,9 @@ fn watch_launch(app: &tauri::AppHandle, id: &str, quiet: bool, before: &[isize])
     let started = std::time::Instant::now();
     let mut tick = 0u32;
     while started.elapsed() < std::time::Duration::from_secs(30 * 60) {
+        if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
         if tick % 5 == 0 {
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             prism = sys.processes().iter()
@@ -1967,7 +2026,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

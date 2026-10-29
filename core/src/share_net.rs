@@ -515,9 +515,13 @@ impl Net {
                         progress: impl Fn(ImportProgress) + Send + Sync + 'static) -> Result<ImportReport, String> {
         STOP.store(false, std::sync::atomic::Ordering::SeqCst);
         let (sess, m) = self.pack_session(code).await?;
-        if m.invite.is_some() {
+        if let Some(inv) = m.invite {
+            // A Collaborate code: join the pack instead (blocked files are listed as left out).
             sess.conn.close(0u32.into(), b"invite");
-            return Err("That's a Collaborate code: paste it into Import to join the pack.".into());
+            let id = self.join(&inv).await?;
+            let held = share::held(&self.instances.join(&id).join("minecraft"));
+            let left_out = held.iter().map(|h| format!("{} (blocked: {}; you can allow it on the pack's Collaborate page)", h.path, h.reasons.join(", "))).collect();
+            return Ok(ImportReport { id, left_out, scan: Scan::Clean });
         }
         let vet = match self.vet(&sess, code, &m, cf, &progress).await {
             Ok(v) => v,
@@ -647,9 +651,21 @@ impl Net {
         Ok(ImportReport { id, left_out, scan })
     }
 
-    /// Join a friend's pack from an invite code: creates the profile, downloads the pack, applies it.
+    /// The invite a short Collaborate code carries.
+    async fn invite_of(&self, code: &str) -> Result<String, String> {
+        let (sess, m) = self.pack_session(code).await?;
+        sess.conn.close(0u32.into(), b"invite");
+        m.invite.ok_or_else(|| "That's a pack code, not a Collaborate code: paste it into Import to install the pack.".to_string())
+    }
+
+    /// Join a friend's pack from an invite code (the long one, or the short code it's offered under): creates the profile, downloads the pack, applies it.
     /// Returns the new profile's folder name.
     pub async fn join(&self, code: &str) -> Result<String, String> {
+        let long;
+        let code = if code.trim().starts_with("obelisk1.") { code } else {
+            long = self.invite_of(&packcode::normalize(code).map_err(|_| "That isn't a Collaborate code. Codes are 6 letters and digits, like K7MQ2X.".to_string())?).await?;
+            &long
+        };
         let inv = share::parse_invite(code)?;
         if let Some(game) = share::find(&self.instances, &inv.pack_id) {
             return Err(format!("You already have this pack ({}).", game.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));

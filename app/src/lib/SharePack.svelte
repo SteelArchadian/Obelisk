@@ -11,7 +11,8 @@
   type Change = { kind: "added" | "removed" | "changed"; area: string; path: string; label: string };
   type Member = { id: string; name: string; lastSeenMs: number };
   type Changeset = { id: string; author: string; authorName: string; atMs: number; label: string; changes: Change[] };
-  type Status = { shared: boolean; me: string; owner: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[] };
+  type Status = { shared: boolean; me: string; owner: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[]; held?: Held[] };
+  type Held = { path: string; size: number; authorName: string; reasons: string[] };
 
   let { inst }: { inst: Instance } = $props();
   let st = $state<Status | null>(null);
@@ -64,14 +65,24 @@
     await load();
   });
   const apply = (ids: string[]) => run("apply", async () => {
-    const r = await invoke<{ applied: number; conflicts: string[] }>("share_apply", { instanceId: inst.id, ids });
-    toast(r.conflicts.length
+    const r = await invoke<{ applied: number; conflicts: string[]; blocked: string[] }>("share_apply", { instanceId: inst.id, ids });
+    toast(r.blocked.length
+      ? `Applied, except ${r.blocked.length} blocked file${r.blocked.length === 1 ? "" : "s"}: see Blocked files.`
+      : r.conflicts.length
       ? `Applied. ${r.conflicts.length} file${r.conflicts.length === 1 ? "" : "s"} you'd also changed now use their version; yours is in Backups.`
       : `Applied ${r.applied} change${r.applied === 1 ? "" : "s"}. Undo anytime from Backups.`);
     await load();
     window.dispatchEvent(new Event("share-changed"));
   });
   const skip = (id: string) => run("skip", async () => { await invoke("share_skip", { instanceId: inst.id, id }); await load(); window.dispatchEvent(new Event("share-changed")); });
+  // Only Windows' own box (opened by Obelisk, not this page) can let a blocked file in; see share_allow_held.
+  const allow = (h: Held) => run("allow", async () => {
+    if (await invoke<boolean>("share_allow_held", { instanceId: inst.id, path: h.path })) {
+      toast(`${h.path.split("/").pop()} is in the pack now. Undo anytime from Backups.`);
+      await load();
+      window.dispatchEvent(new Event("share-changed"));
+    }
+  });
   const setAuto = (on: boolean) => run("auto", async () => { await invoke("share_set_auto", { instanceId: inst.id, on }); await load(); });
   const remove = (m: Member) => run("remove", async () => {
     await invoke("share_remove", { instanceId: inst.id, member: m.id });
@@ -186,6 +197,19 @@
         <label class="row small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /> Apply friends' changes automatically (still backed up first)</label>
       </section>
 
+      {#if st.held?.length}
+        <section class="held">
+          <div class="row"><strong>Blocked files</strong><span class="muted small">Obelisk kept these out: they act like programs that steal accounts or passwords</span></div>
+          <ul class="changes">
+            {#each st.held as h (h.path)}
+              <li><span class="k removed">Blocked</span><span class="hp"><b>{h.path.split("/").pop()}</b> <span class="muted small">from {h.authorName || "a friend"}</span><br /><span class="small">It {h.reasons.join(", and it ")}.</span></span>
+                <div class="spacer"></div><button class="ghost" disabled={!!busy} onclick={() => allow(h)} title="Windows asks you to confirm">Review…</button></li>
+            {/each}
+          </ul>
+          <span class="muted small">Some real mods do this for their own sign-in features. Allow one only if you know it and trust where it came from.</span>
+        </section>
+      {/if}
+
       <section>
         <div class="row"><strong>History</strong><span class="muted small">Who changed what, newest first</span><div class="spacer"></div>
           <button class="ghost" disabled={busy === "history"} onclick={showHistory}>{historyOpen ? "Hide" : "Show"}</button></div>
@@ -248,6 +272,8 @@
   .member i.on { background: var(--mr); }
   .changes { list-style: none; padding: 0; font-size: 13px; }
   .changes li { display: flex; align-items: center; gap: 8px; }
+  .held .changes li { align-items: flex-start; }
+  .hp { min-width: 0; overflow-wrap: anywhere; }
   .k { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 3px; min-width: 64px; text-align: center; }
   .k.added { background: color-mix(in srgb, var(--mr) 18%, transparent); color: var(--mr); }
   .k.removed { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
