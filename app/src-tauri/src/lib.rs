@@ -973,7 +973,7 @@ async fn apply_update(mr: tauri::State<'_, Mr>, instance_id: String, info: serde
     blocking(move || {
         if provider == "modrinth" {
             let project_type = match kind.as_str() { "resourcepacks" => "resourcepack", "shaderpacks" => "shader", _ => "mod" };
-            let req = prism::modrinth::InstallRequest { project_id, project_type: project_type.into(), version_id: Some(update_id), loader_override: None };
+            let req = prism::modrinth::InstallRequest { project_id, project_type: project_type.into(), version_id: Some(update_id), loader_override: None, force: false };
             let existing = vec![prism::modrinth::Installed { project_id: req.project_id.clone(), version_id: String::new(), kind: kind.clone(), file_name }];
             mr.install(&game, &req, &inst.loader, &inst.minecraft, &existing)?;
             return Ok(None);

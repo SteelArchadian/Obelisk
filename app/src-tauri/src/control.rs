@@ -495,7 +495,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             if info.provider == "modrinth" {
                 let project_type = match info.kind.as_str() { "resourcepacks" => "resourcepack", "shaderpacks" => "shader", _ => "mod" };
                 let req = prism::modrinth::InstallRequest { project_id: info.project_id.clone(), project_type: project_type.into(),
-                    version_id: Some(up.id.clone()), loader_override: None };
+                    version_id: Some(up.id.clone()), loader_override: None, force: false };
                 let existing = vec![prism::modrinth::Installed { project_id: info.project_id.clone(), version_id: String::new(), kind: info.kind.clone(), file_name: file.into() }];
                 mr.install(&dir, &req, &loader, &mc, &existing)?;
             } else {
@@ -532,7 +532,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
                 }
             } else {
                 let existing = mr.installed(&dir, &cache)?;
-                let req = prism::modrinth::InstallRequest { project_id: project.clone(), project_type: "mod".into(), version_id: version, loader_override: None };
+                let req = prism::modrinth::InstallRequest { project_id: project.clone(), project_type: "mod".into(), version_id: version, loader_override: None, force: false };
                 mr.install(&dir, &req, &loader, &mc, &existing)?
             };
             changed(&dir, &format!("mod-install {project}"));

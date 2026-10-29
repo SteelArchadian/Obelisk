@@ -277,7 +277,7 @@ impl Client {
         }
         crate::delete_content(game, kind, old_file, |p| fs::remove_file(p).map_err(|e| e.to_string()))?;
         // An update swaps one file for its own newer one: no duplicate check (an empty index).
-        self.place(game, &project, &file, kind, &mut Some(Default::default()))?;
+        self.place(game, &project, &file, kind, &mut Some(Default::default()), None)?;
         Ok(None)
     }
 
@@ -302,18 +302,32 @@ impl Client {
     /// download-blocked are skipped (reported in the names list with a note).
     pub fn install(&self, game: &Path, mod_id: u64, file_id: Option<u64>, loader: &str, mc: &str, installed: &HashSet<u64>) -> Result<InstallOutcome, String> {
         let project = self.project(mod_id)?;
-        let file = match file_id {
-            Some(f) => self.file(mod_id, f)?,
-            None => pick_file(&self.files(mod_id, mc, if is_mod_class(&project) { loader } else { "" })?)
-                .ok_or_else(|| format!("no file for Minecraft {mc} / {loader}"))?,
+        let candidates = match file_id {
+            Some(f) => vec![self.file(mod_id, f)?],
+            None => by_preference(self.files(mod_id, mc, if is_mod_class(&project) { loader } else { "" })?),
         };
+        if candidates.is_empty() {
+            return Err(format!("no file for Minecraft {mc} / {loader}"));
+        }
         let folder = folder_for_class(project["classId"].as_u64().unwrap_or(6)).ok_or("this kind of project can't be installed into a profile yet")?;
+        // Jars are checked against the pack's loader and Minecraft version before they go in (see fit.rs).
+        let pack = (folder == "mods").then(|| crate::fit::pack(&game.join("mods"), loader, &crate::loader_version_of(game), mc));
         let mut names = Vec::new();
         let mut have = None;
         let mut seen = installed.clone();
         seen.insert(mod_id);
 
-        // Dependencies first, so a blocked root still gets its libraries.
+        let name = project["name"].as_str().unwrap_or_default().to_string();
+        let (placed_root, file) = self.place_first(game, &project, candidates, folder, &mut have, pack.as_ref())?;
+        let placed = &placed_root;
+        if let Placed::AlreadyThere(other) = placed {
+            return Err(format!("{name} is already installed as {other} (probably from the other site); not adding a second copy"));
+        }
+        if let Placed::Unfit(why) = placed {
+            return Err(why.clone());
+        }
+
+        // Its required dependencies too (also when the root itself is download-blocked).
         let mut queue = required_deps(&file);
         let mut depth = 0;
         while !queue.is_empty() && depth < 8 {
@@ -323,14 +337,25 @@ impl Client {
                     continue;
                 }
                 let dp = self.project(dep)?;
-                let Some(df) = pick_file(&self.files(dep, mc, loader)?) else {
-                    names.push(format!("{} (no {mc} file)", dp["name"].as_str().unwrap_or("dependency")));
+                let dname = dp["name"].as_str().unwrap_or("dependency").to_string();
+                let files = by_preference(self.files(dep, mc, loader)?);
+                if files.is_empty() {
+                    names.push(format!("{dname} (no {mc} file)"));
                     continue;
-                };
-                match self.place(game, &dp, &df, "mods", &mut have)? {
-                    Placed::Yes => names.push(dp["name"].as_str().unwrap_or_default().to_string()),
+                }
+                let (placed, df) = self.place_first(game, &dp, files, "mods", &mut have, pack.as_ref())?;
+                match placed {
+                    Placed::Yes => names.push(dname),
                     Placed::AlreadyThere(_) => {}
-                    Placed::Blocked => names.push(format!("{} (download it on curseforge.com)", dp["name"].as_str().unwrap_or_default())),
+                    Placed::Blocked => names.push(format!("{dname} (download it on curseforge.com)")),
+                    Placed::Unfit(why) => {
+                        // Without it the game would crash, so the mod doesn't stay either.
+                        if placed_root == Placed::Yes {
+                            let jar = file["fileName"].as_str().unwrap_or_default();
+                            crate::delete_content(game, folder, jar, |f| fs::remove_file(f).map_err(|e| e.to_string()))?;
+                        }
+                        return Err(format!("{name} needs {dname}, but {why}"));
+                    }
                 }
                 next.extend(required_deps(&df));
             }
@@ -338,12 +363,7 @@ impl Client {
             depth += 1;
         }
 
-        let name = project["name"].as_str().unwrap_or_default().to_string();
-        let placed = self.place(game, &project, &file, folder, &mut have)?;
-        if let Placed::AlreadyThere(other) = placed {
-            return Err(format!("{name} is already installed as {other} (probably from the other site); not adding a second copy"));
-        }
-        if placed == Placed::Yes {
+        if placed_root == Placed::Yes {
             names.insert(0, name);
             Ok(InstallOutcome::Done { names })
         } else {
@@ -357,11 +377,26 @@ impl Client {
         }
     }
 
+    /// Place the first of these files (best first) that loads in the pack; when none does, the newest one's reason.
+    fn place_first(&self, game: &Path, project: &Value, files: Vec<Value>, folder: &str,
+                   have: &mut Option<std::collections::HashMap<String, Vec<String>>>, pack: Option<&crate::fit::Pack>) -> Result<(Placed, Value), String> {
+        let mut first_why = None;
+        let tried = files.len();
+        for f in files {
+            match self.place(game, project, &f, folder, have, pack)? {
+                Placed::Unfit(why) => { first_why.get_or_insert(why); }
+                placed => return Ok((placed, f)),
+            }
+        }
+        let why = first_why.unwrap_or_default();
+        Ok((Placed::Unfit(if tried > 1 { format!("{why} (and the {} files before it don't fit either)", tried - 1) } else { why }), Value::Null))
+    }
+
     /// Download a file into `game/folder` and write its Prism metadata. Blocked when the author
     /// disabled third-party downloads (no URL); AlreadyThere (nothing written) when another jar
     /// already provides the same mod id, e.g. the Modrinth copy. `have` caches the folder's mod ids.
     fn place(&self, game: &Path, project: &Value, file: &Value, folder: &str,
-             have: &mut Option<std::collections::HashMap<String, Vec<String>>>) -> Result<Placed, String> {
+             have: &mut Option<std::collections::HashMap<String, Vec<String>>>, pack: Option<&crate::fit::Pack>) -> Result<Placed, String> {
         let Some(url) = file["downloadUrl"].as_str().filter(|u| !u.is_empty()) else { return Ok(Placed::Blocked) };
         let name = file["fileName"].as_str().unwrap_or_default();
         if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
@@ -375,6 +410,13 @@ impl Client {
             return Err(format!("{name}: hash mismatch"));
         }
         let dir = game.join(folder);
+        if let Some(meta) = pack.and_then(|_| crate::fit::read_bundle(&bytes)) {
+            let unloadable = crate::fit::check(&meta, pack.unwrap(), &[]).into_iter().find(|p| matches!(p, crate::fit::Problem::Unloadable(_)));
+            if let Some(p) = unloadable {
+                let label = format!("{} ({name})", project["name"].as_str().unwrap_or_default());
+                return Ok(Placed::Unfit(p.describe(&label)));
+            }
+        }
         if folder == "mods" {
             let ids = crate::dupes::own_ids_of(&bytes);
             let index = have.get_or_insert_with(|| crate::dupes::index(&dir));
@@ -395,6 +437,8 @@ enum Placed {
     Yes,
     Blocked,
     AlreadyThere(String),
+    /// Won't load in this pack (why).
+    Unfit(String),
 }
 
 fn is_mod_class(project: &Value) -> bool {
@@ -408,6 +452,13 @@ fn required_deps(file: &Value) -> Vec<u64> {
 }
 
 /// Newest release file (files come newest first), else newest of any type.
+/// Files to try in order: releases newest first, then the rest; at most six.
+fn by_preference(mut files: Vec<Value>) -> Vec<Value> {
+    files.sort_by_key(|f| f["releaseType"].as_u64() != Some(1)); // stable: keeps newest first within each
+    files.truncate(6);
+    files
+}
+
 pub fn pick_file(files: &[Value]) -> Option<Value> {
     files.iter().find(|f| f["releaseType"].as_u64() == Some(1)).or_else(|| files.first()).cloned()
 }

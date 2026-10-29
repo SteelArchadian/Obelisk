@@ -7,6 +7,7 @@ pub mod curseforge;
 pub mod dupes;
 pub mod guard;
 pub mod held;
+pub mod fit;
 pub mod instdir;
 pub mod packcode;
 pub mod lightning;
@@ -164,6 +165,11 @@ fn read_instance(dir: &Path) -> Instance {
         }
     }
     inst
+}
+
+/// The loader version of the instance a game folder belongs to (empty when it can't be read).
+pub fn loader_version_of(game: &Path) -> String {
+    game.parent().map(|d| read_instance(d).loader_version).unwrap_or_default()
 }
 
 /// The `.minecraft` folder of an instance (Prism uses `minecraft` or `.minecraft`).

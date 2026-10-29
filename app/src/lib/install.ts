@@ -1,3 +1,4 @@
+import { ask } from "@tauri-apps/plugin-dialog";
 import { api, type Hit, type Installed, type Instance, type Kind, type ProjectType, type Tags } from "./api";
 import { app, toast, toastError, pushOverlay, type PendingInstall } from "./state.svelte";
 import { cfToHit, manualDownload } from "./cf";
@@ -146,9 +147,18 @@ export async function install(p: PendingInstall): Promise<boolean> {
       await refreshInstalled();
       return true;
     }
-    const names = await api.install(app.target.id, {
-      projectId: hit.project_id, projectType: hit.project_type, versionId: p.versionId, loaderOverride: p.loaderOverride,
-    }, p.world);
+    const req = { projectId: hit.project_id, projectType: hit.project_type, versionId: p.versionId, loaderOverride: p.loaderOverride };
+    let names: string[];
+    try {
+      names = await api.install(app.target.id, req, p.world);
+    } catch (e) {
+      // The mod says it doesn't work with something in the pack: the player decides.
+      const msg = String(e);
+      if (!msg.startsWith("confirm: ")) throw e;
+      const go = await ask(`${msg.slice(9)}\n\nInstall it anyway? It may crash the game.`,{ title: `Install ${hit.title}?`, kind: "warning", okLabel: "Install anyway", cancelLabel: "Cancel" });
+      if (!go) return false;
+      names = await api.install(app.target.id, { ...req, force: true }, p.world);
+    }
     const extra = names.length > 1 ? ` (+ required: ${names.slice(1).join(", ")})` : "";
     toast(`Installed ${names[0]} into ${into}${extra}.`);
     recheck(target.id).catch(() => {});
