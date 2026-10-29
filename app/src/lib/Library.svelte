@@ -156,7 +156,7 @@
 
     {#if searching}
       <!-- svelte-ignore a11y_autofocus -->
-      <input class="search" placeholder="Search profiles…" bind:value={filter} autofocus onblur={() => !filter && (searching = false)} />
+      <input type="search" class="search" placeholder="Search profiles…" bind:value={filter} autofocus onblur={() => !filter && (searching = false)} />
     {:else}
       <button class="icon" title="Search" onclick={() => (searching = true)}>
         <svg viewBox="0 0 24 24" width="17" height="17"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" /><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
@@ -233,7 +233,7 @@
       <strong>Join a friend's shared pack</strong>
       <span class="muted">Paste the Collaborate code they sent you. Obelisk creates the profile and downloads the pack straight from them (they need Obelisk open).</span>
       <div class="jrow">
-        <input class="search jcode" placeholder="K7MQ2X" bind:value={joining} onkeydown={(e) => e.key === "Enter" && join()} />
+        <input type="search" class="search jcode" placeholder="K7MQ2X" bind:value={joining} onkeydown={(e) => e.key === "Enter" && join()} />
         <button class="tool restore" disabled={joinBusy || !joining.trim()} onclick={join}>{joinBusy ? "Downloading the pack…" : "Join"}</button>
         <button class="tool" disabled={joinBusy} onclick={() => (joining = null)}>Cancel</button>
       </div>

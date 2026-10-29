@@ -118,7 +118,7 @@
         {#each [["all", `All (${mods.length})`], ["client", `Client only (${counts.client})`], ["check", `To check (${counts.check})`], ["server", `Server only (${counts.serverOnly})`]] as [id, label] (id)}
           <button class="chip" class:on={view === id} onclick={() => (view = id as typeof view)}>{label}</button>
         {/each}
-        <input class="search" placeholder="Find a mod…" bind:value={query} />
+        <input type="search" class="search" placeholder="Find a mod…" bind:value={query} />
       </div>
 
       <div class="list">

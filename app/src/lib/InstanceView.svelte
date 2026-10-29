@@ -751,7 +751,7 @@
             </div>
           {/if}
         </div>
-        <input class="search" placeholder="Search {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()} or authors…" bind:value={query} />
+        <input type="search" class="search" placeholder="Search {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()} or authors…" bind:value={query} />
       </div>
 
       <div class="table" role="table" style:--cols={colTemplate} bind:clientWidth={tableW}>

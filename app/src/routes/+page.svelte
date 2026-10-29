@@ -140,6 +140,26 @@
     return () => clearInterval(timer);
   });
 
+  // Esc in a text box: a search or code box is emptied and left; any other box is just left (its text is kept,
+  // so a name or JVM arguments aren't lost). Runs first, so an emptied box doesn't also close its dialog.
+  $effect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      const t = e.target;
+      if (e.key !== "Escape" || !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) return;
+      if (t instanceof HTMLInputElement && !["text", "search", ""].includes(t.type)) return;
+      const clears = t instanceof HTMLInputElement && (t.type === "search" || t.closest(".searchbox") !== null);
+      if (clears && t.value) {
+        t.value = "";
+        t.dispatchEvent(new Event("input", { bubbles: true }));
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      t.blur();
+    };
+    window.addEventListener("keydown", onEsc, true);
+    return () => window.removeEventListener("keydown", onEsc, true);
+  });
+
   // Files Obelisk blocked in a pack: asked about as soon as a join, import or friend's change brings one
   // ("held-files" from the backend), or from the pack's page ("held-review").
   let heldFor = $state<string | null>(null);
@@ -384,6 +404,12 @@
 
 <style>
   /* Native dropdown lists: themed, with the picked option clearly marked. */
+  /* Search boxes: a themed ✕ that empties them (Esc does too, see the Escape handler). */
+  :global(input[type="search"]::-webkit-search-cancel-button) {
+    -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-left: 6px; cursor: pointer; background: var(--muted);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 2l8 8M10 2l-8 8' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  :global(input[type="search"]::-webkit-search-cancel-button:hover) { background: var(--text); }
   :global(select option) { background: var(--panel); color: var(--text); }
   :global(select option:checked) { background: var(--accent); color: #fff; font-weight: 600; }
   /* Themes: Obelisk (dark, default) and Obelisk Light. */

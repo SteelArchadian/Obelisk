@@ -76,7 +76,7 @@
     <div class="dialog" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && (app.picker = null)}>
       <button class="x" onclick={() => (app.picker = null)} aria-label="Close">✕</button>
       <h3>Install {app.picker.hit.title}</h3>
-      <input class="search wide" placeholder="Search for profile" bind:value={filter} />
+      <input type="search" class="search wide" placeholder="Search for profile" bind:value={filter} />
       <div class="list">
         {#each shown as inst (inst.id)}
           {@const c = compat(app.picker.hit, inst)}

@@ -168,7 +168,7 @@
         {#if path}
           <div class="bar">
             {#if formOk && !raw}
-              <input class="search" placeholder="Search settings…" bind:value={filter} />
+              <input type="search" class="search" placeholder="Search settings…" bind:value={filter} />
             {:else}<span class="muted grow">{path}</span>{/if}
             {#if formOk}<button class="ghost" onclick={() => (raw = !raw)}>{raw ? "Back to settings" : "Edit as text"}</button>{/if}
           </div>
