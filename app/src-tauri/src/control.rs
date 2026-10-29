@@ -904,6 +904,24 @@ fn test_rules(dir: &Path) {
     // glitches Wallpaper Engine while it's parked off-screen.
     let _ = prism::window::set(dir, prism::window::Mode::Windowed);
     afk_cinema_off(dir);
+    essential_no_update(dir);
+}
+
+/// Essential's loader asks in a window of its own whether to update Essential ("with-prompt"), and a quiet bench
+/// launch waits on that window forever. Copies never update it: autoUpdate=false in its own config file
+/// (essential/essential-loader.properties), every other line kept.
+fn essential_no_update(dir: &Path) {
+    let installed = dir.join("essential").is_dir() || std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
+        .any(|e| e.file_name().to_string_lossy().to_ascii_lowercase().starts_with("essential"));
+    if !installed { return }
+    let file = dir.join("essential").join("essential-loader.properties");
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    let mut lines: Vec<String> = text.lines().filter(|l| l.split('=').next().map(str::trim) != Some("autoUpdate")).map(String::from).collect();
+    lines.push("autoUpdate=false".into());
+    let _ = std::fs::create_dir_all(dir.join("essential"));
+    let _ = std::fs::write(&file, lines.join("
+") + "
+");
 }
 
 /// Absolute AFK Cinema's master switch is `general.enabled` in a commented JSON file, so it's switched as text
