@@ -461,7 +461,7 @@ struct ShareStatus {
     incoming: Vec<prism::share::Changeset>,
     local: Vec<prism::history::Change>,
     /// Friends' files Obelisk blocked (signs of malware), and why.
-    held: Vec<prism::share::Held>,
+    held: Vec<prism::held::Held>,
 }
 
 #[tauri::command]
@@ -476,7 +476,7 @@ async fn share_status(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, in
         // Don't ship whole baselines to the UI: the changelog is what it shows.
         for c in &mut incoming { c.entries.clear(); }
         let owner = prism::share::owner(&game, &share);
-        Ok(ShareStatus { shared: true, me, owner, ended: None, local: prism::share::local_changes(&game)?, held: prism::share::held(&game), incoming, share: Some(share) })
+        Ok(ShareStatus { shared: true, me, owner, ended: None, local: prism::share::local_changes(&game)?, held: prism::held::list(&game), incoming, share: Some(share) })
     }).await
 }
 
@@ -525,6 +525,7 @@ async fn pack_code_stop(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, 
 async fn pack_code_preview(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<prism::share_net::PackPreview, String> {
     use tauri::Emitter;
     let code = prism::packcode::normalize(&code)?;
+    sweep_half_made().await;
     let cf = cf_client().map(std::sync::Arc::new);
     let a = app.clone();
     share_net(&app, &net).await?.preview(&code, cf, move |p| { let _ = a.emit("pack-import", p); }).await
@@ -542,9 +543,44 @@ fn pack_code_cancel() {
 async fn pack_code_import(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String, with_custom: bool) -> Result<prism::share_net::ImportReport, String> {
     use tauri::Emitter;
     let code = prism::packcode::normalize(&code)?;
+    sweep_half_made().await;
     let a = app.clone();
     let cf = cf_client().map(std::sync::Arc::new);
-    share_net(&app, &net).await?.import(&code, with_custom, cf, move |p| { let _ = a.emit("pack-import", p); }).await
+    let r = share_net(&app, &net).await?.import(&code, with_custom, cf, move |p| { let _ = a.emit("pack-import", p); }).await?;
+    announce_held(&app, &r.id);
+    Ok(r)
+}
+
+/// A join or import that failed half-way can leave a folder that isn't a profile (a file was in use while it was
+/// removed): it goes to the Recycle Bin, so it can't block joining that pack again.
+async fn sweep_half_made() {
+    let _ = blocking(|| {
+        for p in prism::share::half_made(&prism::instances_dir(&prism::data_dir())) {
+            let _ = trash::delete(&p);
+        }
+        Ok(())
+    }).await;
+}
+
+/// The window asks the user about files Obelisk blocked in this profile (held.rs), if any wait for an answer.
+fn announce_held(app: &tauri::AppHandle, instance_id: &str) {
+    use tauri::Emitter;
+    let Ok(game) = game(instance_id) else { return };
+    if prism::held::list(&game).iter().any(|h| !h.kept) {
+        let _ = app.emit("held-files", serde_json::json!({ "id": instance_id }));
+    }
+}
+
+/// The files Obelisk blocked in a profile, and why.
+#[tauri::command]
+async fn held_list(instance_id: String) -> Result<Vec<prism::held::Held>, String> {
+    Ok(prism::held::list(&game(&instance_id)?))
+}
+
+/// "Keep it blocked": the window stops asking about it (it stays listed on the profile's page).
+#[tauri::command]
+async fn held_keep(instance_id: String, path: String) -> Result<(), String> {
+    prism::held::keep(&game(&instance_id)?, &path)
 }
 
 /// Share → Export as zip: the whole pack zipped into Downloads, then shown in Explorer.
@@ -583,9 +619,11 @@ async fn share_sync(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>) -> R
 }
 
 #[tauri::command]
-async fn share_apply(instance_id: String, ids: Vec<String>) -> Result<prism::share::Applied, String> {
+async fn share_apply(app: tauri::AppHandle, instance_id: String, ids: Vec<String>) -> Result<prism::share::Applied, String> {
     let game = game(&instance_id)?;
-    blocking(move || prism::share::apply(&game, &ids)).await
+    let r = blocking(move || prism::share::apply(&game, &ids)).await?;
+    if !r.blocked.is_empty() { announce_held(&app, &instance_id); }
+    Ok(r)
 }
 
 #[tauri::command]
@@ -608,7 +646,7 @@ async fn share_set_auto(instance_id: String, on: bool) -> Result<(), String> {
 async fn share_allow_held(app: tauri::AppHandle, window: tauri::WebviewWindow, instance_id: String, path: String) -> Result<bool, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     let game = game(&instance_id)?;
-    let h = prism::share::held(&game).into_iter().find(|h| h.path == path).ok_or("That file isn't blocked any more.")?;
+    let h = prism::held::list(&game).into_iter().find(|h| h.path == path).ok_or("That file isn't blocked any more.")?;
     let file = h.path.rsplit('/').next().unwrap_or(&h.path).to_string();
     let text = format!(
         "{} sent {file}, and Obelisk blocked it because it {}.
@@ -616,11 +654,11 @@ async fn share_allow_held(app: tauri::AppHandle, window: tauri::WebviewWindow, i
 That is how programs that steal accounts and passwords behave.         Some real mods do it for their own sign-in features, so allow it only if you know this mod and trust where it came from.
 
         Allow {file} into this pack?",
-        if h.author_name.is_empty() { "A friend" } else { &h.author_name }, h.reasons.join(", and it "));
+        if h.from.is_empty() { "The person who shared this pack" } else { &h.from }, h.reasons.join(", and it "));
     let allow = blocking(move || Ok(app.dialog().message(text).title("Blocked file").kind(MessageDialogKind::Warning).parent(&window)
         .buttons(MessageDialogButtons::OkCancelCustom("Allow this file".into(), "Keep it blocked".into())).blocking_show())).await?;
     if allow {
-        blocking(move || prism::share::allow_held(&game, &path)).await?;
+        blocking(move || prism::held::allow(&game, &path)).await?;
     }
     Ok(allow)
 }
@@ -679,7 +717,10 @@ async fn collab_code(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, ins
 
 #[tauri::command]
 async fn share_join(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<String, String> {
-    share_net(&app, &net).await?.join(&code).await
+    sweep_half_made().await;
+    let id = share_net(&app, &net).await?.join(&code).await?;
+    announce_held(&app, &id);
+    Ok(id)
 }
 
 // ---- backups (change-based; see core/src/history.rs)
@@ -1966,14 +2007,21 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 use tauri::Emitter;
+                // Blocked files still waiting for an answer (from before Obelisk was closed): ask once the window is up.
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                sweep_half_made().await;
+                for i in prism::list_instances(&prism::data_dir()) { announce_held(&handle, &i.id); }
                 loop {
                     let any = prism::share::all(&prism::instances_dir(&prism::data_dir())).iter().any(|(_, _, s)| s.members.len() > 1);
                     if any {
                         if let Ok(n) = share_net(&handle, &net).await {
-                            let got: usize = n.sync_all().await.into_iter().map(|(_, c)| c).sum();
+                            let synced = n.sync_all().await;
+                            let got: usize = synced.iter().map(|(_, c)| c).sum();
                             if got > 0 {
                                 let _ = handle.emit("share-incoming", got);
                             }
+                            // Auto-applied changes may have brought blocked files.
+                            for (id, _) in synced.iter().filter(|(_, c)| *c > 0) { announce_held(&handle, id); }
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -2026,7 +2074,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

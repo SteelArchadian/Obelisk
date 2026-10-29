@@ -1,7 +1,7 @@
 <script lang="ts">
   import { settings } from "./settings.svelte";
   import { onMount, tick } from "svelte";
-  import { api, compact, ago, envLabel, versionsLabel, TYPES, type Hit, type Tags, type ProjectType } from "./api";
+  import { api, compact, ago, envLabel, initials, versionsLabel, TYPES, type Hit, type Tags, type ProjectType } from "./api";
   import { app, pushOverlay } from "./state.svelte";
   import { tagsOnce, loadersOf as loaderOf, cap, isInstalled } from "./install";
   import { cfSearchAvailable, cfToHit, mergeHits } from "./cf";
@@ -236,7 +236,7 @@
       <div class="tiles" style:--tile="{tile}px">
         {#each shown as h (h.project_id)}
           <button class="tilecard" onclick={() => open(h)}>
-            <div class="art">{#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" decoding="async" />{/if}</div>
+            <div class="art">{#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" decoding="async" />{:else}<span class="ini">{initials(h.title)}</span>{/if}</div>
             <span class="tile-src"><SourceBadges hit={h} /></span>
             <strong>{h.title}</strong><small>By {h.author}</small>
           </button>
@@ -246,7 +246,7 @@
       {#each shown as h (h.project_id)}
         <div class="card" class:compact={view === "table"}>
           <button class="icon" onclick={() => open(h)} aria-label="Open {h.title}">
-            {#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" decoding="async" />{/if}
+            {#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" decoding="async" />{:else}<span class="ini">{initials(h.title)}</span>{/if}
           </button>
           <div class="body">
             <div class="title-row">
@@ -312,6 +312,8 @@
   .icon { width: 108px; height: 108px; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--panel-2); }
   .compact .icon { width: 44px; height: 44px; }
   .icon img, .art img { width: 100%; height: 100%; object-fit: cover; }
+  /* The project has no picture on its site: its initials instead. */
+  .icon .ini, .art .ini { width: 100%; height: 100%; display: grid; place-items: center; font-size: 30px; font-weight: 700; color: var(--muted); }
   .body { min-width: 0; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
   .title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .title { background: none; border: 0; padding: 0; font-size: 17px; font-weight: 600; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

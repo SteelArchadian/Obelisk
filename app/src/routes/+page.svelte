@@ -38,6 +38,7 @@
   import SharePack from "$lib/SharePack.svelte";
   import PackShare from "$lib/PackShare.svelte";
   import PackImport from "$lib/PackImport.svelte";
+  import HeldReview from "$lib/HeldReview.svelte";
   import SettingsPage from "$lib/SettingsPage.svelte";
   import Bell from "$lib/Bell.svelte";
   import Welcome from "$lib/Welcome.svelte";
@@ -137,6 +138,17 @@
   $effect(() => {
     const timer = setInterval(() => backgroundCheck(app.instances), 12 * 60 * 60 * 1000);
     return () => clearInterval(timer);
+  });
+
+  // Files Obelisk blocked in a pack: asked about as soon as a join, import or friend's change brings one
+  // ("held-files" from the backend), or from the pack's page ("held-review").
+  let heldFor = $state<string | null>(null);
+  $effect(() => {
+    let un: (() => void) | undefined;
+    import("@tauri-apps/api/event").then(({ listen }) => listen<{ id: string }>("held-files", (e) => (heldFor ??= e.payload.id))).then((u) => (un = u)).catch(() => {});
+    const open = (e: Event) => (heldFor = (e as CustomEvent<string>).detail);
+    window.addEventListener("held-review", open);
+    return () => { un?.(); window.removeEventListener("held-review", open); };
   });
 
   // Shared packs: badges for friends' changes waiting for review (the backend pulls every minute).
@@ -363,6 +375,7 @@
 {#if app.sharePack}<SharePack inst={app.sharePack} />{/if}
 {#if app.packShare}<PackShare inst={app.packShare} />{/if}
 {#if app.packImport !== null}<PackImport />{/if}
+{#if heldFor}<HeldReview id={heldFor} onclose={() => { heldFor = null; window.dispatchEvent(new Event("held-changed")); }} />{/if}
 <PackMenu />
 {#if showWelcome && !settings.welcomed}<Welcome />{/if}
 <WorkBar />

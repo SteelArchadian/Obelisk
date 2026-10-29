@@ -140,21 +140,18 @@ struct State {
     applied: Vec<String>,
     /// The shared state as of the last publish/apply: local edits since then are "my changes".
     base: Vec<FileEntry>,
-    /// Friends' files that showed signs of malware: not written, kept until the user allows one or a newer
-    /// change replaces it. They're in base (as the shared version) but never count as my changes.
-    #[serde(default)]
-    held: Vec<Held>,
+    /// Only in 0.2.26: blocked files were listed here. They move to held.rs when read.
+    #[serde(default, skip_serializing)]
+    held: Vec<OldHeld>,
 }
 
-/// A friend's file Obelisk blocked, and why. Only the user can let it in (see allow_held).
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Held {
-    pub path: String,
-    pub hash: String,
-    pub size: u64,
-    pub author_name: String,
-    pub reasons: Vec<String>,
+struct OldHeld {
+    path: String,
+    hash: String,
+    author_name: String,
+    reasons: Vec<String>,
 }
 
 fn dir(game: &Path) -> PathBuf {
@@ -181,7 +178,16 @@ pub fn save(game: &Path, s: &Share) -> Result<(), String> {
 }
 
 fn state(game: &Path) -> State {
-    read_json(&dir(game).join("state.json")).unwrap_or_default()
+    let mut st: State = read_json(&dir(game).join("state.json")).unwrap_or_default();
+    if !st.held.is_empty() {
+        for h in st.held.drain(..) {
+            if let Some(bytes) = blob_path(game, &h.hash).and_then(|b| fs::read(b).ok()) {
+                let _ = crate::held::put(game, &h.path, &bytes, &h.author_name, h.reasons);
+            }
+        }
+        let _ = save_state(game, &st);
+    }
+    st
 }
 
 fn save_state(game: &Path, s: &State) -> Result<(), String> {
@@ -228,7 +234,7 @@ pub fn start(game: &Path, name: &str, pack_id: &str, secret: &str, me: &Member) 
     };
     write_changeset(game, &cs)?;
     save(game, &share)?;
-    save_state(game, &State { applied: vec![cs.id.clone()], base: files, held: vec![] })?;
+    save_state(game, &State { applied: vec![cs.id.clone()], base: files, ..Default::default() })?;
     Ok(share)
 }
 
@@ -296,40 +302,23 @@ pub fn referenced(game: &Path) -> HashSet<String> {
 /// My changes since I last published or applied.
 pub fn local_changes(game: &Path) -> Result<Vec<Change>, String> {
     let mut st = state(game);
-    unheld(&mut st);
+    unheld(game, &mut st);
     let now = shared_files(game, &st.base)?;
     Ok(history::diff(game, &st.base, &now, true))
 }
 
-/// Leave blocked files out of base, so their absence here isn't sent to friends as a deletion.
-fn unheld(st: &mut State) {
-    let held: HashSet<&str> = st.held.iter().map(|h| h.path.as_str()).collect();
-    st.base.retain(|b| !held.contains(b.path.as_str()));
-}
-
-/// Friends' files Obelisk blocked in this pack.
-pub fn held(game: &Path) -> Vec<Held> {
-    state(game).held
-}
-
-/// The user lets one blocked file in (after Obelisk showed them why it was blocked). Takes a safety backup first.
-pub fn allow_held(game: &Path, path: &str) -> Result<(), String> {
-    let mut st = state(game);
-    let h = st.held.iter().find(|h| h.path == path).cloned().ok_or("That file isn't blocked any more.")?;
-    if !blob_path(game, &h.hash).is_some_and(|b| b.is_file()) {
-        return Err("The blocked file's download is missing. Ask your friend to send their changes again.".into());
-    }
-    history::create(game, "safety", &format!("Before allowing {}", h.path), true)?;
-    history::put(game, &h.path, Some(&FileEntry { path: h.path.clone(), size: h.size, mtime_ms: 0, hash: h.hash.clone() }))?;
-    st.held.retain(|x| x.path != path);
-    save_state(game, &st)
+/// Leave blocked files (held.rs) out of base, so their absence here isn't sent to friends as a deletion.
+fn unheld(game: &Path, st: &mut State) {
+    let held: HashSet<String> = crate::held::list(game).into_iter().map(|h| h.path).collect();
+    st.base.retain(|b| !held.contains(&b.path));
 }
 
 /// Publish my changes as a changeset friends will pull. None when there's nothing to share.
 pub fn publish(game: &Path, me: &Member, label: &str) -> Result<Option<Changeset>, String> {
     let mut st = state(game);
-    let kept: Vec<FileEntry> = st.base.iter().filter(|b| st.held.iter().any(|h| h.path == b.path)).cloned().collect();
-    unheld(&mut st);
+    let held: HashSet<String> = crate::held::list(game).into_iter().map(|h| h.path).collect();
+    let kept: Vec<FileEntry> = st.base.iter().filter(|b| held.contains(&b.path)).cloned().collect();
+    unheld(game, &mut st);
     let now = shared_files(game, &st.base)?;
     let changes = history::diff(game, &st.base, &now, true);
     if changes.is_empty() {
@@ -407,13 +396,14 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     let mut out = Applied::default();
     for cs in &todo {
         for e in &cs.entries {
-            let was_held = st.held.iter().any(|h| h.path == e.path);
-            st.held.retain(|h| h.path != e.path);
+            let was_held = crate::held::list(game).iter().any(|h| h.path == e.path);
+            crate::held::forget(game, &e.path)?;
             if let Some(reasons) = e.hash.as_ref().and_then(|h| blocked.get(&(e.path.clone(), h.clone()))) {
-                // Not written: the user sees why on the pack's Collaborate page and may allow it there.
+                // Not written: kept aside, and the window asks the user about it (held.rs).
                 let hash = e.hash.clone().unwrap_or_default();
-                base.insert(e.path.clone(), FileEntry { path: e.path.clone(), size: e.size, mtime_ms: 0, hash: hash.clone() });
-                st.held.push(Held { path: e.path.clone(), hash, size: e.size, author_name: cs.author_name.clone(), reasons: reasons.clone() });
+                let bytes = fs::read(blob_path(game, &hash).ok_or("invalid file id")?).map_err(|err| format!("{}: {err}", e.path))?;
+                crate::held::put(game, &e.path, &bytes, &cs.author_name, reasons.clone())?;
+                base.insert(e.path.clone(), FileEntry { path: e.path.clone(), size: e.size, mtime_ms: 0, hash });
                 out.blocked.push(e.path.clone());
                 continue;
             }
@@ -434,7 +424,7 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
         out.applied += 1;
     }
     // Re-read sizes/mtimes so the next "my changes" check doesn't rehash everything.
-    let held: HashSet<String> = st.held.iter().map(|h| h.path.clone()).collect();
+    let held: HashSet<String> = crate::held::list(game).into_iter().map(|h| h.path).collect();
     let mut b: Vec<FileEntry> = base.into_values().collect();
     b.sort_by(|a, c| a.path.cmp(&c.path));
     st.base = shared_files(game, &b)?.into_iter().filter(|f| b.iter().any(|x| x.path == f.path && x.hash == f.hash)).collect();
@@ -547,7 +537,8 @@ pub fn parse_invite(code: &str) -> Result<Invite, String> {
 
 /// The game folder of the shared pack with this id, if this computer has it.
 pub fn find(instances: &Path, pack_id: &str) -> Option<PathBuf> {
-    for e in fs::read_dir(instances).ok()?.flatten() {
+    // Only real profiles (Prism lists a folder only with its instance.cfg); a join that failed half-way doesn't count.
+    for e in fs::read_dir(instances).ok()?.flatten().filter(|e| e.path().join("instance.cfg").is_file()) {
         for g in ["minecraft", ".minecraft"] {
             let game = e.path().join(g);
             if get(&game).is_some_and(|s| s.pack_id == pack_id) {
@@ -558,10 +549,29 @@ pub fn find(instances: &Path, pack_id: &str) -> Option<PathBuf> {
     None
 }
 
+/// What a join or import that failed half-way left behind: folders Obelisk made (they hold its `.obelisk`
+/// folder) that aren't profiles, because removing them didn't finish (a file was in use).
+pub fn half_made(instances: &Path) -> Vec<PathBuf> {
+    fs::read_dir(instances).into_iter().flatten().flatten().map(|e| e.path())
+        .filter(|p| p.is_dir() && !p.join("instance.cfg").exists() && ["minecraft", ".minecraft"].iter().any(|g| p.join(g).join(".obelisk").is_dir()))
+        .collect()
+}
+
+/// Remove a profile a join or import was making when it failed. A file still in use (an antivirus scanning a
+/// jar) can stop it, so it tries a few times; what's left is half_made's, and the app moves it to the Recycle Bin.
+pub fn discard(inst: &Path) {
+    for _ in 0..5 {
+        if fs::remove_dir_all(inst).is_ok() || !inst.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
 /// Every shared pack here: (instance folder name, game folder, share).
 pub fn all(instances: &Path) -> Vec<(String, PathBuf, Share)> {
     let mut v = Vec::new();
-    for e in fs::read_dir(instances).into_iter().flatten().flatten() {
+    for e in fs::read_dir(instances).into_iter().flatten().flatten().filter(|e| e.path().join("instance.cfg").is_file()) {
         for g in ["minecraft", ".minecraft"] {
             let game = e.path().join(g);
             if let Some(s) = get(&game) {
@@ -842,20 +852,20 @@ mod tests {
         let r = apply(&b, &[]).unwrap();
         assert_eq!(r.blocked, vec!["mods/essential.jar".to_string()]);
         assert!(b.join("mods/create.jar").is_file() && !b.join("mods/essential.jar").exists());
-        let h = held(&b);
+        let h = crate::held::list(&b);
         assert_eq!(h.len(), 1);
-        assert_eq!(h[0].author_name, "Alex");
+        assert_eq!(h[0].from, "Alex");
         assert!(h[0].reasons[0].contains("Microsoft accounts"), "{:?}", h[0].reasons);
         // Its absence isn't sent back to friends as a deletion.
         assert!(local_changes(&b).unwrap().is_empty());
         fs::write(b.join("mods/jei.jar"), "jei").unwrap();
         let cs = publish(&b, &sam, "").unwrap().unwrap();
         assert!(cs.entries.iter().all(|e| e.path == "mods/jei.jar"), "{:?}", cs.entries);
-        assert_eq!(held(&b).len(), 1);
+        assert_eq!(crate::held::list(&b).len(), 1);
 
         // The user allows it.
-        allow_held(&b, "mods/essential.jar").unwrap();
-        assert!(b.join("mods/essential.jar").is_file() && held(&b).is_empty());
+        crate::held::allow(&b, "mods/essential.jar").unwrap();
+        assert!(b.join("mods/essential.jar").is_file() && crate::held::list(&b).is_empty());
         assert!(local_changes(&b).unwrap().is_empty());
     }
 

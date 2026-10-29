@@ -6,6 +6,7 @@ pub mod crash;
 pub mod curseforge;
 pub mod dupes;
 pub mod guard;
+pub mod held;
 pub mod instdir;
 pub mod packcode;
 pub mod lightning;
@@ -809,11 +810,19 @@ pub fn set_icon(data: &Path, id: &str, bytes: &[u8]) -> Result<String, String> {
     let root = instance_root(data, id)?;
     let slug: String = id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
     let key = format!("obelisk-{slug}-{}", &sha1_hex(bytes)[..8]);
-    let icons = data.join("icons");
+    let icons = icons_dir(data);
     fs::create_dir_all(&icons).map_err(|e| e.to_string())?;
     fs::write(icons.join(format!("{key}.{ext}")), bytes).map_err(|e| e.to_string())?;
     update_cfg(&root.join("instance.cfg"), &[("iconKey", Some(key.clone()))])?;
     Ok(key)
+}
+
+/// Prism's icons folder: its IconsDir setting (relative to its data folder unless absolute), else `icons`.
+pub fn icons_dir(data: &Path) -> PathBuf {
+    match read_cfg(&data.join("prismlauncher.cfg")).get("IconsDir").map(|d| d.trim().trim_matches('"')).filter(|d| !d.is_empty()) {
+        Some(d) => data.join(d),
+        None => data.join("icons"),
+    }
 }
 
 /// Instance icon as a data URL, from Prism's icons folder (custom keys only).
@@ -822,12 +831,14 @@ pub fn icon_data_url(data: &Path, icon_key: &str) -> Option<String> {
     if icon_key.is_empty() || icon_key.contains(['/', '\\', '.']) {
         return None;
     }
-    let dir = data.join("icons");
-    for ext in ["png", "jpg", "jpeg", "gif", "webp"] {
-        if let Ok(bytes) = fs::read(dir.join(format!("{icon_key}.{ext}"))) {
-            let mime = if ext == "jpg" { "jpeg" } else { ext };
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-            return Some(format!("data:image/{mime};base64,{b64}"));
+    // Icons Obelisk wrote before it followed IconsDir are in `icons`.
+    for dir in [icons_dir(data), data.join("icons")] {
+        for ext in ["png", "jpg", "jpeg", "gif", "webp"] {
+            if let Ok(bytes) = fs::read(dir.join(format!("{icon_key}.{ext}"))) {
+                let mime = if ext == "jpg" { "jpeg" } else { ext };
+                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                return Some(format!("data:image/{mime};base64,{b64}"));
+            }
         }
     }
     None

@@ -521,6 +521,10 @@
   }
 
   const play = () => startGame(current);
+  // Files Obelisk blocked in this pack (they act like account-stealing code): a button opens the review.
+  let heldCount = $state(0);
+  const loadHeld = () => invoke<unknown[]>("held_list", { instanceId: current.id }).then((l) => (heldCount = l.length)).catch(() => (heldCount = 0));
+  $effect(() => { void current.id; loadHeld(); window.addEventListener("held-changed", loadHeld); return () => window.removeEventListener("held-changed", loadHeld); });
   // Stop asks once more, since a force-close loses anything since the last autosave.
   let confirmKill = $state(false);
   function stop() {
@@ -560,6 +564,7 @@
         <div class="hero-actions">
           <button class="ghost" title="Share this pack: a code for a friend, or a zip" onclick={() => (app.packShare = current)}>⇪ Share</button>
           <button class="ghost" title="Profile options" onclick={() => (app.profileDialog = { kind: "options", inst: current })}>⚙ Options</button>
+          {#if heldCount}<button class="ghost" style:color="var(--err-text)" title="Files Obelisk kept out of this pack, and why" onclick={() => window.dispatchEvent(new CustomEvent("held-review", { detail: current.id }))}>⚠ {heldCount} blocked</button>{/if}
           {#if running[current.id]}
             <button class="play stop" onclick={stop} title="Force-close the game (for when it's frozen)">{confirmKill ? "Click again to force-close" : "■ Stop"}</button>
           {:else}

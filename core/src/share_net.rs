@@ -519,8 +519,8 @@ impl Net {
             // A Collaborate code: join the pack instead (blocked files are listed as left out).
             sess.conn.close(0u32.into(), b"invite");
             let id = self.join(&inv).await?;
-            let held = share::held(&self.instances.join(&id).join("minecraft"));
-            let left_out = held.iter().map(|h| format!("{} (blocked: {}; you can allow it on the pack's Collaborate page)", h.path, h.reasons.join(", "))).collect();
+            let held = crate::held::list(&self.instances.join(&id).join("minecraft"));
+            let left_out = held.iter().map(|h| format!("{} (blocked: {})", h.path, h.reasons.join(", "))).collect();
             return Ok(ImportReport { id, left_out, scan: Scan::Clean });
         }
         let vet = match self.vet(&sess, code, &m, cf, &progress).await {
@@ -531,7 +531,10 @@ impl Net {
             sess.conn.close(0u32.into(), b"done");
             return Err(format!("Windows Defender found a threat in this pack's files ({t}). Nothing was installed."));
         }
-        let mut left_out: Vec<String> = vet.refused.iter().map(|c| format!("{} (refused: {})", c.path, c.findings.serious.join(", "))).collect();
+        // Code with signs of malware was opened here (it's in fetched): kept aside for the user to decide (held.rs).
+        // Windows programs and files outside the pack never come in.
+        let mut left_out: Vec<String> = vet.refused.iter().map(|c| format!("{} ({}: {})", c.path,
+            if vet.fetched.contains_key(&c.path) { "blocked" } else { "refused" }, c.findings.serious.join(", "))).collect();
         let skip: std::collections::HashSet<String> = vet.refused.iter().map(|c| c.path.clone())
             .chain(vet.custom.iter().filter(|_| !with_custom).map(|c| c.path.clone())).collect();
         if !with_custom {
@@ -541,6 +544,14 @@ impl Net {
         let fetched = vet.fetched;
         let left_out = Arc::new(Mutex::new(left_out));
         let (id, game) = packcode::create_instance(&self.instances, &m)?;
+        for c in &vet.refused {
+            if let Some(bytes) = fetched.get(&c.path) {
+                if let Err(e) = crate::held::put(&game, &c.path, bytes, "", c.findings.serious.clone()) {
+                    share::discard(&self.instances.join(&id));
+                    return Err(e);
+                }
+            }
+        }
         let total = files.len();
         let progress = Arc::new(progress);
         let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -584,7 +595,8 @@ impl Net {
                 let bytes = sess.pack_file(code, &f.path).await?;
                 let findings = guard::inspect(&f.path, &bytes);
                 if !findings.serious.is_empty() {
-                    left_out.lock().unwrap().push(format!("{} (refused: {})", f.path, findings.serious.join(", ")));
+                    crate::held::put(&game, &f.path, &bytes, "", findings.serious.clone())?;
+                    left_out.lock().unwrap().push(format!("{} (blocked: {})", f.path, findings.serious.join(", ")));
                     continue;
                 }
                 packcode::place(&game, &f, &bytes)?;
@@ -613,7 +625,7 @@ impl Net {
         sess.conn.close(0u32.into(), b"done");
         if let Err(e) = result {
             // Don't leave a half-made profile behind.
-            let _ = std::fs::remove_dir_all(self.instances.join(&id));
+            share::discard(&self.instances.join(&id));
             return Err(e);
         }
         // Defender scans everything the sharer sent, exactly as installed. Files from Modrinth and CurseForge are
@@ -638,13 +650,13 @@ impl Net {
             match scanned {
                 Ok(s) => s,
                 Err(e) => {
-                    let _ = std::fs::remove_dir_all(self.instances.join(&id));
+                    share::discard(&self.instances.join(&id));
                     return Err(e);
                 }
             }
         };
         if let Scan::Threat(t) = &scan {
-            let _ = std::fs::remove_dir_all(self.instances.join(&id));
+            share::discard(&self.instances.join(&id));
             return Err(format!("Windows Defender found a threat in the installed pack ({t}). It has been removed."));
         }
         let left_out = left_out.lock().unwrap().clone();
@@ -679,13 +691,16 @@ impl Net {
         let files: InstanceReply = serde_json::from_value(sess.call(&Req::Instance).await?).map_err(|e| e.to_string())?;
         sess.conn.close(0u32.into(), b"done");
         let (id, game) = share::create_instance(&self.instances, &s, &files.cfg, &files.pack)?;
+        if let Some(key) = files.icon.as_deref().and_then(|i| packcode::take_icon(&crate::icons_dir(&crate::data_dir()), &id, i)) {
+            let _ = crate::update_cfg(&self.instances.join(&id).join("instance.cfg"), &[("iconKey", Some(key))]);
+        }
         let result = async {
             self.pull(&game, addr).await?;
             share::apply(&game, &[])
         }.await;
         if let Err(e) = result {
             // Don't leave a half-made profile behind.
-            let _ = std::fs::remove_dir_all(self.instances.join(&id));
+            share::discard(&self.instances.join(&id));
             return Err(e);
         }
         Ok(id)
@@ -725,6 +740,9 @@ struct LogReply {
 struct InstanceReply {
     cfg: String,
     pack: String,
+    /// The pack's picture (base64), if it has its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
 }
 
 struct Session {
@@ -886,7 +904,10 @@ impl Handler {
             Req::Instance => {
                 let name = share::get(game).map(|s| s.name).unwrap_or_default();
                 match share::instance_files(game, &name) {
-                    Ok((cfg, pack)) => (ok(serde_json::to_value(InstanceReply { cfg, pack }).unwrap_or_default()), vec![]),
+                    Ok((cfg, pack)) => {
+                        let icon = game.parent().and_then(packcode::pack_icon);
+                        (ok(serde_json::to_value(InstanceReply { cfg, pack, icon }).unwrap_or_default()), vec![])
+                    }
                     Err(e) => (err(&e), vec![]),
                 }
             }
@@ -1039,6 +1060,9 @@ mod tests {
         std::fs::create_dir_all(game.join("config")).unwrap();
         std::fs::write(game.join("config/a.toml"), "x=1").unwrap();
         std::fs::write(inst("o").join("Pack/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        std::fs::write(inst("o").join("Pack/instance.cfg"), "InstanceType=OneSix
+name=Pack
+").unwrap();
         for n in ["m", "x"] { std::fs::create_dir_all(inst(n)).unwrap(); }
         let o = Net::start(new_key(), inst("o"), "Olive".into()).await.unwrap();
         let m = Net::start(new_key(), inst("m"), "Mia".into()).await.unwrap();
@@ -1065,5 +1089,65 @@ mod tests {
         let z = Net::start(new_key(), inst("z"), "Zed".into()).await.unwrap();
         std::fs::create_dir_all(inst("z")).unwrap();
         assert!(z.join(&code).await.is_err());
+    }
+
+    /// A friend joins through Collaborate's short code (in Join and in Import), a jar that reads saved accounts is
+    /// held for the user instead of dropped, the pack's picture comes along, and a half-made folder from an
+    /// earlier failed join doesn't block joining. Needs the network: `cargo test --lib -- --ignored collab_short`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn collab_short_code_end_to_end() {
+        let t = tempfile::tempdir().unwrap();
+        // Prism's data folder (icons) for both sides of this test.
+        // SAFETY: set before any thread of this test reads it; run on its own (see above).
+        unsafe { std::env::set_var("OBELISK_PRISM_DIR", t.path().join("prism")) };
+        let png: &[u8] = b"\x89PNG\r\n\x1a\n0000IHDR fake picture";
+        std::fs::create_dir_all(t.path().join("prism/icons")).unwrap();
+        std::fs::write(t.path().join("prism/icons/obelisk-pack-1234.png"), png).unwrap();
+        let inst = |n: &str| t.path().join(n);
+        let game = inst("o").join("Pack/minecraft");
+        std::fs::create_dir_all(game.join("config")).unwrap();
+        std::fs::create_dir_all(game.join("mods")).unwrap();
+        std::fs::write(game.join("config/a.toml"), "x=1").unwrap();
+        let mut jar = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        jar.start_file("gg/essential/Accounts.class", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut jar, b"\xca\xfe\xba\xbe .minecraft/microsoft_accounts.json").unwrap();
+        std::fs::write(game.join("mods/Essential.jar"), jar.finish().unwrap().into_inner()).unwrap();
+        std::fs::write(inst("o").join("Pack/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        std::fs::write(inst("o").join("Pack/instance.cfg"), "InstanceType=OneSix\nname=Pack\niconKey=obelisk-pack-1234\n").unwrap();
+        for n in ["m", "x"] { std::fs::create_dir_all(inst(n)).unwrap(); }
+        let o = Net::start(new_key(), inst("o"), "Olive".into()).await.unwrap();
+        let m = Net::start(new_key(), inst("m"), "Mia".into()).await.unwrap();
+        let x = Net::start(new_key(), inst("x"), "Xan".into()).await.unwrap();
+        let (short, _) = o.offer_invite(&game, "Pack").await.unwrap();
+        let pack_id = share::get(&game).unwrap().pack_id;
+
+        // Join with the short code; an earlier failed join left a folder that isn't a profile.
+        let junk = inst("m").join("Pack/minecraft/.obelisk/share");
+        std::fs::create_dir_all(&junk).unwrap();
+        std::fs::write(junk.join("share.json"), serde_json::to_vec(&serde_json::json!({ "packId": pack_id, "name": "Pack", "secret": "x",
+            "members": [], "autoApply": false, "createdMs": 0 })).unwrap()).unwrap();
+        assert!(share::find(&inst("m"), &pack_id).is_none(), "a half-made folder isn't a pack you have");
+        assert_eq!(share::half_made(&inst("m")), vec![inst("m").join("Pack")]);
+        let id = m.join(&short.to_lowercase()).await.unwrap();
+        let gm = inst("m").join(&id).join("minecraft");
+        assert_eq!(std::fs::read_to_string(gm.join("config/a.toml")).unwrap(), "x=1");
+        assert!(!gm.join("mods/Essential.jar").exists());
+        let held = crate::held::list(&gm);
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_eq!((held[0].path.as_str(), held[0].from.as_str()), ("mods/Essential.jar", "Olive"));
+        let cfg = crate::read_cfg(&inst("m").join(&id).join("instance.cfg"));
+        assert!(crate::icon_data_url(&t.path().join("prism"), &cfg["iconKey"]).is_some(), "the pack's picture came along: {cfg:?}");
+        assert!(share::local_changes(&gm).unwrap().is_empty(), "the blocked jar isn't sent back as deleted");
+        assert!(m.join(&short).await.unwrap_err().contains("already have"));
+        crate::held::allow(&gm, "mods/Essential.jar").unwrap();
+        assert!(gm.join("mods/Essential.jar").is_file() && share::local_changes(&gm).unwrap().is_empty());
+
+        // The same short code pasted into Import joins too.
+        let r = x.import(&short, false, None, |_| {}).await.unwrap();
+        let gx = inst("x").join(&r.id).join("minecraft");
+        assert!(share::get(&gx).is_some(), "Import joined the collaborative pack");
+        assert!(r.left_out.iter().any(|l| l.starts_with("mods/Essential.jar (blocked")), "{:?}", r.left_out);
+        assert_eq!(crate::held::list(&gx).len(), 1);
     }
 }

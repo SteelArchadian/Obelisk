@@ -314,7 +314,7 @@ pub fn sync_curseforge(p: &SourceProfile, prism_data: &Path, progress: &dyn Fn(u
         set.push(("name", p.name.clone()));
         if let Some(icon) = manifest["profileImagePath"].as_str().map(PathBuf::from).filter(|i| i.is_file()) {
             let key = format!("obelisk-{}", id.to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-"));
-            let icons = prism_data.join("icons");
+            let icons = crate::icons_dir(prism_data);
             fs::create_dir_all(&icons).map_err(|e| e.to_string())?;
             let ext = icon.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
             fs::copy(&icon, icons.join(format!("{key}.{ext}"))).map_err(|e| e.to_string())?;

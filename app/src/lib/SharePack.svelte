@@ -12,7 +12,7 @@
   type Member = { id: string; name: string; lastSeenMs: number };
   type Changeset = { id: string; author: string; authorName: string; atMs: number; label: string; changes: Change[] };
   type Status = { shared: boolean; me: string; owner: string; share: { packId: string; name: string; members: Member[]; autoApply: boolean } | null; incoming: Changeset[]; local: Change[]; held?: Held[] };
-  type Held = { path: string; size: number; authorName: string; reasons: string[] };
+  type Held = { path: string; size: number; from: string; reasons: string[] };
 
   let { inst }: { inst: Instance } = $props();
   let st = $state<Status | null>(null);
@@ -75,14 +75,9 @@
     window.dispatchEvent(new Event("share-changed"));
   });
   const skip = (id: string) => run("skip", async () => { await invoke("share_skip", { instanceId: inst.id, id }); await load(); window.dispatchEvent(new Event("share-changed")); });
-  // Only Windows' own box (opened by Obelisk, not this page) can let a blocked file in; see share_allow_held.
-  const allow = (h: Held) => run("allow", async () => {
-    if (await invoke<boolean>("share_allow_held", { instanceId: inst.id, path: h.path })) {
-      toast(`${h.path.split("/").pop()} is in the pack now. Undo anytime from Backups.`);
-      await load();
-      window.dispatchEvent(new Event("share-changed"));
-    }
-  });
+  // Blocked files are reviewed in their own window (HeldReview), where only Windows' box can let one in.
+  const review = () => window.dispatchEvent(new CustomEvent("held-review", { detail: inst.id }));
+  $effect(() => { window.addEventListener("held-changed", load); return () => window.removeEventListener("held-changed", load); });
   const setAuto = (on: boolean) => run("auto", async () => { await invoke("share_set_auto", { instanceId: inst.id, on }); await load(); });
   const remove = (m: Member) => run("remove", async () => {
     await invoke("share_remove", { instanceId: inst.id, member: m.id });
@@ -202,8 +197,8 @@
           <div class="row"><strong>Blocked files</strong><span class="muted small">Obelisk kept these out: they act like programs that steal accounts or passwords</span></div>
           <ul class="changes">
             {#each st.held as h (h.path)}
-              <li><span class="k removed">Blocked</span><span class="hp"><b>{h.path.split("/").pop()}</b> <span class="muted small">from {h.authorName || "a friend"}</span><br /><span class="small">It {h.reasons.join(", and it ")}.</span></span>
-                <div class="spacer"></div><button class="ghost" disabled={!!busy} onclick={() => allow(h)} title="Windows asks you to confirm">Review…</button></li>
+              <li><span class="k removed">Blocked</span><span class="hp"><b>{h.path.split("/").pop()}</b> <span class="muted small">from {h.from || "a friend"}</span><br /><span class="small">It {h.reasons.join(", and it ")}.</span></span>
+                <div class="spacer"></div><button class="ghost" disabled={!!busy} onclick={review}>Review…</button></li>
             {/each}
           </ul>
           <span class="muted small">Some real mods do this for their own sign-in features. Allow one only if you know it and trust where it came from.</span>

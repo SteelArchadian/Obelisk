@@ -245,21 +245,21 @@ pub(crate) fn image_ext(b: &[u8]) -> Option<&'static str> {
 }
 
 /// The icon the sharer picked for this pack (Prism's icons folder, by the instance's iconKey).
-fn pack_icon(inst: &Path) -> Option<String> {
+pub(crate) fn pack_icon(inst: &Path) -> Option<String> {
     use base64::Engine;
     let cfg = fs::read_to_string(inst.join("instance.cfg")).ok()?;
     let key = cfg.lines().find_map(|l| l.strip_prefix("iconKey="))?.trim();
     if key.is_empty() || key.contains(['/', '\\', '.']) {
         return None;
     }
-    let dir = crate::data_dir().join("icons");
-    ["png", "jpg", "jpeg", "gif", "webp"].iter().find_map(|ext| fs::read(dir.join(format!("{key}.{ext}"))).ok())
+    let data = crate::data_dir();
+    [crate::icons_dir(&data), data.join("icons")].iter().find_map(|dir| ["png", "jpg", "jpeg", "gif", "webp"].iter().find_map(|ext| fs::read(dir.join(format!("{key}.{ext}"))).ok())
         .filter(|b| b.len() <= ICON_MAX && image_ext(b).is_some())
-        .map(|b| base64::engine::general_purpose::STANDARD.encode(b))
+        .map(|b| base64::engine::general_purpose::STANDARD.encode(b)))
 }
 
 /// Put a shared pack's icon into Prism's icons folder; returns its iconKey. Only a real, small image is taken.
-fn take_icon(icons: &Path, id: &str, icon: &str) -> Option<String> {
+pub(crate) fn take_icon(icons: &Path, id: &str, icon: &str) -> Option<String> {
     use base64::Engine;
     let b = base64::engine::general_purpose::STANDARD.decode(icon.as_bytes()).ok().filter(|b| b.len() <= ICON_MAX)?;
     let ext = image_ext(&b)?;
@@ -355,7 +355,7 @@ pub fn create_instance(instances: &Path, m: &Manifest) -> Result<(String, PathBu
     let game = inst.join("minecraft");
     fs::create_dir_all(&game).map_err(|e| e.to_string())?;
     let mut cfg = format!("InstanceType=OneSix\nname={}\n", m.name.replace(['\r', '\n'], " "));
-    if let Some(key) = m.icon.as_deref().and_then(|i| take_icon(&crate::data_dir().join("icons"), &id, i)) {
+    if let Some(key) = m.icon.as_deref().and_then(|i| take_icon(&crate::icons_dir(&crate::data_dir()), &id, i)) {
         cfg.push_str(&format!("iconKey={key}\n"));
     }
     fs::write(inst.join("instance.cfg"), cfg).map_err(|e| e.to_string())?;

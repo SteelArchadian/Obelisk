@@ -17,7 +17,8 @@ export function cfToHit(m: any): Hit {
   return {
     project_id: `cf:${m.id}`, cf_id: m.id, sources: ["curseforge"], slug: m.slug, title: m.name,
     description: m.summary ?? "", author: m.authors?.[0]?.name ?? "",
-    icon_url: m.logo?.thumbnailUrl ?? m.logo?.url ?? null, downloads: Math.round(m.downloadCount ?? 0),
+    // Some logos have an empty thumbnail: the full logo then.
+    icon_url: m.logo?.thumbnailUrl || m.logo?.url || null, downloads: Math.round(m.downloadCount ?? 0),
     follows: m.thumbsUpCount ?? 0, date_modified: m.dateModified, date_created: m.dateReleased,
     categories: [...(m.categories ?? []).map((c: any) => c.slug), ...loaders],
     display_categories: (m.categories ?? []).map((c: any) => c.slug),

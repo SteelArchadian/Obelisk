@@ -155,7 +155,8 @@ pub fn check(game: &Path, hash_cache: &Path, mr: &modrinth::Client, cf: Option<&
             let best = best_latest(p, mc, if is_mod { lt } else { None });
             for i in infos.iter_mut().filter(|i| i.provider == "curseforge" && i.project_id == id) {
                 i.downloads = p["downloadCount"].as_f64().unwrap_or(0.0) as u64;
-                i.icon_url = p["logo"]["thumbnailUrl"].as_str().unwrap_or_default().to_string();
+                // Some logos have an empty thumbnail: the full logo then.
+                i.icon_url = [&p["logo"]["thumbnailUrl"], &p["logo"]["url"]].into_iter().filter_map(|v| v.as_str()).find(|u| !u.is_empty()).unwrap_or_default().to_string();
                 i.library = p["categories"].as_array().is_some_and(|c| c.iter().any(|c| c["slug"] == "library-api" || c["id"] == 421));
                 let current: u64 = i.current.parse().unwrap_or(0);
                 if let Some(best) = best.filter(|b| *b > current) {
