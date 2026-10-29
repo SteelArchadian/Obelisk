@@ -1015,6 +1015,8 @@ fn game_command(dir: &Path, extra: &[String]) -> Result<(String, Vec<String>), S
             cp.push(p);
         }
     }
+    let copy = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    override_libraries(&mut cp, &copy_source(&copy).libraries, &lib)?;
     cp.push(format!("{install}/versions/{version}/{version}.jar"));
     let game_dir = dir.to_string_lossy().replace('\\', "/");
     let subs = [("${library_directory}", lib.clone()), ("${classpath_separator}", ";".into()), ("${version_name}", version.clone()),
@@ -1323,6 +1325,9 @@ struct Profile {
     args: Vec<String>,
     max_mem_mb: Option<u32>,
     min_mem_mb: Option<u32>,
+    /// Library overrides from the profile's own Prism components (patches/<uid>.json), e.g. a newer Mixin.
+    #[serde(default)]
+    libraries: Vec<Value>,
 }
 
 impl Profile {
@@ -1337,6 +1342,7 @@ impl Profile {
             args: if on("OverrideJavaArgs") { cfg.get("JvmArgs").map(|a| a.split_whitespace().map(String::from).collect()).unwrap_or_default() } else { vec![] },
             max_mem_mb: if on("OverrideMemory") { num("MaxMemAlloc") } else { None },
             min_mem_mb: if on("OverrideMemory") { num("MinMemAlloc") } else { None },
+            libraries: profile_libraries(inst),
         }
     }
 
@@ -1349,6 +1355,54 @@ impl Profile {
         }
         for (i, a) in self.args.iter().enumerate() { cmd.insert(i, a.clone()) }
     }
+}
+
+/// The libraries a profile's custom components swap in: those in its mmc-pack.json with a patches/<uid>.json
+/// that only swaps libraries (the same check a collab applies to one from another PC).
+fn profile_libraries(inst: &Path) -> Vec<Value> {
+    let pack: Value = std::fs::read(inst.join("mmc-pack.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let mut out = vec![];
+    for uid in pack["components"].as_array().into_iter().flatten().filter_map(|c| c["uid"].as_str()) {
+        if !uid.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) { continue }
+        let Ok(bytes) = std::fs::read(inst.join("patches").join(format!("{uid}.json"))) else { continue };
+        if prism::share::library_patch_ok(&bytes).is_err() { continue }
+        let v: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        out.extend(v["libraries"].as_array().cloned().unwrap_or_default());
+    }
+    out
+}
+
+/// Swap the profile's library overrides into a classpath, in place of the same group:artifact. The jar comes from
+/// the install's libraries, else Prism's, else its Maven download, and its checksum must match either way.
+fn override_libraries(cp: &mut Vec<String>, libs: &[Value], lib: &str) -> Result<(), String> {
+    for l in libs {
+        let name = l["name"].as_str().unwrap_or("");
+        let parts: Vec<&str> = name.split(':').collect();
+        let [g, a, v, ..] = parts[..] else { continue };
+        let g = g.replace('.', "/");
+        let rel = format!("{g}/{a}/{v}/{a}-{v}.jar");
+        let sha1 = l.pointer("/downloads/artifact/sha1").and_then(|s| s.as_str()).unwrap_or("").to_ascii_lowercase();
+        let dest = PathBuf::from(format!("{lib}/{rel}"));
+        let good = |p: &Path| std::fs::read(p).is_ok_and(|b| prism::sha1_hex(&b) == sha1);
+        if !good(&dest) {
+            let prism_copy = prism::data_dir().join("libraries").join(&rel);
+            let bytes = if good(&prism_copy) {
+                std::fs::read(&prism_copy).map_err(|e| e.to_string())?
+            } else {
+                let url = l.pointer("/downloads/artifact/url").and_then(|u| u.as_str()).ok_or_else(|| format!("{name}: no download"))?;
+                let b = prism::modrinth::Client::new()?.fetch(url)?;
+                if prism::sha1_hex(&b) != sha1 { return Err(format!("{name}: the download doesn't match its checksum")) }
+                b
+            };
+            std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+        }
+        let prefix = format!("{lib}/{g}/{a}/");
+        let at = cp.iter().position(|p| p.starts_with(&prefix)).unwrap_or(cp.len());
+        cp.retain(|p| !p.starts_with(&prefix));
+        cp.insert(at.min(cp.len()), format!("{lib}/{rel}"));
+    }
+    Ok(())
 }
 
 /// The newest bench run of this copy, when it exited with an error: its code and the JVM's output.
