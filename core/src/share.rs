@@ -203,6 +203,9 @@ pub fn allowed(path: &str) -> bool {
     if path == history::PACK_FILE {
         return true;
     }
+    if let Some(name) = path.strip_prefix(history::PATCHES) {
+        return name.len() > 5 && name.ends_with(".json") && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    }
     if path.contains("..") || path.contains('\\') || path.contains(':') || path.starts_with('/') || crate::guard::blocked(path) {
         return false;
     }
@@ -531,6 +534,12 @@ fn vet_incoming(game: &Path, todo: &[Changeset], skip: &HashSet<(String, String)
             }
             let blob = blob_path(game, hash).ok_or("invalid file id")?;
             let bytes = fs::read(&blob).map_err(|err| format!("{}: {err}", e.path))?;
+            if e.path.starts_with(history::PATCHES) {
+                if let Err(why) = library_patch_ok(&bytes) {
+                    blocked.insert((e.path.clone(), hash.clone()), vec![why]);
+                    continue;
+                }
+            }
             if crate::guard::risky(&e.path) {
                 let f = crate::guard::inspect(&e.path, &bytes);
                 if !f.serious.is_empty() {
@@ -547,6 +556,44 @@ fn vet_incoming(game: &Path, todo: &[Changeset], skip: &HashSet<(String, String)
         return Err(format!("Not applying these changes: Windows Defender found a threat in them ({t})."));
     }
     Ok(blocked)
+}
+
+/// Where a library override from another PC may download from.
+const LIBRARY_HOSTS: [&str; 5] = ["https://maven.fabricmc.net/", "https://maven.neoforged.net/", "https://libraries.minecraft.net/",
+    "https://repo1.maven.org/maven2/", "https://maven.minecraftforge.net/"];
+
+/// A Prism component from another PC may only swap libraries: each one from a known Maven site with a checksum
+/// Prism verifies. Anything that changes how the game starts (main class, Java arguments, agents, tweakers) is
+/// refused, since a friend's file must never run something on this PC that isn't checked.
+pub fn library_patch_ok(bytes: &[u8]) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "not a valid component file".to_string())?;
+    let o = v.as_object().ok_or("not a valid component file")?;
+    const KEYS: [&str; 10] = ["formatVersion", "name", "uid", "version", "requires", "conflicts", "order", "releaseTime", "type", "libraries"];
+    if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        return Err(format!("a loader component may only swap libraries, but this one sets \"{k}\""));
+    }
+    for lib in o.get("libraries").and_then(|l| l.as_array()).ok_or("a library override with no libraries")? {
+        let name = lib.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        if name.split(':').count() < 3 {
+            return Err("a library without a group:name:version".into());
+        }
+        if let Some(k) = lib.as_object().and_then(|l| l.keys().find(|k| !["name", "downloads"].contains(&k.as_str()))) {
+            return Err(format!("library {name} sets \"{k}\", which a library override may not"));
+        }
+        let art = lib.pointer("/downloads/artifact").ok_or_else(|| format!("library {name} has no download"))?;
+        let url = art.get("url").and_then(|u| u.as_str()).unwrap_or("");
+        if !LIBRARY_HOSTS.iter().any(|h| url.starts_with(h)) {
+            return Err(format!("library {name} downloads from {url}, which isn't a known Maven site"));
+        }
+        let sha1 = art.get("sha1").and_then(|s| s.as_str()).unwrap_or("");
+        if sha1.len() != 40 || !sha1.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("library {name} has no checksum"));
+        }
+        if lib.pointer("/downloads").and_then(|d| d.as_object()).is_some_and(|d| d.len() != 1) {
+            return Err(format!("library {name} has downloads other than its jar"));
+        }
+    }
+    Ok(())
 }
 
 /// Don't apply a friend's changeset (keep my version). It won't be offered again.
@@ -1014,6 +1061,14 @@ mod tests {
             assert!(!allowed(bad), "{bad}");
         }
         assert!(allowed("mods/create.jar") && allowed("config/a/b.toml") && allowed(history::PACK_FILE));
+        assert!(allowed("@instance/patches/dev.obelisk.mixin.json") && !allowed("@instance/patches/../instance.cfg")
+            && !allowed("@instance/instance.cfg") && !allowed("@instance/patches/x.jar"));
+        let ok = br#"{"formatVersion":1,"uid":"dev.obelisk.mixin","version":"0.17.5","name":"Mixin","libraries":[{"name":"net.fabricmc:sponge-mixin:0.17.5","downloads":{"artifact":{"url":"https://maven.fabricmc.net/x.jar","sha1":"0cef8519a91129d0c21fa03bb9378f0e8ca810e5","size":1}}}]}"#;
+        assert!(library_patch_ok(ok).is_ok());
+        let main = String::from_utf8_lossy(ok).replace("\"name\":\"Mixin\"", "\"mainClass\":\"evil.Main\"");
+        assert!(library_patch_ok(main.as_bytes()).is_err());
+        let host = String::from_utf8_lossy(ok).replace("https://maven.fabricmc.net/", "https://example.com/");
+        assert!(library_patch_ok(host.as_bytes()).is_err());
     }
 
     #[test]

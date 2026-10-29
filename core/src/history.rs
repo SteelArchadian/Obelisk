@@ -17,6 +17,8 @@ pub(crate) const TRACKED: [&str; 9] = ["mods", "config", "defaultconfigs", "kube
 const TRACKED_FILES: [&str; 1] = ["options.txt"];
 /// Prism's loader/version file, one level up from the game folder.
 pub(crate) const PACK_FILE: &str = "@instance/mmc-pack.json";
+/// Prism's custom components (library overrides such as a newer Mixin), next to mmc-pack.json.
+pub(crate) const PATCHES: &str = "@instance/patches/";
 /// Skip anything this big (it's not pack content).
 const MAX_FILE: u64 = 512 * 1024 * 1024;
 
@@ -123,6 +125,17 @@ fn scan(game: &Path) -> BTreeMap<String, (u64, u64)> {
     }
     if let Some(m) = game.parent().and_then(|p| fs::metadata(p.join("mmc-pack.json")).ok()) {
         out.insert(PACK_FILE.to_string(), (m.len(), mtime_ms(&m)));
+    }
+    if let Some(rd) = game.parent().and_then(|p| fs::read_dir(p.join("patches")).ok()) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            match e.metadata() {
+                Ok(m) if m.is_file() && name.ends_with(".json") && m.len() <= 1024 * 1024 => {
+                    out.insert(format!("{PATCHES}{name}"), (m.len(), mtime_ms(&m)));
+                }
+                _ => {}
+            }
+        }
     }
     out
 }
