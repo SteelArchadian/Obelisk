@@ -49,6 +49,10 @@ pub struct Share {
     /// Earlier secrets, so members who haven't heard about a removal yet can still connect and catch up.
     #[serde(default)]
     pub old_secrets: Vec<String>,
+    /// Removed people who came back with a newer invite: id -> the epoch whose secret they proved. Removals
+    /// up to that epoch no longer count for them, even when another member passes the old removal along.
+    #[serde(default)]
+    pub readmitted: HashMap<String, u32>,
 }
 
 /// The owner's signed note that someone was removed. It also commits to the pack's next secret (by hash), so
@@ -226,7 +230,7 @@ pub fn start(game: &Path, name: &str, pack_id: &str, secret: &str, me: &Member) 
         }
     }
     let share = Share { pack_id: pack_id.into(), name: name.into(), secret: secret.into(), members: vec![me.clone()], auto_apply: false,
-        created_ms: history::now_ms(), owner: me.id.clone(), removed: vec![], epoch: 0, old_secrets: vec![] };
+        created_ms: history::now_ms(), owner: me.id.clone(), removed: vec![], epoch: 0, old_secrets: vec![], readmitted: Default::default() };
     let cs = Changeset {
         id: new_id(&me.id), author: me.id.clone(), author_name: me.name.clone(), at_ms: history::now_ms(), label: "Shared the pack".into(),
         entries: files.iter().map(|f| Entry { path: f.path.clone(), hash: Some(f.hash.clone()), size: f.size }).collect(),
@@ -709,6 +713,21 @@ pub fn is_removed(s: &Share, id: &str) -> bool {
     s.removed.iter().any(|r| r.id == id)
 }
 
+/// A removed person proved this pack's current secret: someone in the pack gave them a new invite after the
+/// removal (the removal moved the pack to a secret they never had), so they're welcome again.
+pub fn readmit(game: &Path, id: &str) -> Result<(), String> {
+    let Some(mut s) = get(game) else { return Ok(()) };
+    s.removed.retain(|r| r.id != id);
+    s.readmitted.insert(id.to_string(), s.epoch);
+    save(game, &s)
+}
+
+/// The epoch of the secret this copy holds: a signed removal that committed to it says which one.
+fn held_epoch(s: &Share, more: &[Removal]) -> u32 {
+    let mine = secret_hash(&s.secret);
+    s.removed.iter().chain(more).filter(|r| r.secret_hash == mine).map(|r| r.epoch).fold(s.epoch, u32::max)
+}
+
 /// The owner removes someone: they're refused from now on and told so, and the pack moves to a new secret that
 /// only the remaining members get. Returns the removal (already saved).
 pub fn remove_member(game: &Path, key: &iroh::SecretKey, my_name: &str, id: &str, new_secret: &str) -> Result<Removal, String> {
@@ -742,10 +761,21 @@ pub fn merge_removals(game: &Path, me: &str, rs: &[Removal]) -> Result<bool, Str
     let Some(mut s) = get(game) else { return Ok(false) };
     let owner = owner(game, &s);
     let mut changed = false;
+    let held = held_epoch(&s, rs);
+    if held > s.epoch {
+        s.epoch = held; // joined with an invite made after a removal
+        changed = true;
+    }
     for r in rs.iter().filter(|r| r.valid(&s.pack_id, &owner)) {
         if r.id == me {
+            if held >= r.epoch {
+                continue; // an old removal; we were invited back since
+            }
             end(game, r)?;
             return Ok(true);
+        }
+        if s.readmitted.get(&r.id).is_some_and(|&e| e >= r.epoch) {
+            continue;
         }
         if !is_removed(&s, &r.id) {
             s.members.retain(|m| m.id != r.id);

@@ -313,7 +313,7 @@ impl Net {
                 if r.id == me && share::find(&self.instances, &s.pack_id).is_some_and(|g| share::merge_removals(&g, &me, std::slice::from_ref(r)).unwrap_or(false)) {
                     return Err(format!("{} removed you from this pack.", r.by_name));
                 }
-                return Err("They refused the connection.".into());
+                return Err("You were removed from this pack. Ask its owner for a new invite.".into());
             }
             if reply.proof != share::proof(secret, &s.pack_id, &peer.to_string(), &me) {
                 return Err("They don't have this pack's key.".into());
@@ -757,7 +757,7 @@ impl Net {
         let host = addr.id;
         let s = Share { pack_id: inv.pack_id.clone(), name: inv.name.clone(), secret: inv.secret.clone(),
             members: vec![self.me(), Member { id: host.to_string(), name: String::new(), last_seen_ms: now_ms() }], auto_apply: false, created_ms: now_ms(),
-            owner: String::new(), removed: vec![], epoch: 0, old_secrets: vec![] };
+            owner: String::new(), removed: vec![], epoch: 0, old_secrets: vec![], readmitted: Default::default() };
         let (sess, _, _) = self.connect(&s, addr.clone()).await.inspect_err(|e| trace(format!("couldn't connect to the host: {e}")))?;
         trace("connected to the host");
         let files: InstanceReply = serde_json::from_value(sess.call(&Req::Instance).await?).map_err(|e| e.to_string())?;
@@ -951,7 +951,12 @@ impl Handler {
             };
             let mine = HelloReply { name: self.name.lock().unwrap().clone(), proof: String::new(), removed: None, rekey: None };
             if let Some(r) = s.removed.iter().find(|r| r.id == peer_id) {
-                return (ok(serde_json::to_value(HelloReply { removed: Some(r.clone()), ..mine }).unwrap_or_default()), vec![]);
+                // The current secret is one they never had when they were removed: a member invited them back.
+                if i == 0 && s.epoch >= r.epoch {
+                    let _ = share::readmit(&game, &peer_id);
+                } else {
+                    return (ok(serde_json::to_value(HelloReply { removed: Some(r.clone()), ..mine }).unwrap_or_default()), vec![]);
+                }
             }
             // An older secret works only for people already in the pack (it may be in a removed person's hands);
             // they get the current one, which they accept only if the owner's signed removal names it.
@@ -1181,6 +1186,16 @@ name=Pack
         let z = Net::start(new_key(), inst("z"), "Zed".into()).await.unwrap();
         std::fs::create_dir_all(inst("z")).unwrap();
         assert!(z.join(&code).await.is_err());
+
+        // A new invite after the removal brings them back, and the old removal passed around doesn't undo it.
+        let (again, _) = o.offer_invite(&game, "Pack").await.unwrap();
+        let gx2 = inst("x").join(x.join(&again).await.expect("invited back after a removal")).join("minecraft");
+        assert!(!share::is_removed(&share::get(&game).unwrap(), &x.id()));
+        m.sync_all().await;
+        x.sync_all().await;
+        o.sync_all().await;
+        assert!(share::get(&gx2).is_some(), "still collaborating after syncing with everyone");
+        assert!(!share::is_removed(&share::get(&game).unwrap(), &x.id()), "a member's old removal didn't come back");
     }
 
     /// A friend joins through Collaborate's short code (in Join and in Import), a jar that reads saved accounts is
