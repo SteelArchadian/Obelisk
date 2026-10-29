@@ -1549,6 +1549,12 @@ fn gate(args: &Value, jobs: &Shared) -> Result<Value, String> {
         plain_name(t, "tag")?;
         a.extend(["--tag".into(), t.into()]);
     }
+    if let Some(v) = s(args, "loader_version") {
+        if !v.starts_with("neoforge-") || !v.chars().all(|c| c.is_ascii_alphanumeric() || ".-".contains(c)) {
+            return Err("\"loader_version\" is a neoforge-... version folder name in the install".into());
+        }
+        a.extend(["--loader-version".into(), v.into()]);
+    }
     let out = tb().root.as_path().join("obelisk").join("jobs");
     let id = new_job(jobs, "gate", "gate", &owner, String::new());
     let out = out.join(format!("{id}-gate.txt"));
