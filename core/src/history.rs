@@ -146,22 +146,48 @@ pub(crate) fn object(game: &Path, hash: &str) -> PathBuf {
     root(game).join("objects").join(&hash[..2]).join(hash)
 }
 
-/// Keep this content in the store (hard link for archives, copy for everything else).
+/// Keep this content in the store, as a copy of its own. (Older Obelisk hard-linked jars to save space, but
+/// tools do write jars in place, and a linked copy then changed with them: see unlink_store.)
 pub(crate) fn store(game: &Path, src: &Path, hash: &str) -> Result<(), String> {
     let dest = object(game, hash);
     if dest.exists() {
         return Ok(());
     }
     fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
-    let archive = src.extension().is_some_and(|e| e == "jar" || e == "zip");
-    // Configs are often rewritten in place, which would change a hard-linked copy too; jars are
-    // replaced, never edited, so linking them is safe and free.
-    if archive && fs::hard_link(src, &dest).is_ok() {
-        return Ok(());
-    }
     let tmp = dest.with_extension("tmp");
     fs::copy(src, &tmp).map_err(|e| format!("{}: {e}", src.display()))?;
     fs::rename(&tmp, &dest).map_err(|e| e.to_string())
+}
+
+/// Once per pack: give every stored file a copy of its own, ending the hard links older Obelisk made to jars
+/// (a jar rewritten in place changed its "saved" copy too). Stored files whose content no longer matches their
+/// hash are removed, and their hashes returned: those versions are gone.
+pub fn unlink_store(game: &Path) -> Result<Vec<String>, String> {
+    let done = root(game).join("objects.unlinked");
+    let objects = root(game).join("objects");
+    if done.exists() || !objects.is_dir() {
+        return Ok(vec![]);
+    }
+    let mut bad = Vec::new();
+    for d in fs::read_dir(&objects).map_err(|e| e.to_string())?.flatten() {
+        for f in fs::read_dir(d.path()).into_iter().flatten().flatten() {
+            let p = f.path();
+            let name = f.file_name().to_string_lossy().to_string();
+            if name.len() != 40 || !p.is_file() {
+                continue;
+            }
+            if hash_file(&p).ok().as_deref() != Some(name.as_str()) {
+                let _ = fs::remove_file(&p);
+                bad.push(name);
+                continue;
+            }
+            let tmp = p.with_extension("tmp");
+            fs::copy(&p, &tmp).map_err(|e| e.to_string())?;
+            fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+        }
+    }
+    fs::write(&done, "").map_err(|e| e.to_string())?;
+    Ok(bad)
 }
 
 fn manifest_path(game: &Path, id: &str) -> PathBuf {
@@ -472,6 +498,9 @@ pub(crate) fn put(game: &Path, path: &str, entry: Option<&FileEntry>) -> Result<
             let src = object(game, &e.hash);
             if !src.is_file() {
                 return Err(format!("{path}: its saved copy is missing"));
+            }
+            if hash_file(&src).ok().as_deref() != Some(e.hash.as_str()) {
+                return Err(format!("{path}: its saved copy was changed after it was saved, so it can't be put back"));
             }
             if dest.is_file() && hash_file(&dest).ok().as_deref() == Some(e.hash.as_str()) {
                 return Ok(());

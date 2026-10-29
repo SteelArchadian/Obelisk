@@ -41,9 +41,13 @@
       toast(`Joined! “${id}” is in your modpacks.`);
       const inst = app.instances.find((i) => i.id === id);
       if (inst) openInstance(inst);
-    } catch (e) { toast(String(e)); }
+    } catch (e) { joinFailed = String(e); joinDetails = null; }
     joinBusy = false;
   }
+  // A failed join: what went wrong, and Details (Obelisk's step-by-step readout) to look into it.
+  let joinFailed = $state("");
+  let joinDetails = $state<string[] | null>(null);
+  const showJoinDetails = async () => (joinDetails = joinDetails ? null : await invoke<string[]>("share_trace").catch(() => ["(no readout)"]));
 
   type TrashedPack = { id: string; instanceId: string; name: string; deletedMs: number; bytes: number };
   let trash = $state<TrashedPack[] | null>(null);
@@ -233,6 +237,13 @@
         <button class="tool restore" disabled={joinBusy || !joining.trim()} onclick={join}>{joinBusy ? "Downloading the pack…" : "Join"}</button>
         <button class="tool" disabled={joinBusy} onclick={() => (joining = null)}>Cancel</button>
       </div>
+      {#if joinFailed}
+        <div class="jfail"><span>{joinFailed}</span>
+          <button class="tool" onclick={showJoinDetails}>{joinDetails ? "Hide details" : "Details"}</button>
+          {#if joinDetails}<button class="tool" onclick={() => navigator.clipboard.writeText([joinFailed, "", ...(joinDetails ?? [])].join("\n")).then(() => toast("Details copied."))}>Copy</button>{/if}
+        </div>
+        {#if joinDetails}<pre class="jtrace">{joinDetails.join("\n")}</pre>{/if}
+      {/if}
     </div>
   {/if}
 
@@ -325,6 +336,8 @@
   .join { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; margin-bottom: 12px; background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; }
   .join .muted { color: var(--muted); font-size: 13px; }
   .jrow { display: flex; gap: 8px; }
+  .jfail { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--err-text); font-size: 13px; }
+  .jtrace { margin: 0; max-height: 220px; overflow: auto; font-size: 11px; line-height: 1.4; background: var(--panel-2); border-radius: 4px; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; user-select: text; }
   .jcode { flex: 1; width: auto; font-family: ui-monospace, Consolas, monospace; }
   .ptrash { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
   .phead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 6px; }

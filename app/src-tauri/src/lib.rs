@@ -524,6 +524,7 @@ async fn pack_code_stop(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, 
 #[tauri::command]
 async fn pack_code_preview(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<prism::share_net::PackPreview, String> {
     use tauri::Emitter;
+    prism::share_net::trace_start("checking a pack code");
     let code = prism::packcode::normalize(&code)?;
     sweep_half_made().await;
     let cf = cf_client().map(std::sync::Arc::new);
@@ -542,6 +543,7 @@ fn pack_code_cancel() {
 #[tauri::command]
 async fn pack_code_import(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String, with_custom: bool) -> Result<prism::share_net::ImportReport, String> {
     use tauri::Emitter;
+    prism::share_net::trace_start("importing a pack code");
     let code = prism::packcode::normalize(&code)?;
     sweep_half_made().await;
     let a = app.clone();
@@ -569,6 +571,12 @@ fn announce_held(app: &tauri::AppHandle, instance_id: &str) {
     if prism::held::list(&game).iter().any(|h| !h.kept) {
         let _ = app.emit("held-files", serde_json::json!({ "id": instance_id }));
     }
+}
+
+/// Import/Join → Details: what the last import or join did, step by step (to see why one failed).
+#[tauri::command]
+fn share_trace() -> Vec<String> {
+    prism::share_net::trace_log()
 }
 
 /// The files Obelisk blocked in a profile, and why.
@@ -717,6 +725,7 @@ async fn collab_code(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, ins
 
 #[tauri::command]
 async fn share_join(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, code: String) -> Result<String, String> {
+    prism::share_net::trace_start("joining a collaborative pack");
     sweep_half_made().await;
     let id = share_net(&app, &net).await?.join(&code).await?;
     announce_held(&app, &id);
@@ -2010,6 +2019,10 @@ pub fn run() {
                 // Blocked files still waiting for an answer (from before Obelisk was closed): ask once the window is up.
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 sweep_half_made().await;
+                // Stores older Obelisk hard-linked jars into (once per pack); a shared pack resends what that broke.
+                let shared = !prism::share::all(&prism::instances_dir(&prism::data_dir())).is_empty();
+                let me = if shared { share_net(&handle, &net).await.ok().map(|n| n.member()) } else { None };
+                let _ = blocking(move || { prism::share_net::heal_stores(&prism::instances_dir(&prism::data_dir()), me.as_ref()); Ok(()) }).await;
                 for i in prism::list_instances(&prism::data_dir()) { announce_held(&handle, &i.id); }
                 loop {
                     let any = prism::share::all(&prism::instances_dir(&prism::data_dir())).iter().any(|(_, _, s)| s.members.len() > 1);
@@ -2074,7 +2087,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

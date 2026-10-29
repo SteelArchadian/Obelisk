@@ -101,6 +101,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unlink_store_keeps_good_copies_and_drops_changed_ones() {
+        let d = tempfile::tempdir().unwrap();
+        let g = d.path().join("minecraft");
+        let good = crate::sha1_hex(b"good");
+        let bad = crate::sha1_hex(b"was this");
+        for (h, body) in [(&good, &b"good"[..]), (&bad, &b"now this"[..])] {
+            let o = crate::history::object(&g, h);
+            fs::create_dir_all(o.parent().unwrap()).unwrap();
+            fs::write(&o, body).unwrap();
+        }
+        assert_eq!(crate::history::unlink_store(&g).unwrap(), vec![bad.clone()]);
+        assert_eq!(fs::read(crate::history::object(&g, &good)).unwrap(), b"good");
+        assert!(!crate::history::object(&g, &bad).exists());
+        assert!(crate::history::unlink_store(&g).unwrap().is_empty(), "only once");
+    }
+
+    #[test]
     fn put_allow_and_replace() {
         let d = tempfile::tempdir().unwrap();
         let g = d.path().join("minecraft");

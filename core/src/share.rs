@@ -368,6 +368,66 @@ pub fn missing_blobs(game: &Path, cs: &Changeset) -> Vec<String> {
     cs.entries.iter().filter_map(|e| e.hash.clone()).filter(|h| !has_blob(game, h)).collect()
 }
 
+/// Entries (changeset id, path) a later changeset in `list` (oldest first) replaces: their files are never
+/// needed, so they aren't downloaded or written. (An old version may also be gone from the sender's PC.)
+pub fn superseded(list: &[Changeset]) -> HashSet<(String, String)> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut out = HashSet::new();
+    for cs in list.iter().rev() {
+        for e in &cs.entries {
+            if !seen.insert(e.path.as_str()) {
+                out.insert((cs.id.clone(), e.path.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// The files of `cs` still to download, leaving out what `skip` (superseded) says isn't needed.
+pub fn needed_blobs(game: &Path, cs: &Changeset, skip: &HashSet<(String, String)>) -> Vec<(String, String)> {
+    cs.entries.iter().filter(|e| !skip.contains(&(cs.id.clone(), e.path.clone())))
+        .filter_map(|e| e.hash.clone().map(|h| (e.path.clone(), h))).filter(|(_, h)| !has_blob(game, h)).collect()
+}
+
+/// Shared files whose saved copy is gone because it was changed in place (history::unlink_store, or found when
+/// a friend asked for it): their shared version can't be sent to anyone any more. This sends the pack's current
+/// file instead, as a change of its own, so friends can join and stay in step.
+pub fn repair(game: &Path, me: &Member, bad: &HashSet<String>) -> Result<Option<Changeset>, String> {
+    let mut latest: HashMap<String, Option<String>> = HashMap::new();
+    for id in log_ids(game) {
+        for e in read_changeset(game, &id).map(|c| c.entries).unwrap_or_default() {
+            latest.insert(e.path, e.hash);
+        }
+    }
+    let mut paths: Vec<String> = latest.into_iter().filter(|(_, h)| h.as_ref().is_some_and(|h| bad.contains(h))).map(|(p, _)| p).collect();
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    paths.sort();
+    let mut st = state(game);
+    let mut entries = Vec::new();
+    for p in &paths {
+        let file = history::real(game, p).ok_or("invalid path")?;
+        st.base.retain(|b| &b.path != p);
+        if file.is_file() {
+            let hash = history::hash_file(&file)?;
+            history::store(game, &file, &hash)?;
+            let size = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+            entries.push(Entry { path: p.clone(), hash: Some(hash.clone()), size });
+            st.base.push(FileEntry { path: p.clone(), size, mtime_ms: 0, hash });
+        } else {
+            entries.push(Entry { path: p.clone(), hash: None, size: 0 });
+        }
+    }
+    st.base.sort_by(|a, c| a.path.cmp(&c.path));
+    let cs = Changeset { id: new_id(&me.id), author: me.id.clone(), author_name: me.name.clone(), at_ms: history::now_ms(),
+        label: "Files that changed after they were shared, sent again".into(), entries, changes: vec![] };
+    write_changeset(game, &cs)?;
+    st.applied.push(cs.id.clone());
+    save_state(game, &st)?;
+    Ok(Some(cs))
+}
+
 #[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Applied {
@@ -384,10 +444,12 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     if todo.is_empty() {
         return Ok(Applied::default());
     }
-    if let Some(missing) = todo.iter().find(|c| !missing_blobs(game, c).is_empty()) {
+    // Files a later change replaces aren't needed (nor written): judged against everything incoming.
+    let skip = superseded(&incoming(game));
+    if let Some(missing) = todo.iter().find(|c| !needed_blobs(game, c, &skip).is_empty()) {
         return Err(format!("Still downloading the files for {}'s changes. Try again in a moment.", missing.author_name));
     }
-    let blocked = vet_incoming(game, &todo)?;
+    let blocked = vet_incoming(game, &todo, &skip)?;
     let who: Vec<&str> = todo.iter().map(|c| c.author_name.as_str()).collect::<HashSet<_>>().into_iter().collect();
     history::create(game, "safety", &format!("Before applying changes from {}", who.join(", ")), true)?;
 
@@ -396,6 +458,9 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     let mut out = Applied::default();
     for cs in &todo {
         for e in &cs.entries {
+            if skip.contains(&(cs.id.clone(), e.path.clone())) {
+                continue;
+            }
             let was_held = crate::held::list(game).iter().any(|h| h.path == e.path);
             crate::held::forget(game, &e.path)?;
             if let Some(reasons) = e.hash.as_ref().and_then(|h| blocked.get(&(e.path.clone(), h.clone()))) {
@@ -451,11 +516,11 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
 /// Friends' files are checked before they land, the same way as a share code's custom files: code is opened
 /// and blocked on signs of malware (guard.rs), and Windows Defender scans everything that would arrive.
 /// Returns the blocked files ((path, hash) → why); a Defender threat stops the whole apply.
-fn vet_incoming(game: &Path, todo: &[Changeset]) -> Result<HashMap<(String, String), Vec<String>>, String> {
+fn vet_incoming(game: &Path, todo: &[Changeset], skip: &HashSet<(String, String)>) -> Result<HashMap<(String, String), Vec<String>>, String> {
     let mut blocked = HashMap::new();
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     for cs in todo {
-        for e in &cs.entries {
+        for e in cs.entries.iter().filter(|e| !skip.contains(&(cs.id.clone(), e.path.clone()))) {
             let Some(hash) = &e.hash else { continue };
             if !allowed(&e.path) {
                 return Err(format!("{}'s changes include {}, which Obelisk never accepts from another PC.", cs.author_name, e.path));

@@ -25,6 +25,51 @@ const MAX_JSON: usize = 32 << 20;
 const WRONG_KEY: &str = "wrong pack key";
 const MAX_BLOB: usize = 600 << 20;
 
+/// Once per pack: end the hard links older Obelisk made in its stores (history::unlink_store). In a shared pack,
+/// files whose shared version was lost that way are sent again as they are now (share::repair), by `me`.
+pub fn heal_stores(instances: &Path, me: Option<&Member>) {
+    for e in std::fs::read_dir(instances).into_iter().flatten().flatten() {
+        for g in ["minecraft", ".minecraft"] {
+            let game = e.path().join(g);
+            let Ok(bad) = crate::history::unlink_store(&game) else { continue };
+            if let (false, Some(me), Some(_)) = (bad.is_empty(), me, share::get(&game)) {
+                let _ = share::repair(&game, me, &bad.into_iter().collect());
+            }
+        }
+    }
+}
+
+/// What the last import or join did, step by step, for the window's Details (and for whoever reads a report).
+static TRACE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Start a new readout (an import, preview or join begins).
+pub fn trace_start(what: &str) {
+    let mut t = TRACE.lock().unwrap();
+    t.clear();
+    t.push(format!("{} · Obelisk {} · {what}", chrono_now(), env!("CARGO_PKG_VERSION")));
+}
+
+pub(crate) fn trace(line: impl Into<String>) {
+    let mut t = TRACE.lock().unwrap();
+    if t.len() < 2000 {
+        t.push(format!("{} {}", chrono_now(), line.into()));
+    }
+}
+
+/// The last import's or join's readout.
+pub fn trace_log() -> Vec<String> {
+    TRACE.lock().unwrap().clone()
+}
+
+fn chrono_now() -> String {
+    let ms = now_ms();
+    format!("[{:02}:{:02}:{:02}.{:03}]", ms / 3_600_000 % 24, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
+}
+
+/// What a sharer answers when it found a stored file changed in place and sent the current one as a new change:
+/// asking again gets it.
+const RESENT: &str = "changed on their PC after it was shared; their Obelisk has sent it again";
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "t", rename_all = "camelCase")]
 enum Req {
@@ -285,15 +330,30 @@ impl Net {
         let (sess, them, rekey) = self.connect(&s, addr).await?;
         let log: LogReply = serde_json::from_value(sess.call(&Req::Log).await?).map_err(|e| e.to_string())?;
         let have: std::collections::HashSet<String> = share::log_ids(game).into_iter().collect();
-        let mut got = 0;
+        let mut new = Vec::new();
         for id in log.ids.into_iter().filter(|i| !have.contains(i)) {
             let cs: Changeset = serde_json::from_value(sess.call(&Req::Changeset { id: id.clone() }).await?).map_err(|e| e.to_string())?;
             if cs.id != id {
                 return Err("a friend sent the wrong change".into());
             }
-            for h in share::missing_blobs(game, &cs) {
-                let bytes = sess.blob(&h).await?;
-                share::store_blob(game, &h, &bytes)?;
+            new.push(cs);
+        }
+        trace(format!("{} new change(s) from {}", new.len(), them.name));
+        // Older versions a later change replaces aren't fetched (the sender may not even have them any more).
+        let mut all = share::incoming(game);
+        all.extend(new.iter().cloned());
+        all.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then(a.id.cmp(&b.id)));
+        let skip = share::superseded(&all);
+        let mut got = 0;
+        for cs in new {
+            let need = share::needed_blobs(game, &cs, &skip);
+            trace(format!("change {} by {}: {} file(s), {} to download", cs.id, cs.author_name, cs.entries.len(), need.len()));
+            for (path, h) in need {
+                let bytes = sess.blob(&h).await.map_err(|e| { trace(format!("  {path} ({h}): {e}")); format!("{path}: {e}") })?;
+                share::store_blob(game, &h, &bytes).map_err(|e| {
+                    trace(format!("  {path}: expected {h}, got {} bytes hashing to {}", bytes.len(), crate::sha1_hex(&bytes)));
+                    format!("{path}: {e}")
+                })?;
             }
             share::write_changeset(game, &cs)?;
             got += 1;
@@ -398,17 +458,22 @@ impl Net {
 
     async fn pack_session(&self, code: &str) -> Result<(Session, Manifest), String> {
         let c = code.to_string();
-        let note = tokio::task::spawn_blocking(move || packcode::resolve(&c)).await.map_err(|e| e.to_string())??;
+        trace(format!("looking up code {code}"));
+        let note = tokio::task::spawn_blocking(move || packcode::resolve(&c)).await.map_err(|e| e.to_string())?
+            .inspect_err(|e| trace(format!("lookup failed: {e}")))?;
         let peer: EndpointId = note.peer.parse().map_err(|_| "The code's note is damaged.")?;
         if peer == self.endpoint.id() {
             return Err("That's your own code. Paste it on the other computer.".into());
         }
         let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(EndpointAddr::from(peer), ALPN_PACK)).await
-            .map_err(|_| "Couldn't reach the computer sharing it (Obelisk must stay open there until you're done).".to_string())?
-            .map_err(|e| format!("Couldn't connect: {e}"))?;
+            .map_err(|_| "Couldn't reach the computer sharing it (Obelisk must stay open there until you're done).".to_string())
+            .and_then(|r| r.map_err(|e| format!("Couldn't connect: {e}")))
+            .inspect_err(|e| trace(e.clone()))?;
+        trace(format!("connected to {peer}"));
         let sess = Session { conn };
         let m: Manifest = serde_json::from_value(sess.pack_call(&PackReq::Manifest { code: code.into() }).await?)
             .map_err(|_| "The pack's list is damaged.".to_string())?;
+        trace(if m.invite.is_some() { format!("\"{}\" is a Collaborate code", m.name) } else { format!("\"{}\": {} files", m.name, m.files.len()) });
         Ok((sess, m))
     }
 
@@ -670,6 +735,11 @@ impl Net {
         m.invite.ok_or_else(|| "That's a pack code, not a Collaborate code: paste it into Import to install the pack.".to_string())
     }
 
+    /// Who we are in shared packs.
+    pub fn member(&self) -> Member {
+        self.me()
+    }
+
     /// Join a friend's pack from an invite code (the long one, or the short code it's offered under): creates the profile, downloads the pack, applies it.
     /// Returns the new profile's folder name.
     pub async fn join(&self, code: &str) -> Result<String, String> {
@@ -679,6 +749,7 @@ impl Net {
             &long
         };
         let inv = share::parse_invite(code)?;
+        trace(format!("joining \"{}\" (pack {})", inv.name, inv.pack_id));
         if let Some(game) = share::find(&self.instances, &inv.pack_id) {
             return Err(format!("You already have this pack ({}).", game.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
         }
@@ -687,18 +758,30 @@ impl Net {
         let s = Share { pack_id: inv.pack_id.clone(), name: inv.name.clone(), secret: inv.secret.clone(),
             members: vec![self.me(), Member { id: host.to_string(), name: String::new(), last_seen_ms: now_ms() }], auto_apply: false, created_ms: now_ms(),
             owner: String::new(), removed: vec![], epoch: 0, old_secrets: vec![] };
-        let (sess, _, _) = self.connect(&s, addr.clone()).await?;
+        let (sess, _, _) = self.connect(&s, addr.clone()).await.inspect_err(|e| trace(format!("couldn't connect to the host: {e}")))?;
+        trace("connected to the host");
         let files: InstanceReply = serde_json::from_value(sess.call(&Req::Instance).await?).map_err(|e| e.to_string())?;
         sess.conn.close(0u32.into(), b"done");
         let (id, game) = share::create_instance(&self.instances, &s, &files.cfg, &files.pack)?;
         if let Some(key) = files.icon.as_deref().and_then(|i| packcode::take_icon(&crate::icons_dir(&crate::data_dir()), &id, i)) {
             let _ = crate::update_cfg(&self.instances.join(&id).join("instance.cfg"), &[("iconKey", Some(key))]);
         }
+        trace(format!("made the profile \"{id}\""));
         let result = async {
-            self.pull(&game, addr).await?;
-            share::apply(&game, &[])
+            // A file the host finds changed in place is sent again as a new change: asking once more gets it.
+            match self.pull(&game, addr.clone()).await {
+                Err(e) if e.contains(RESENT) => {
+                    trace("the host sent changed files again; downloading once more");
+                    self.pull(&game, addr).await?;
+                }
+                r => { r?; }
+            }
+            let a = share::apply(&game, &[])?;
+            trace(format!("applied {} change(s); {} file(s) blocked", a.applied, a.blocked.len()));
+            Ok::<_, String>(a)
         }.await;
         if let Err(e) = result {
+            trace(format!("failed: {e}; removing the half-made profile"));
             // Don't leave a half-made profile behind.
             share::discard(&self.instances.join(&id));
             return Err(e);
@@ -896,8 +979,17 @@ impl Handler {
             Req::Blob { hash } => {
                 // Only files the log refers to, never arbitrary store contents.
                 let listed = share::referenced(game).contains(&hash);
-                match share::blob_path(game, &hash).filter(|_| listed).and_then(|p| std::fs::read(p).ok()) {
-                    Some(bytes) => (Resp { size: bytes.len() as u64, ..Default::default() }, bytes),
+                match share::blob_path(game, &hash).filter(|_| listed).and_then(|p| std::fs::read(&p).ok().map(|b| (p, b))) {
+                    Some((_, bytes)) if crate::sha1_hex(&bytes) == hash => (Resp { size: bytes.len() as u64, ..Default::default() }, bytes),
+                    Some((p, _)) => {
+                        // Changed in place since it was saved (older Obelisk linked jars): send the current file as a change.
+                        let _ = std::fs::remove_file(p);
+                        let me = Member { id: self.me.to_string(), name: self.name.lock().unwrap().clone(), last_seen_ms: now_ms() };
+                        match share::repair(game, &me, &std::iter::once(hash).collect()) {
+                            Ok(_) => (err(RESENT), vec![]),
+                            Err(e) => (err(&format!("that file changed after it was shared, and couldn't be sent again: {e}")), vec![]),
+                        }
+                    }
                     None => (err("missing file"), vec![]),
                 }
             }
@@ -1149,5 +1241,37 @@ name=Pack
         assert!(share::get(&gx).is_some(), "Import joined the collaborative pack");
         assert!(r.left_out.iter().any(|l| l.starts_with("mods/Essential.jar (blocked")), "{:?}", r.left_out);
         assert_eq!(crate::held::list(&gx).len(), 1);
+    }
+
+    /// A shared jar rewritten in place after sharing (older Obelisk hard-linked jars into the store, so the
+    /// saved copy changed too): the host notices when asked for it, sends the current jar as a change, and the
+    /// join gets that instead of failing on a checksum. `cargo test --lib -- --ignored changed_in_place`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn changed_in_place_end_to_end() {
+        let t = tempfile::tempdir().unwrap();
+        let inst = |n: &str| t.path().join(n);
+        let game = inst("o").join("Pack/minecraft");
+        std::fs::create_dir_all(game.join("mods")).unwrap();
+        std::fs::write(game.join("mods/boundless.jar"), "build 1").unwrap();
+        std::fs::write(game.join("mods/other.jar"), "other").unwrap();
+        std::fs::write(inst("o").join("Pack/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        std::fs::write(inst("o").join("Pack/instance.cfg"), "InstanceType=OneSix\nname=Pack\n").unwrap();
+        std::fs::create_dir_all(inst("m")).unwrap();
+        let o = Net::start(new_key(), inst("o"), "Olive".into()).await.unwrap();
+        let m = Net::start(new_key(), inst("m"), "Mia".into()).await.unwrap();
+        let (short, _) = o.offer_invite(&game, "Pack").await.unwrap();
+        // A new build copied over the jar, and over its linked saved copy.
+        let old = crate::sha1_hex(b"build 1");
+        std::fs::write(game.join("mods/boundless.jar"), "build 2").unwrap();
+        std::fs::write(crate::history::object(&game, &old), "build 2").unwrap();
+
+        trace_start("test join");
+        let id = m.join(&short).await.unwrap_or_else(|e| panic!("{e}\n{}", trace_log().join("\n")));
+        let gm = inst("m").join(&id).join("minecraft");
+        assert_eq!(std::fs::read_to_string(gm.join("mods/boundless.jar")).unwrap(), "build 2");
+        assert_eq!(std::fs::read_to_string(gm.join("mods/other.jar")).unwrap(), "other");
+        assert!(trace_log().iter().any(|l| l.contains("sent changed files again")), "{:?}", trace_log());
+        assert!(share::local_changes(&game).unwrap().is_empty(), "the host's own pack is in step with what it sent");
     }
 }

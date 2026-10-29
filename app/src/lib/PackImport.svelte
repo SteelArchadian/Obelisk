@@ -52,6 +52,13 @@
   const close = () => (app.packImport = null);
   const mb = (b: number) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB";
 
+  // A failed import or join: what went wrong, and Details (Obelisk's step-by-step readout) to look into it.
+  let failed = $state("");
+  let details = $state<string[] | null>(null);
+  const fail = (e: unknown) => { failed = String(e); details = null; stage = "enter"; };
+  const showDetails = async () => (details = details ? null : await invoke<string[]>("share_trace").catch(() => ["(no readout)"]));
+  const copyDetails = () => navigator.clipboard.writeText([failed, "", ...(details ?? [])].join("\n")).then(() => toast("Details copied."));
+
   async function pasteAndGo() {
     try {
       const clip = (await navigator.clipboard.readText()).trim();
@@ -63,13 +70,14 @@
   async function go() {
     if (!code.trim()) return toast("Paste the code your friend gave you.");
     stage = "looking";
+    failed = "";
     startWatch();
     try {
       preview = await invoke<Preview>("pack_code_preview", { code });
       if (preview.invite) stage = "invite";
       else if (preview.custom.length || preview.refused.length || preview.scan.result !== "clean") stage = "custom";
       else install(false);
-    } catch (e) { toast(String(e)); stage = "enter"; }
+    } catch (e) { fail(e); }
   }
 
   async function fromFile() {
@@ -98,7 +106,7 @@
         take = { java: !!g.java, memory: !!g.maxMemMb && (!ramMb || g.maxMemMb <= ramMb * 0.75), args: !!g.jvmArgs };
         stage = "settings";
       } else close();
-    } catch (e) { toast(String(e)); stage = "enter"; }
+    } catch (e) { fail(e); }
   }
 
   // A Collaborate code: join the pack (downloaded from the friend) and keep it in step with theirs.
@@ -114,7 +122,7 @@
       toast(`You're collaborating on ${preview.name}. It's in your Library; changes come and go from Collaborate.`
         + (held ? ` Obelisk blocked ${held} file${held === 1 ? "" : "s"}: review ${held === 1 ? "it" : "them"} under Collaborate → Blocked files.` : ""));
       close();
-    } catch (e) { toast(String(e)); stage = "enter"; } finally { joining = false; }
+    } catch (e) { fail(e); } finally { joining = false; }
   }
 
   type Options = { overrideMemory: boolean; maxMemMb: number; minMemMb: number; overrideJavaArgs: boolean; jvmArgs: string;
@@ -169,6 +177,14 @@
       </div>
       {#if stage === "looking"}
         {@render progress()}
+      {:else if failed}
+        <div class="failed">
+          <span>{failed}</span>
+          <div class="row"><button class="link small" onclick={showDetails}>{details ? "Hide details" : "Details"}</button>
+            {#if details}<button class="link small" onclick={copyDetails}>Copy</button>{/if}</div>
+          {#if details}<pre class="trace">{details.join("\n")}</pre>{/if}
+        </div>
+        <button class="link small" onclick={fromFile}>Or import a .zip / .mrpack file…</button>
       {:else}
         <button class="link small" onclick={fromFile}>Or import a .zip / .mrpack file…</button>
       {/if}
@@ -277,6 +293,8 @@
   .bar.busy i { width: 30%; animation: slide 1.2s ease-in-out infinite; }
   @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
   .stall { color: var(--err-text); background: var(--err-bg); border-radius: 6px; padding: 8px 10px; }
+  .failed { color: var(--err-text); background: var(--err-bg); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .trace { margin: 0; max-height: 220px; overflow: auto; font-size: 11px; line-height: 1.4; color: var(--text); background: var(--panel); border-radius: 4px; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; user-select: text; }
   .back { position: fixed; inset: 0; background: rgb(0 0 0 / 0.6); display: grid; place-items: center; z-index: 40; }
   .dialog { position: relative; width: min(560px, 94vw); max-height: 90vh; overflow-y: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; outline: none; }
   .x { position: absolute; top: 10px; right: 10px; background: none; border: 0; color: var(--muted); padding: 4px 8px; }
