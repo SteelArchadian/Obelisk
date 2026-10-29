@@ -597,6 +597,14 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             let dir = readable(need(args, "copy")?)?;
             let file = s(args, "file").unwrap_or("logs/latest.log");
             let mut d = prism::crash::diagnose(&dir, file)?;
+            if let Some((code, lines)) = failed_run(&dir) {
+                // The game died before it could log why; the JVM's own output says.
+                let hit = lines.iter().position(|l| l.contains("Exception") || l.contains("Error:") || l.contains("Error ")).unwrap_or(0);
+                let line = lines.get(hit).cloned().unwrap_or_default();
+                d.headline = format!("The game exited with code {code}: {}", explain_java_error(&line).unwrap_or_else(|| line.clone()));
+                d.error = line;
+                d.excerpt = lines.into_iter().skip(hit).take(40).collect();
+            }
             d.excerpt.truncate(40);
             Ok(serde_json::to_value(d).unwrap_or_default())
         }
@@ -1117,13 +1125,19 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     // Build the command now so a broken copy fails before queueing.
     let (mut java, mut cmd) = game_command(&dir, &extra)?;
-    match num(args, "java", 21, 21, 25)? {
-        21 => {}
-        25 => {
-            java = jdk25()?;
-            cmd.retain(|a| a != "-XX:+ZGenerational"); // ZGC is generational-only from Java 24
-        }
-        _ => return Err("java must be 21 or 25".into()),
+    // The pack's own Java and JVM settings (its profile in Prism), unless the run asks for a bench Java.
+    let profile = copy_source(&name);
+    match args.get("java").filter(|v| !v.is_null()) {
+        None => if let Some(p) = profile.java.as_ref() { java = p.clone() },
+        Some(_) => match num(args, "java", 21, 21, 25)? {
+            21 => {}
+            25 => java = jdk25()?,
+            _ => return Err("java must be 21 or 25".into()),
+        },
+    }
+    profile.apply(&mut cmd);
+    if prism::java::at(Path::new(&java)).is_some_and(|j| j.major >= 24) {
+        cmd.retain(|a| a != "-XX:+ZGenerational"); // ZGC is generational-only from Java 24
     }
     if args.get("compact_headers").and_then(|v| v.as_bool()).unwrap_or(false) {
         if !java.contains("jdk-25") { return Err("compact_headers needs java 25".into()); }
@@ -1197,6 +1211,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let runs = tb().root.join("obelisk-runs").join(dir.file_name().unwrap_or_default());
         let _ = std::fs::create_dir_all(&runs);
         let out = std::fs::File::create(runs.join(format!("{id}.stdout"))).map_err(|e| e.to_string())?;
+        // The exact Java and arguments, for when a run dies before the game writes any log.
+        let _ = std::fs::write(runs.join(format!("{id}.cmd.txt")), format!("{java}\n{}\n", cmd.join("\n")));
         let started = SystemTime::now();
         let click_ms = prism::timeline::now_ms();
         let mut game = Command::new(&java).args(&cmd).current_dir(&dir).stdout(out.try_clone().map_err(|e| e.to_string())?).stderr(out)
@@ -1212,6 +1228,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let latest = dir.join("logs").join("latest.log");
         let why = loop {
             if let Ok(Some(status)) = game.try_wait() {
+                let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
                 break format!("exited ({})", status.code().map(|c| c.to_string()).unwrap_or("?".into()));
             }
             if park {
@@ -1292,6 +1309,71 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     };
     audit("launch-end", &json!({ "job": id }), &format!("{state}: {detail}"));
     finish(&jobs, id, state, detail);
+}
+
+/// What a copy's game runs with from the profile it was copied from: its Java and its JVM settings.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Profile {
+    java: Option<String>,
+    args: Vec<String>,
+    max_mem_mb: Option<u32>,
+    min_mem_mb: Option<u32>,
+}
+
+impl Profile {
+    /// Read from a Prism profile's instance.cfg (only the settings it overrides).
+    fn of_instance(inst: &Path) -> Profile {
+        let cfg = prism::read_cfg(&inst.join("instance.cfg"));
+        let on = |k: &str| cfg.get(k).is_some_and(|v| v == "true");
+        let num = |k: &str| cfg.get(k).and_then(|v| v.parse().ok());
+        Profile {
+            java: cfg.get("JavaPath").filter(|_| on("OverrideJavaLocation")).filter(|p| Path::new(p).is_file()).map(|p| p.replace('\\', "/")),
+            args: if on("OverrideJavaArgs") { cfg.get("JvmArgs").map(|a| a.split_whitespace().map(String::from).collect()).unwrap_or_default() } else { vec![] },
+            max_mem_mb: if on("OverrideMemory") { num("MaxMemAlloc") } else { None },
+            min_mem_mb: if on("OverrideMemory") { num("MinMemAlloc") } else { None },
+        }
+    }
+
+    /// Put the profile's memory and arguments in place of the bench defaults (one garbage collector only).
+    fn apply(&self, cmd: &mut Vec<String>) {
+        if let Some(mx) = self.max_mem_mb { cmd.retain(|a| !a.starts_with("-Xmx")); cmd.insert(0, format!("-Xmx{mx}m")); }
+        if let Some(ms) = self.min_mem_mb { cmd.retain(|a| !a.starts_with("-Xms")); cmd.insert(0, format!("-Xms{ms}m")); }
+        if self.args.iter().any(|a| a.starts_with("-XX:+Use") && a.ends_with("GC")) {
+            cmd.retain(|a| !(a.starts_with("-XX:+Use") && a.ends_with("GC")) && a != "-XX:+ZGenerational");
+        }
+        for (i, a) in self.args.iter().enumerate() { cmd.insert(i, a.clone()) }
+    }
+}
+
+/// The newest bench run of this copy, when it exited with an error: its code and the JVM's output.
+fn failed_run(dir: &Path) -> Option<(String, Vec<String>)> {
+    let runs = tb().root.join("obelisk-runs").join(dir.file_name()?);
+    let newest = std::fs::read_dir(&runs).ok()?.flatten().map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "stdout"))
+        .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())?;
+    let code = std::fs::read_to_string(newest.with_extension("exit")).ok()?.trim().to_string();
+    if code == "0" { return None }
+    let text = String::from_utf8_lossy(&std::fs::read(&newest).ok()?).into_owned();
+    Some((code, text.lines().map(String::from).collect()))
+}
+
+/// Plain words for Java errors that need no stack trace to understand.
+fn explain_java_error(line: &str) -> Option<String> {
+    let v = line.split("class file version ").nth(1)?.split(['.', ')']).next()?.parse::<u32>().ok()?;
+    let has = line.split("up to ").nth(1).and_then(|r| r.split('.').next()).and_then(|n| n.parse::<u32>().ok());
+    Some(format!("a mod needs Java {} but the game ran on Java {} (set the profile's Java, or launch with java: 25)",
+        v.saturating_sub(44), has.map(|h| h.saturating_sub(44).to_string()).unwrap_or("?".into())))
+}
+
+fn source_file(copy: &str) -> PathBuf {
+    tb().root.join("obelisk-runs").join(copy).join("source.json")
+}
+
+/// The profile a copy came from (recorded by copy_pack). Copies made before that was recorded are taken to come
+/// from the bench's play profile, which is where copies are made from.
+fn copy_source(copy: &str) -> Profile {
+    std::fs::read(source_file(copy)).ok().and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| play_dir().parent().map(Profile::of_instance).unwrap_or_default())
 }
 
 /// Java 25 for A/B runs: the newest <bench>\java\jdk-25* folder.
@@ -1512,6 +1594,14 @@ fn copy_pack(args: &Value, jobs: &Shared) -> Result<Value, String> {
         let (state, detail) = if code < 8 { ("done", format!("copied to {}", to.display())) } else { ("failed", format!("robocopy exit {code}")) };
         if code < 8 {
             test_rules(&to);
+            // Files Obelisk blocked in the pack stay out of the copy too.
+            for h in prism::held::list(&from) {
+                if !h.path.contains("..") { let _ = std::fs::remove_file(to.join(&h.path)); }
+            }
+            let profile = if from == play_dir() { from.parent().map(Profile::of_instance).unwrap_or_default() }
+                else { copy_source(&from.file_name().unwrap_or_default().to_string_lossy()) };
+            let _ = std::fs::create_dir_all(tb().root.join("obelisk-runs").join(&to_name));
+            let _ = std::fs::write(source_file(&to_name), serde_json::to_vec_pretty(&profile).unwrap_or_default());
         }
         audit("copy-pack-end", &json!({ "job": id }), &format!("{state}: {detail}"));
         update(&jobs, id, |j| { j.state = state.into(); j.detail = detail; j.ended = Some(now()); });
