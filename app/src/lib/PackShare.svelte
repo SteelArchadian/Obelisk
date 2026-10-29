@@ -3,7 +3,7 @@
   // served straight from this Obelisk), or the whole pack zipped into Downloads.
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { settings } from "./settings.svelte";
   import type { Instance } from "./api";
 
@@ -43,13 +43,13 @@
     try {
       app.packCodes[inst.id] = await invoke("pack_code_start", { instanceId: inst.id });
       now = Date.now();
-    } catch (e) { toast(String(e)); } finally { busy = ""; }
+    } catch (e) { toastError(e); } finally { busy = ""; }
   }
 
   async function stopCode() {
     if (!live) return;
     if (downloading && !confirm("Your friend is still downloading this pack. Stop sharing anyway? They won't get the rest.")) return;
-    try { await invoke("pack_code_stop", { code: live.code }); } catch (e) { toast(String(e)); }
+    try { await invoke("pack_code_stop", { code: live.code }); } catch (e) { toastError(e); }
     delete app.packCodes[inst.id];
   }
 
@@ -61,7 +61,7 @@
     zipPath = "";
     const un = await listen<{ done: number; total: number }>("pack-export", (e) => { zipDone = e.payload.done; zipTotal = e.payload.total; });
     try { zipPath = await invoke<string>("pack_export_zip", { instanceId: inst.id }); }
-    catch (e) { toast(String(e)); }
+    catch (e) { toastError(e); }
     finally { un(); busy = ""; }
   }
 </script>

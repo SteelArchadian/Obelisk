@@ -49,13 +49,29 @@ export const app = $state({
   shareIncoming: {} as Record<string, number>,
   settingsSection: "general",
   toast: "",
+  /** The toast is an error: tinted red, stays longer, closes with its ✕. */
+  toastError: false,
 });
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 export function toast(msg: string) {
   app.toast = msg;
+  app.toastError = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (app.toast = ""), 5000);
+}
+
+/** Something went wrong: shown tinted red, long enough to read (20 s, or until its ✕). */
+export function toastError(e: unknown) {
+  app.toast = String(e);
+  app.toastError = true;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (app.toast = ""), 20000);
+}
+
+export function closeToast() {
+  clearTimeout(toastTimer);
+  app.toast = "";
 }
 
 export function openBrowse(type: ProjectType, query = "") {

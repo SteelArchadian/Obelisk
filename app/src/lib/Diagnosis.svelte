@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ago, initials, type FileInfo, type Item } from "./api";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { settings } from "./settings.svelte";
   import Icon from "./Icon.svelte";
 
@@ -88,7 +88,7 @@
     try {
       diag = await invoke<Diag>("diagnose_crash", { instanceId, file: p.file });
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
     loading = false;
   }
@@ -248,7 +248,7 @@
             <h2>{diag.headline}</h2>
             {#if diag.error}<code class="err-line">{diag.error}</code>{/if}
           </div>
-          <button class="ghost" onclick={() => invoke("open_game_file", { instanceId, rel: diag!.file }).catch((e) => toast(String(e)))}>Open file</button>
+          <button class="ghost" onclick={() => invoke("open_game_file", { instanceId, rel: diag!.file }).catch((e) => toastError(e))}>Open file</button>
         </header>
 
         {#each [...diag.findings].sort((a, b) => RANK[a.severity] - RANK[b.severity]) as f, i (i)}

@@ -1,5 +1,5 @@
 import { api, type Hit, type Installed, type Instance, type Kind, type ProjectType, type Tags } from "./api";
-import { app, toast, pushOverlay, type PendingInstall } from "./state.svelte";
+import { app, toast, toastError, pushOverlay, type PendingInstall } from "./state.svelte";
 import { cfToHit, manualDownload } from "./cf";
 import { recheck, updatesFor } from "./updates.svelte";
 
@@ -155,7 +155,7 @@ export async function install(p: PendingInstall): Promise<boolean> {
     await refreshInstalled();
     return true;
   } catch (e) {
-    toast(String(e));
+    toastError(e);
     return false;
   }
 }
@@ -229,7 +229,7 @@ export async function openProjectById(id: string) {
     }
     pushOverlay({ kind: "project", hit: projectToHit(await api.project(id)) });
   } catch (e) {
-    toast(String(e));
+    toastError(e);
   }
 }
 

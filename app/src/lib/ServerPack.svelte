@@ -5,7 +5,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { downloadDir } from "@tauri-apps/api/path";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { cached } from "./updates.svelte";
   import type { Instance } from "./api";
 
@@ -33,7 +33,7 @@
     for (const f of cached(inst.id)?.infos ?? []) if (f.kind === "mods" && f.env) platform[f.fileName] = f.env;
     invoke<ModSide[]>("mod_sides", { instanceId: inst.id, platform })
       .then((m) => (mods = m))
-      .catch((e) => { toast(String(e)); close(); });
+      .catch((e) => { toastError(e); close(); });
     invoke<{ maxMemMb: number }>("profile_options", { instanceId: inst.id }).then((o) => (memMb = Math.max(4096, o.maxMemMb))).catch(() => {});
     downloadDir().then((d) => (outDir ||= d)).catch(() => {});
   });
@@ -82,12 +82,12 @@
         },
       });
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
     busy = false;
   }
 
-  const reveal = (path: string) => invoke("reveal_pack", { path }).catch((e) => toast(String(e)));
+  const reveal = (path: string) => invoke("reveal_pack", { path }).catch((e) => toastError(e));
 </script>
 
 <div class="back" role="presentation" onclick={() => !busy && close()}>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { api, ago, initials, type Instance } from "./api";
-  import { app, openBrowse, toast } from "./state.svelte";
+  import { app, openBrowse, toast, toastError } from "./state.svelte";
   import { setTarget } from "./install";
   import { openPackMenu } from "./PackMenu.svelte";
   import { syncInstances } from "./install";
@@ -52,21 +52,21 @@
   type TrashedPack = { id: string; instanceId: string; name: string; deletedMs: number; bytes: number };
   let trash = $state<TrashedPack[] | null>(null);
   let forget = $state<TrashedPack | null>(null);
-  const loadTrash = () => invoke<TrashedPack[]>("pack_trash").then((t) => (trash = t)).catch((e) => toast(String(e)));
+  const loadTrash = () => invoke<TrashedPack[]>("pack_trash").then((t) => (trash = t)).catch((e) => toastError(e));
   async function restorePack(t: TrashedPack) {
     try {
       const id = await invoke<string>("restore_pack", { id: t.id });
       await syncInstances();
       toast(id === t.instanceId ? `${t.name} is back.` : `${t.name} is back as “${id}”.`);
       await loadTrash();
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
   }
   async function removePack(t: TrashedPack) {
     try {
       await invoke("remove_pack", { id: t.id });
       forget = null;
       await loadTrash();
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
   }
   const gb = (n: number) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : `${Math.max(1, Math.round(n / (1 << 20)))} MB`);
   const daysLeft = (ms: number) => Math.max(0, Math.ceil((ms + settings.packTrashHours * 3_600_000 - Date.now()) / 86_400_000));
@@ -121,7 +121,7 @@
       await invoke("open_prism");
       toast("Use Add Instance in Prism. The new profile shows up here when you come back.");
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
   }
 

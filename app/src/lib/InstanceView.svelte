@@ -9,7 +9,7 @@
   import ConfigEditor from "./ConfigEditor.svelte";
   import Diagnosis from "./Diagnosis.svelte";
   import Icon from "./Icon.svelte";
-  import { app, openBrowseTyping, pushOverlay, toast } from "./state.svelte";
+  import { app, openBrowseTyping, pushOverlay, toast, toastError } from "./state.svelte";
   import { openProjectById, refreshInstalled, setTarget } from "./install";
   import { manualDownload } from "./cf";
   import { checkDupes, dupeState, flagged, ignoreDupes } from "./dupes.svelte";
@@ -55,7 +55,7 @@
       if (!text) return toast("Nothing to copy yet.");
       await navigator.clipboard.writeText(text);
       toast(`Copied ${page === "logs" && logName ? logName : (diagFile || "logs/latest.log").split("/").pop()} (${Math.round(text.length / 1024)} KB).`);
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
   }
 
   let page = $state<"content" | "logs" | "diagnosis">("content");
@@ -359,7 +359,7 @@
       await invoke("set_pins", { instanceId: current.id, pins: [...next] });
       toast(want ? `Pinned ${items.length === 1 ? items[0].name : `${items.length} items`}. Update all will skip ${items.length === 1 ? "it" : "them"}.` : `Unpinned ${items.length === 1 ? items[0].name : `${items.length} items`}.`);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
   }
 
@@ -472,7 +472,7 @@
         await invoke("restore_trash", { instanceId: current.id, id });
         ok++;
       } catch (e) {
-        toast(String(e));
+        toastError(e);
       }
     }
     if (ok) toast(`Restored ${ok} item${ok === 1 ? "" : "s"}.`);
@@ -483,7 +483,7 @@
 
   async function removeIds(ids: string[]) {
     if (!confirm(`Delete ${ids.length} item${ids.length === 1 ? "" : "s"} for good? This can't be undone.`)) return;
-    for (const id of ids) await invoke("remove_trash", { instanceId: current.id, id }).catch((e) => toast(String(e)));
+    for (const id of ids) await invoke("remove_trash", { instanceId: current.id, id }).catch((e) => toastError(e));
     selected = new Set();
     trash = await invoke<TrashEntry[]>("list_trash", { instanceId: current.id });
   }
@@ -511,7 +511,7 @@
       }
       toast(`No author page found for ${item.name}.`);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
   }
 
@@ -881,7 +881,7 @@
     {#if kind === "mods"}<button onclick={() => { const it = m.item; menu = null; configsFor = it; }}>Edit configs</button>{/if}
     <button onclick={() => { const it = m.item; menu = null; setEnabled(it, !it.enabled); }}>{m.item.enabled ? "Disable" : "Enable"}</button>
     {#if !m.item.trashId}<button onclick={() => { const it = m.item; menu = null; setPinned([it], !isPinned(it)); }}>{isPinned(m.item) ? "Unpin version" : "Pin this version"}</button>{/if}
-    <button onclick={() => { const it = m.item; menu = null; invoke("reveal_file", { instanceId: current.id, kind, fileName: it.fileName }).catch((e) => toast(String(e))); refreshContent(current.id); }}>Show in folder</button>
+    <button onclick={() => { const it = m.item; menu = null; invoke("reveal_file", { instanceId: current.id, kind, fileName: it.fileName }).catch((e) => toastError(e)); refreshContent(current.id); }}>Show in folder</button>
     <button class="danger" onclick={() => { const it = m.item; menu = null; confirmDelete = selected.has(it.fileName) && selected.size > 1 ? content[kind].filter((i) => selected.has(i.fileName)) : [it]; }}>Delete</button>
   </div>
 {/if}

@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import Resolution from "./Resolution.svelte";
   import { setPackPicture, PICTURE_TYPES } from "./picture";
@@ -46,7 +46,7 @@
       if (opts) { opts.overrideJavaLocation = true; opts.javaPath = j.path; }
       toast(`Java ${major} installed and picked for this profile. Save to keep it.`);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     } finally {
       stop();
       installing = 0;
@@ -93,7 +93,7 @@
     try {
       await invoke("set_window_mode", { instanceId: id, mode });
       win = await invoke("window_mode", { instanceId: id });
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
   }
   let ram = $state(16384);
   let prismOpen = $state(false);
@@ -109,7 +109,7 @@
       orphans = await invoke<string[]>("orphan_configs", { instanceId: id });
       pick = new Set(orphans);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
     scanning = false;
   }
@@ -121,7 +121,7 @@
       toast(`Removed ${n} leftover config${n === 1 ? "" : "s"}.`);
       orphans = null;
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
     busy = false;
   }
@@ -137,7 +137,7 @@
       invoke<number>("system_memory_mb").then((m) => (ram = m || 16384));
       Promise.all([
         invoke<Java[]>("java_installs").then((j) => (javas = j)).catch(() => (javas = [])),
-        invoke<Options>("profile_options", { instanceId: d.inst.id }).then((o) => (opts = o)).catch((e) => toast(String(e))),
+        invoke<Options>("profile_options", { instanceId: d.inst.id }).then((o) => (opts = o)).catch((e) => toastError(e)),
       ]).then(() => { if (opts?.javaPath) addJava(opts.javaPath, false); });
       invoke<typeof win>("window_mode", { instanceId: d.inst.id }).then((w) => (win = w)).catch(() => {});
     }
@@ -155,7 +155,7 @@
       await syncInstances();
       close();
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     } finally {
       busy = false;
     }

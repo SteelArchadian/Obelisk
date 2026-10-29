@@ -2,7 +2,7 @@
 // projects and notifications. CurseForge has no sign-in for other apps, so it has neither.
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { toast } from "./state.svelte";
+import { toast, toastError } from "./state.svelte";
 
 export type MrAccount = { id: string; username: string; avatar_url?: string };
 export type MrNotification = { id: string; title: string; text: string; link: string; read: boolean; created: string; type?: string };
@@ -54,7 +54,7 @@ export async function toggleFollow(projectId: string) {
     const s = new Set(mr.follows);
     on ? s.add(projectId) : s.delete(projectId);
     mr.follows = s;
-  } catch (e) { toast(String(e)); }
+  } catch (e) { toastError(e); }
 }
 
 export async function markRead(ids: string[]) {
@@ -62,7 +62,7 @@ export async function markRead(ids: string[]) {
   try {
     await invoke("mr_notifications_read", { ids });
     mr.notes = mr.notes.map((n) => (ids.includes(n.id) ? { ...n, read: true } : n));
-  } catch (e) { toast(String(e)); }
+  } catch (e) { toastError(e); }
 }
 
 /** Open a web link in the default browser. Authors sometimes leave out the https://, which the opener refuses. */
@@ -71,5 +71,5 @@ export async function openLink(url: string | undefined | null) {
   let u = url.trim();
   if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = `https://${u.replace(/^\/+/, "")}`;
   if (!/^https?:/i.test(u)) { toast("That link isn't a web address, so Obelisk won't open it."); return; }
-  try { await openUrl(u); } catch (e) { toast(`Couldn't open the link: ${e}`); }
+  try { await openUrl(u); } catch (e) { toastError(`Couldn't open the link: ${e}`); }
 }

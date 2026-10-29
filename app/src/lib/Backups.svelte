@@ -3,7 +3,7 @@
   // only when something changed), checkpoints you make yourself, and safety backups Obelisk takes
   // before risky actions. Each shows its changelog; restore the whole pack or undo one change.
   import { invoke } from "@tauri-apps/api/core";
-  import { toast } from "./state.svelte";
+  import { toast, toastError } from "./state.svelte";
   import { settings, saveSettings } from "./settings.svelte";
   import type { Instance } from "./api";
 
@@ -20,7 +20,7 @@
   let busy = $state(false);
   let confirm = $state<Backup | null>(null);
 
-  const load = () => invoke<State>("backups", { instanceId: inst.id }).then((s) => { if (!st && s.backups[0]?.changes.length) open = s.backups[0].id; st = s; }).catch((e) => toast(String(e)));
+  const load = () => invoke<State>("backups", { instanceId: inst.id }).then((s) => { if (!st && s.backups[0]?.changes.length) open = s.backups[0].id; st = s; }).catch((e) => toastError(e));
   $effect(() => { void inst.id; load(); });
 
   const shown = $derived((st?.backups ?? []).filter((b) => (tab === "manual" ? b.kind === "manual" : b.kind !== "manual")));
@@ -51,7 +51,7 @@
       tab = "manual";
       toast("Checkpoint saved.");
       await load();
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
     busy = false;
   }
 
@@ -62,7 +62,7 @@
       toast(`Restored to ${when(b.atMs)} (${changes.length} change${changes.length === 1 ? "" : "s"}). A safety backup of how it was is in Automatic.`);
       confirm = null;
       await load();
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
     busy = false;
   }
 
@@ -72,7 +72,7 @@
       await invoke("revert_change", { instanceId: inst.id, backupId: b.id, path: c.path });
       toast(`${VERB[c.kind]} ${c.label}: undone.`);
       await load();
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
     busy = false;
   }
 

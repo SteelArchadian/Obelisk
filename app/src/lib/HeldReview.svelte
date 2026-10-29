@@ -3,7 +3,7 @@
   // join, import or friend's change brings one, and from the pack's page. Allowing one opens a Windows box that
   // only the user can answer (share_allow_held); Keep it blocked stops the asking.
   import { invoke } from "@tauri-apps/api/core";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
 
   type Held = { path: string; size: number; from: string; reasons: string[]; kept: boolean };
   let { id, onclose }: { id: string; onclose: () => void } = $props();
@@ -12,7 +12,7 @@
   const name = $derived(app.instances.find((i) => i.id === id)?.name ?? id);
   const file = (h: Held) => h.path.split("/").pop();
 
-  const load = () => invoke<Held[]>("held_list", { instanceId: id }).then((l) => { list = l; if (!l.length) onclose(); }).catch((e) => toast(String(e)));
+  const load = () => invoke<Held[]>("held_list", { instanceId: id }).then((l) => { list = l; if (!l.length) onclose(); }).catch((e) => toastError(e));
   $effect(() => { void id; load(); });
 
   async function allow(h: Held) {
@@ -23,12 +23,12 @@
         window.dispatchEvent(new Event("share-changed"));
         await load();
       }
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
     busy = "";
   }
   async function keep(h: Held) {
     busy = h.path;
-    try { await invoke("held_keep", { instanceId: id, path: h.path }); await load(); } catch (e) { toast(String(e)); }
+    try { await invoke("held_keep", { instanceId: id, path: h.path }); await load(); } catch (e) { toastError(e); }
     busy = "";
   }
 </script>

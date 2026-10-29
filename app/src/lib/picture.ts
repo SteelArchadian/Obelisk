@@ -1,7 +1,7 @@
 // A pack's picture: any picture, cropped to a square and shrunk to 256 px, so it stays small enough to share.
 import { invoke } from "@tauri-apps/api/core";
 import type { Instance } from "./api";
-import { toast } from "./state.svelte";
+import { toast, toastError } from "./state.svelte";
 import { syncInstances } from "./install";
 
 export const PICTURE_TYPES = "image/png,image/jpeg,image/gif,image/webp";
@@ -18,5 +18,5 @@ export async function setPackPicture(inst: Instance, file: File | undefined) {
     await invoke("set_instance_icon", { instanceId: inst.id, png });
     await syncInstances();
     toast(`New picture for ${inst.name}.`);
-  } catch (e) { toast(e instanceof Error ? "Obelisk couldn't read that picture." : String(e)); }
+  } catch (e) { toastError(e instanceof Error ? "Obelisk couldn't read that picture." : String(e)); }
 }

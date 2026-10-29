@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "obelisk"
-version = "0.2.29"
+version = "0.2.30"
 dependencies = [
  "keyring",
  "obelisk-core",

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { app, toast } from "./state.svelte";
+import { app, toast, toastError } from "./state.svelte";
 import type { Instance } from "./api";
 
 /** Profiles whose game is on its way: Play buttons show "Starting…" until the game window opens. */
@@ -20,12 +20,12 @@ function listenOnce() {
     delete progress[id];
     if (!starting[id]) return;
     delete starting[id];
-    if (!up) toast("The game didn't start.");
+    if (!up) toastError("The game didn't start.");
   }).catch(() => (listening = false));
   // Prism's console stays shut on a crash (quiet launch); say so here and point at the diagnosis.
   listen<{ id: string; file: string }>("game-crashed", (e) => {
     const name = app.instances.find((i) => i.id === e.payload.id)?.name ?? e.payload.id;
-    toast(`${name} crashed. Open it and look at Diagnosis to see why.`);
+    toastError(`${name} crashed. Open it and look at Diagnosis to see why.`);
   }).catch(() => {});
   listen<{ id: string }>("game-exited", (e) => { delete running[e.payload.id]; delete starting[e.payload.id]; delete progress[e.payload.id]; }).catch(() => {});
   listen<{ id: string; pct: number | null; text: string }>("launch-progress", (e) => {
@@ -54,7 +54,7 @@ export async function play(inst: Instance) {
   } catch (e) {
     const cancelled = !starting[inst.id];
     delete starting[inst.id];
-    if (!cancelled) toast(String(e));
+    if (!cancelled) toastError(e);
   }
 }
 
@@ -67,7 +67,7 @@ export async function cancel(inst: Instance) {
     await invoke("cancel_launch", { instanceId: inst.id });
     toast(`Aborted starting ${inst.name}.`);
   } catch (e) {
-    toast(String(e));
+    toastError(e);
   }
 }
 
@@ -79,7 +79,7 @@ export async function kill(inst: Instance) {
     delete starting[inst.id];
     toast(`${inst.name} was closed.`);
   } catch (e) {
-    toast(String(e));
+    toastError(e);
     refreshRunning();
   }
 }

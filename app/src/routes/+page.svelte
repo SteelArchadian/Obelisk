@@ -23,7 +23,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { api, initials, type Instance } from "$lib/api";
-  import { app, openBrowse, toast, closeOverlays, type Page, type Overlay } from "$lib/state.svelte";
+  import { app, openBrowse, toast, toastError, closeToast, closeOverlays, type Page, type Overlay } from "$lib/state.svelte";
   import { refreshInstalled, syncInstances } from "$lib/install";
   import { startAssistantBridge } from "$lib/assistant.svelte";
   import Library from "$lib/Library.svelte";
@@ -67,7 +67,7 @@
       await invoke("self_update_install");
     } catch (e) {
       updating = false;
-      toast(String(e));
+      toastError(e);
     }
   }
 
@@ -88,7 +88,7 @@
       await loadAccounts();
       toast(done);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
   }
 
@@ -262,7 +262,7 @@
       syncInstances();
       window.dispatchEvent(new Event("obelisk-refresh"));
       if (app.page === "instance" && app.current) {
-        recheck(app.current.id).then(() => toast("Checked for updates.")).catch((err) => toast(String(err)));
+        recheck(app.current.id).then(() => toast("Checked for updates.")).catch((err) => toastError(err));
       }
       return;
     }
@@ -380,7 +380,7 @@
 {#if showWelcome && !settings.welcomed}<Welcome />{/if}
 <WorkBar />
 {#if whatsNew}<WhatsNew version={whatsNew.version} notes={whatsNew.notes} close={() => (whatsNew = null)} />{/if}
-{#if app.toast}<div class="toast" role="status">{app.toast}</div>{/if}
+{#if app.toast}<div class="toast" class:err={app.toastError} role={app.toastError ? "alert" : "status"}>{app.toast}{#if app.toastError}<button class="tx" onclick={closeToast} aria-label="Close">✕</button>{/if}</div>{/if}
 
 <style>
   /* Native dropdown lists: themed, with the picked option clearly marked. */
@@ -480,4 +480,6 @@
   }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.45); z-index: 50; max-width: 70vw; animation: up 0.15s ease-out; }
   @keyframes up { from { opacity: 0; transform: translate(-50%, 8px); } }
+  .toast.err { background: var(--err-bg); color: var(--err-text); border-color: color-mix(in srgb, var(--err-text) 45%, transparent); display: flex; gap: 12px; align-items: flex-start; user-select: text; }
+  .toast .tx { background: none; border: 0; color: inherit; padding: 0 2px; opacity: 0.8; flex: none; }
 </style>

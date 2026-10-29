@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type Hit } from "./api";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { compat, install, isInstalled, refreshInstalled } from "./install";
   import { cached, recheck, updateState } from "./updates.svelte";
   import { settings } from "./settings.svelte";
@@ -27,7 +27,7 @@
       if (job) toast(`${upd.update!.fileName} must be downloaded from curseforge.com: use Update in the profile's mods list.`);
       else toast(`Updated to ${upd.update!.name || upd.update!.fileName}.`);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
     await refreshInstalled();
     recheck(id).catch(() => {});

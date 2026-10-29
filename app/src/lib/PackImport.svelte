@@ -3,7 +3,7 @@
   // site vouches for (custom jars, scripts), ask first: only the known files, or those too.
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
@@ -87,7 +87,7 @@
       await api.importPack(path);
       toast("Opened in Prism's importer. Press Sync when it finishes.");
       close();
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
   }
 
   async function install(withCustom: boolean) {
@@ -155,7 +155,7 @@
       await invoke("set_profile_options", { instanceId: newId, options: o });
       toast("Your friend's settings are on the pack. You can change them in its Profile options.");
       close();
-    } catch (e) { toast(String(e)); applying = ""; }
+    } catch (e) { toastError(e); applying = ""; }
   }
   const gb = (m: number) => (m / 1024).toFixed(m % 1024 ? 1 : 0) + " GB";
 </script>

@@ -6,7 +6,7 @@
   import { ask, open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
   import { settings, saveSettings, THEMES } from "./settings.svelte";
@@ -35,7 +35,7 @@
       await invoke("self_update_install");
     } catch (e) {
       updateState = "";
-      toast(String(e));
+      toastError(e);
     }
   }
 
@@ -125,7 +125,7 @@
     try {
       await invoke("data_dir_set", { dir: to });
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
   }
   /** Where the modpacks live (Prism's instances folder). */
@@ -147,7 +147,7 @@
       instDir = await invoke("instances_dir_get");
       await syncInstances();
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     } finally {
       stop();
       instMove = null;
@@ -159,7 +159,7 @@
       const n = await invoke<number>("set_window_mode_all", { mode });
       allMode = mode;
       toast(`${label} set for ${n} profile${n === 1 ? "" : "s"}.`);
-    } catch (e) { toast(String(e)); }
+    } catch (e) { toastError(e); }
   }
   async function saveDefaults() {
     await invoke("set_prism_defaults", { defaults: $state.snapshot(defaults) });
@@ -183,7 +183,7 @@
       await invoke<string>("ai_connect", { assistant: settings.aiAssistant });
       toast(`Connected. Start a new ${settings.aiAssistant === "gpt" ? "Codex" : "Claude"} chat to use Obelisk.`);
     } catch (e) {
-      toast(String(e));
+      toastError(e);
     }
     aiBusy = false;
   }
@@ -232,7 +232,7 @@
       <label class="toggle-row">
         <span><strong>Start with Windows</strong><small>Opens Obelisk quietly in the tray when you sign in to Windows.</small></span>
         <button class="switch" class:on={settings.startWithWindows} role="switch" aria-checked={settings.startWithWindows} aria-label="Start with Windows"
-          onclick={async () => { const on = !settings.startWithWindows; try { await invoke("set_autostart", { on }); settings.startWithWindows = on; saveSettings(); } catch (e) { toast(String(e)); } }}><i></i></button>
+          onclick={async () => { const on = !settings.startWithWindows; try { await invoke("set_autostart", { on }); settings.startWithWindows = on; saveSettings(); } catch (e) { toastError(e); } }}><i></i></button>
       </label>
       <label class="toggle-row">
         <span><strong>Quiet game start</strong><small>Play just starts the game. Turn off to see Prism Launcher's download and progress windows. Sign-in prompts and errors always show.</small></span>

@@ -4,7 +4,7 @@
   // always be undone. Unticking "Collaboration on" stops it. The owner (who made it collaborative) can remove people;
   // History shows who changed what.
   import { invoke } from "@tauri-apps/api/core";
-  import { app, toast } from "./state.svelte";
+  import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import type { Instance } from "./api";
 
@@ -31,13 +31,13 @@
   let historyOpen = $state(false);
   const isOwner = $derived(!!st && st.owner === st.me);
 
-  const load = () => invoke<Status>("share_status", { instanceId: inst.id }).then((s) => (st = s)).catch((e) => toast(String(e)));
+  const load = () => invoke<Status>("share_status", { instanceId: inst.id }).then((s) => (st = s)).catch((e) => toastError(e));
   $effect(() => { void inst.id; load(); });
 
   const close = () => (app.sharePack = null);
   async function run<T>(what: string, fn: () => Promise<T>): Promise<T | undefined> {
     busy = what;
-    try { return await fn(); } catch (e) { toast(String(e)); } finally { busy = ""; }
+    try { return await fn(); } catch (e) { toastError(e); } finally { busy = ""; }
   }
 
   const getCode = async () => {
