@@ -75,7 +75,7 @@
       <section class="code-box">
         <p class="muted small">Give this code to your friend. They click Import in Obelisk and paste it.</p>
         <div class="code-row">
-          <span class="code">{live.code}</span>
+          <span class="code mono">{live.code}</span>
           <button class="ghost" onclick={copy}>Copy</button>
         </div>
         <p class="small">Expires in <b>{clock}</b> · {live.files} files{#if live.custom} · {live.custom} custom{/if}</p>
@@ -134,7 +134,7 @@
   .choice:disabled { opacity: 0.7; }
   .choice svg { color: var(--accent); }
   .code-row { display: flex; align-items: center; gap: 12px; }
-  .code { font: 700 34px ui-monospace, Consolas, monospace; letter-spacing: 0.18em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 18px; user-select: all; }
+  .code { font: 700 34px Consolas, ui-monospace, monospace; letter-spacing: 0.18em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 18px; user-select: all; }
   .path { word-break: break-all; }
   .bar { height: 6px; background: var(--panel); border-radius: 3px; overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }

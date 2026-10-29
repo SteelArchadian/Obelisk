@@ -233,7 +233,7 @@
       <strong>Join a friend's shared pack</strong>
       <span class="muted">Paste the Collaborate code they sent you. Obelisk creates the profile and downloads the pack straight from them (they need Obelisk open).</span>
       <div class="jrow">
-        <input type="search" class="search jcode" placeholder="K7MQ2X" bind:value={joining} onkeydown={(e) => e.key === "Enter" && join()} />
+        <input type="search" class="search jcode mono" placeholder="K7MQ2X" bind:value={joining} onkeydown={(e) => e.key === "Enter" && join()} />
         <button class="tool restore" disabled={joinBusy || !joining.trim()} onclick={join}>{joinBusy ? "Downloading the pack…" : "Join"}</button>
         <button class="tool" disabled={joinBusy} onclick={() => (joining = null)}>Cancel</button>
       </div>

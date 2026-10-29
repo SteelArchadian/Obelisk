@@ -43,6 +43,36 @@ pub fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("PrismLauncher")
 }
 
+/// Why Prism closed without starting the game, read from its own log of this launch: its errors, or else the
+/// last thing it did. None when the log isn't about this profile's launch.
+pub fn prism_stop_reason(data: &Path, id: &str) -> Option<String> {
+    let text = fs::read(data.join("logs").join("PrismLauncher-0.log")).ok()?;
+    let text = String::from_utf8_lossy(&text);
+    if !text.lines().any(|l| l.contains("ID of instance to launch") && l.contains(&format!("\"{id}\""))) {
+        return None;
+    }
+    // "  5.125 Critical: Checksum mismatch ... (unknown:0)" -> "Checksum mismatch ..."
+    let body = |l: &str| -> String {
+        let l = l.trim_start();
+        let l = l.split_once(' ').map(|(_, r)| r).unwrap_or(l);
+        l.trim_end_matches("(unknown:0)").trim().to_string()
+    };
+    const NOISE: [&str; 4] = ["QWindowsWindow", "is now in use", "is no longer in use", "Unable to set geometry"];
+    let errors: Vec<String> = text.lines()
+        .filter(|l| l.contains(" Critical: ") || l.contains(" Fatal: ") || (l.contains(" Warning: ") && !NOISE.iter().any(|n| l.contains(n))))
+        .map(body).collect();
+    let last = text.lines().rev().find(|l| !l.trim().is_empty()).map(body).unwrap_or_default();
+    let mut out = String::new();
+    if !errors.is_empty() {
+        out += &format!("Prism reported: {}", errors.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join(" | "));
+    }
+    if errors.last() != Some(&last) {
+        if !out.is_empty() { out += ". " }
+        out += &format!("The last thing it did: {last}");
+    }
+    Some(out)
+}
+
 /// Prism's executable in its default per-user install location.
 pub fn launcher_exe() -> PathBuf {
     PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default())

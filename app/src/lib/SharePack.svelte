@@ -124,7 +124,7 @@
           {#if !(code && left)}<button class="ghost" disabled={!!busy} onclick={invite}>{busy === "invite" ? "Making a code…" : "Get a code"}</button>{/if}
         </div>
         {#if code && left}
-          <div class="row"><button class="short" title="Copy the code" onclick={copy}>{code}</button>
+          <div class="row"><button class="short mono" title="Copy the code" onclick={copy}>{code}</button>
           <button class="copy-btn" class:done={copied} onclick={copy} aria-label="Copy the code">
             {#if copied}✓ Copied{:else}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M9 9h10v11H9zM5 15V4h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg> Copy{/if}
           </button><span class="muted small">Expires in {clock}. Keep Obelisk open until your friend shows up under Members.</span></div>
@@ -255,7 +255,7 @@
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .spacer { flex: 1; }
   .code { width: 100%; height: 64px; resize: none; font: 11.5px ui-monospace, Consolas, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; word-break: break-all; }
-  .short { font: 700 22px ui-monospace, Consolas, monospace; letter-spacing: 3px; background: none; border: 0; padding: 0; color: inherit; cursor: copy; }
+  .short { font: 700 22px Consolas, ui-monospace, monospace; letter-spacing: 3px; background: none; border: 0; padding: 0; color: inherit; cursor: copy; }
   .copy-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; font-weight: 600; flex: none; }
   .copy-btn.done { background: var(--ok, #2e9d5b); }
   .members { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -14,13 +14,13 @@ let listening = false;
 function listenOnce() {
   if (listening) return;
   listening = true;
-  listen<{ id: string; up: boolean }>("game-started", (e) => {
-    const { id, up } = e.payload;
+  listen<{ id: string; up: boolean; reason?: string }>("game-started", (e) => {
+    const { id, up, reason } = e.payload;
     if (up) running[id] = true;
     delete progress[id];
     if (!starting[id]) return;
     delete starting[id];
-    if (!up) toastError("The game didn't start.");
+    if (!up) toastError(`The game didn't start. ${reason ?? ""}`.trim());
   }).catch(() => (listening = false));
   // Prism's console stays shut on a crash (quiet launch); say so here and point at the diagnosis.
   listen<{ id: string; file: string }>("game-crashed", (e) => {

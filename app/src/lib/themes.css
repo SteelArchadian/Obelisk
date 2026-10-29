@@ -26,7 +26,7 @@
 :root[data-skin="block"] :is(button, input, select, textarea, h1, h2, h3, h4, h5, small, strong, b, label, td, th) {
   font-family: var(--font-display) !important;
 }
-:root[data-skin="block"] :is(pre, code, .mono, .err-line, .log-view, textarea[spellcheck="false"]) { font-family: ui-monospace, Consolas, monospace !important; }
+:root[data-skin="block"] :is(pre, code, .mono, .err-line, .log-view, textarea[spellcheck="false"]) { font-family: Consolas, ui-monospace, monospace !important; }
 :root[data-skin="block"] body { font-size: 15px; letter-spacing: 0.01em; background: var(--bg); }
 :root[data-skin="block"] :is(h1, h2, h3, .hero h2, .info h2, .head h2) { text-shadow: 0 2px 0 rgb(0 0 0 / 0.6); }
 :root[data-skin="block"] .scene { display: block; }

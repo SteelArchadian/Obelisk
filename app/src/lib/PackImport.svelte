@@ -168,7 +168,7 @@
     {#if stage === "enter" || stage === "looking"}
       <p class="muted small">Paste the code from your friend's Share. Their Obelisk needs to be open.</p>
       <div class="row">
-        <input type="search" class="code" maxlength="12" placeholder="ABC123" bind:value={code} disabled={stage === "looking"}
+        <input type="search" class="code mono" maxlength="12" placeholder="ABC123" bind:value={code} disabled={stage === "looking"}
           onkeydown={(e) => e.key === "Enter" && go()} />
         <button class="go" disabled={stage === "looking"} onclick={pasteAndGo} title="Paste & go" aria-label="Paste and go">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="8" y="3" width="12" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M5 7v12a2 2 0 0 0 2 2h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
@@ -304,7 +304,7 @@
   .small { font-size: 12.5px; }
   .row { display: flex; align-items: center; gap: 10px; }
   .spacer { flex: 1; }
-  .code { flex: 1; font: 700 24px ui-monospace, Consolas, monospace; letter-spacing: 0.16em; text-transform: uppercase; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
+  .code { flex: 1; font: 700 24px Consolas, ui-monospace, monospace; letter-spacing: 0.16em; text-transform: uppercase; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
   .go { display: inline-flex; align-items: center; gap: 8px; color: #fff; background: var(--accent); border: 0; border-radius: 8px; padding: 12px 16px; font-weight: 600; }
   .go:disabled { opacity: 0.7; }
   .warn { border: 1px solid var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }

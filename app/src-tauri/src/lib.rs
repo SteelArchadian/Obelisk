@@ -1457,7 +1457,7 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
     if CANCEL.swap(false, std::sync::atomic::Ordering::SeqCst) {
         return Err("Cancelled.".into());
     }
-    std::process::Command::new(prism::launcher_exe())
+    let mut child = std::process::Command::new(prism::launcher_exe())
         .args(["--launch", &instance_id])
         .spawn()
         .map_err(|e| format!("could not start Prism: {e}"))?;
@@ -1470,7 +1470,20 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
             let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": false, "cancelled": true }));
             return;
         }
-        let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": found.is_some() }));
+        // Prism closed without a game window: say why, from its exit code and its own log (never a silent stop).
+        let reason = found.is_none().then(|| {
+            let code = child.try_wait().ok().flatten().and_then(|s| s.code());
+            let mut why = match code {
+                Some(c) if c != 0 => format!("Prism closed with error code {c} before the game started."),
+                Some(_) => "Prism closed before the game started.".to_string(),
+                None => "The game window didn't appear.".to_string(),
+            };
+            if let Some(r) = prism::prism_stop_reason(&prism::data_dir(), &instance_id) {
+                why += &format!(" {r}");
+            }
+            why
+        });
+        let _ = app.emit("game-started", serde_json::json!({ "id": instance_id, "up": found.is_some(), "reason": reason }));
         // A crash report written since Play was clicked: the UI offers its diagnosis.
         let crashed = |app: &tauri::AppHandle| {
             if let Some(r) = prism::crash::list(&game_dir).into_iter().filter(|r| r.kind != "log" && r.time_ms as i64 >= click_ms).max_by_key(|r| r.time_ms) {

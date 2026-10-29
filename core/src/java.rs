@@ -142,7 +142,18 @@ pub fn check_before_launch(data: &Path, id: &str) -> Result<Option<String>, Stri
     // A Java outside the scanned folders (picked with Other Java) still counts.
     let outside = list.iter().all(|j| canon(&j.path) != canon(&path)).then(|| at(Path::new(&path))).flatten();
     let current = list.iter().find(|j| canon(&j.path) == canon(&path)).or(outside.as_ref());
-    if current.is_some_and(|j| suits(j.major, need)) { return Ok(None); }
+    if let Some(j) = current.filter(|j| suits(j.major, need)) {
+        // Prism only takes the Java versions its own list names for this Minecraft (1.21.1: just 21) and quietly
+        // refuses to start with any other. The player picked this newer one on purpose, and it runs this
+        // Minecraft, so Prism is told to accept it.
+        let listed = prism_java_majors(data, &inst.minecraft);
+        let ignored = cfg.get("IgnoreJavaCompatibility").is_some_and(|v| v == "true");
+        if !listed.is_empty() && !listed.contains(&j.major) && !ignored {
+            crate::update_cfg(&root.join("instance.cfg"), &[("IgnoreJavaCompatibility", Some("true".into()))])?;
+            return Ok(Some(format!("This profile uses Java {}, which Prism doesn't list for Minecraft {}; Prism now accepts it.", j.major, inst.minecraft)));
+        }
+        return Ok(None);
+    }
     let why = match current {
         Some(j) => format!("Java {} doesn't suit Minecraft {} (it needs Java {need})", j.major, inst.minecraft),
         None => "The chosen Java is no longer installed".to_string(),
@@ -158,6 +169,15 @@ pub fn check_before_launch(data: &Path, id: &str) -> Result<Option<String>, Stri
             Ok(Some(format!("{why}, and none is installed, so Prism will pick or download one.")))
         }
     }
+}
+
+/// The Java majors Prism's metadata lists for a Minecraft version (empty when it hasn't fetched them).
+pub fn prism_java_majors(data: &Path, mc: &str) -> Vec<u32> {
+    if mc.is_empty() || mc.contains(['/', '\\']) || mc.contains("..") { return vec![] }
+    fs::read_to_string(data.join("meta").join("net.minecraft").join(format!("{mc}.json"))).ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["compatibleJavaMajors"].as_array().map(|a| a.iter().filter_map(|m| m.as_u64().map(|m| m as u32)).collect()))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

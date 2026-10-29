@@ -17,6 +17,8 @@
   font-family: var(--font-display) !important;
 }
 :root[data-art][data-skin="block"] body { font-weight: 600; letter-spacing: 0; }
+/* Codes people read out or type (pack codes, logs): a font where G, Q, 0 and O look different. */
+:root[data-art][data-skin="block"] :is(pre, code, .mono, .err-line, .log-view, textarea[spellcheck="false"]) { font-family: Consolas, ui-monospace, monospace !important; }
 :root[data-art][data-skin="block"] :is(h2, h3, strong, b) { font-weight: 800; }
 
 /* ---- background: the painting, no drawn scene ---- */
