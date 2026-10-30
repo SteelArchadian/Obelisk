@@ -152,6 +152,11 @@ const RAN_MIXIN: &str = "This mod injected the code that crashed (mixin).";
 const ON_STACK: &str = "Also on the stack: this mod's code was in the call chain, but wasn't what was running.";
 const ON_STACK_MIXIN: &str = "Also on the stack: one of this mod's mixins was in the call chain, but wasn't what was running.";
 
+/// The suspect's own code (or its mixin) was what was running, not just somewhere in the call chain.
+pub fn ran(s: &Suspect) -> bool {
+    s.reason == RAN || s.reason == RAN_MIXIN
+}
+
 /// The analysis itself (no file access), so it can be tested on text.
 pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagnosis {
     let lines: Vec<&str> = text.lines().collect();

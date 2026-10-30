@@ -312,6 +312,11 @@ struct JarMeta {
     authors: Option<String>,
 }
 
+/// A jar's own version, from its mods.toml or fabric.mod.json.
+pub fn jar_version(path: &Path) -> Option<String> {
+    read_jar_meta(path).version
+}
+
 /// read_jar_meta, remembered per file (size + modified time) so reopening a profile doesn't reopen every jar.
 fn cached_jar_meta(path: &Path) -> JarMeta {
     use std::sync::{Mutex, OnceLock};

@@ -11,6 +11,7 @@
   import { resetCfSearch } from "./cf";
   import { settings, saveSettings, THEMES } from "./settings.svelte";
   import Resolution from "./Resolution.svelte";
+  import Releases from "./Releases.svelte";
 
   // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
   type SelfUpdate = { version: string; notes: string };
@@ -386,6 +387,7 @@
           <button class="primary" disabled={aiBusy} onclick={connectAi}>{aiBusy ? "Connecting…" : "Connect"}</button>
         </div>
         <p class="muted small">Connect adds Obelisk to {settings.aiAssistant === "gpt" ? "Codex" : "Claude Code"} as a tool. Start a new chat afterwards to see it. Keep Obelisk open (the tray is enough) while the assistant works.</p>
+        <Releases />
       {/if}
     {:else if app.settingsSection === "curseforge"}
       <h1>CurseForge API</h1>

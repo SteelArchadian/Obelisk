@@ -55,6 +55,29 @@ fn tb_ready() -> Result<(), String> {
     Ok(())
 }
 
+// For releases.rs.
+pub(crate) fn bench_root() -> PathBuf {
+    tb().root.clone()
+}
+pub(crate) fn bench_ready() -> bool {
+    tb_ready().is_ok()
+}
+pub(crate) fn gate_script() -> String {
+    format!("{}/gate.py", tb().scripts)
+}
+pub(crate) fn bench_jar(p: &str) -> Result<PathBuf, String> {
+    mcw_jar(p)
+}
+pub(crate) fn game_running(dir: &Path) -> bool {
+    game_running_in(dir)
+}
+pub(crate) fn arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+    need(args, key)
+}
+pub(crate) fn opt<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    s(args, key)
+}
+
 /// The play instance's game folder (none when the bench names no play profile).
 fn play_dir() -> PathBuf {
     if tb().play.is_empty() {
@@ -202,7 +225,7 @@ fn audit(cmd: &str, args: &Value, result: &str) {
     }
 }
 
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     // Local time via the C runtime-free route: let Windows format it.
     #[repr(C)]
     #[derive(Default)]
@@ -427,7 +450,8 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "ping" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
-            "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app"],
+            "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
+            "release-rollback", "release-optout"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -435,6 +459,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "app" => super::bridge::call(app, args),
         "launch" => launch(args, jobs),
         "gate" => gate(args, jobs),
+        "release-submit" | "release-status" | "release-promote" | "release-rollback" | "release-optout" => super::releases::command(cmd, args),
         "status" => {
             let (m, _) = &**jobs;
             let l = m.lock().unwrap();
@@ -877,7 +902,7 @@ fn new_job(jobs: &Shared, kind: &str, copy: &str, owner: &str, output: String) -
     id
 }
 
-fn python() -> Command {
+pub(crate) fn python() -> Command {
     let mut c = Command::new("python");
     c.arg("-I").creation_flags_no_window();
     c
