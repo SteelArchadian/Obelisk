@@ -47,9 +47,9 @@ const SCRIPT: &str = r#"
     tries++;
     if (/just a moment|attention required/i.test(document.title)) { if (tries < 40) setTimeout(read, 1000); return; }
     if (!location.pathname.startsWith("/my-notifications")) { send({ signedIn: false, items: [], path: location.pathname }); return; }
-    // The page draws its list with a script after it loads: wait for rows (or give up on an empty list after ~15 s).
+    // The page draws its list with a script after it loads: wait for rows (or give up on an empty list after ~30 s).
     const view = document.querySelector(".j-notification-view") || document.querySelector("main, #content, body");
-    if (!view.querySelector("*") && tries < 50) { setTimeout(read, 300); return; }
+    if (!view.querySelector("*") && tries < 100) { setTimeout(read, 300); return; }
     // The rows: the children of whichever element in the list has the most of them.
     let list = view;
     for (const el of view.querySelectorAll("*")) if (el.children.length > list.children.length) list = el;
@@ -72,7 +72,10 @@ const SCRIPT: &str = r#"
     }
     let minimal = "";
     try { minimal = (await (await fetch("/my-notifications/minimal", { credentials: "include" })).text()).slice(0, 60000); } catch {}
-    send({ signedIn: true, items, diag: (view.innerHTML || "").slice(0, 60000) + "\n<!-- minimal -->\n" + minimal });
+    // What the page loaded (its scripts and requests), kept with it for when CurseForge changes how the list is drawn.
+    const loaded = [...document.scripts].map((x) => x.src || "(inline " + (x.textContent || "").length + ")")
+      .concat(performance.getEntriesByType("resource").map((e) => e.initiatorType + " " + e.name)).join("\n");
+    send({ signedIn: true, items, diag: (view.innerHTML || "").slice(0, 60000) + "\n<!-- minimal -->\n" + minimal + "\n<!-- loaded\n" + loaded.slice(0, 30000) + "\n-->" });
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => setTimeout(read, 300));
   else setTimeout(read, 300);
