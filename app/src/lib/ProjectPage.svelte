@@ -55,6 +55,11 @@
   });
   let cfId = $derived(hit.cf_id ?? twin?.cf ?? null);
   let mrId = $derived(isCf ? twin?.mr ?? null : hit.project_id);
+  // Each site's page for this project: the badges by the title open them.
+  let siteLinks = $derived({
+    modrinth: mrId ? (isCf ? `https://modrinth.com/project/${mrId}` : `https://modrinth.com/${hit.project_type}/${hit.slug}`) : null,
+    curseforge: cfId ? (project?.site_url ?? `https://www.curseforge.com/projects/${cfId}`) : null,
+  });
   let siteHit = $derived<Hit>({ ...hit, sources: [...(mrId ? ["modrinth"] : []), ...(cfId ? ["curseforge"] : [])] as Hit["sources"] });
 
   /** Versions that fit the target profile (loader + game version), unless "show incompatible" is on. */
@@ -221,7 +226,7 @@
       <div class="row1">
         <h2>{hit.title}</h2>
         {#if author}<button class="by" onclick={openAuthor}>by {author}</button>{/if}
-        <SourceBadges hit={siteHit} big />
+        <SourceBadges hit={siteHit} big links={siteLinks} />
         <div class="spacer"></div>
         {#if mr.account && mrId}
           <button class="mr-follow" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
@@ -256,16 +261,16 @@
   </header>
 
   <nav class="tabs">
-    {#each [["overview", "Description"], ["changelog", "Changelog"], ["versions", `${isCf ? "Files" : "Versions"} (${listed.length})`], ["gallery", `Gallery (${gallery.length})`], ["relations", "Relations"], ...(cfId ? [["comments", "Comments"]] : [])] as [id, label] (id)}
-      <button class:on={tab === id} onclick={() => (tab = id as any)}>{label}</button>
-    {/each}
+    <div class="tablist">
+      {#each [["overview", "Description"], ...(cfId ? [["comments", "Comments"]] : []), ["changelog", "Changelog"], ["versions", `${isCf ? "Files" : "Versions"} (${listed.length})`], ["gallery", `Gallery (${gallery.length})`], ["relations", "Relations"]] as [id, label] (id)}
+        <button class:on={tab === id} onclick={() => (tab = id as any)}>{label}</button>
+      {/each}
+    </div>
     {#if project}
       <div class="links">
         {#each [["issues_url", "Issues"], ["source_url", "Source"], ["wiki_url", "Wiki"], ["discord_url", "Discord"]] as [k, label] (k)}
           {#if project[k]}<button class="link" title={project[k]} onclick={() => openLink(project[k])}>{label} ↗</button>{/if}
         {/each}
-        {#if mrId}<button class="link" onclick={() => openLink(isCf ? `https://modrinth.com/project/${mrId}` : `https://modrinth.com/${hit.project_type}/${hit.slug}`)}>Modrinth ↗</button>{/if}
-        {#if cfId}<button class="link" onclick={() => openLink(project?.site_url ?? `https://www.curseforge.com/projects/${cfId}`)}>CurseForge ↗</button>{/if}
       </div>
     {/if}
   </nav>
@@ -398,7 +403,8 @@
   .chip.plain { border: 0; }
   .stats { margin-left: auto; display: flex; gap: 16px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
   .tabs { display: flex; flex-wrap: wrap; gap: 4px 28px; border-bottom: 1px solid var(--line); margin-top: 14px; align-items: center; }
-  .tabs > button { background: none; border: 0; padding: 8px 0 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 15px; }
+  .tablist { flex: 1; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 20px; padding-right: 32px; }
+  .tablist > button { background: none; border: 0; padding: 8px 0 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 15px; }
   .follow { width: 40px; height: 40px; flex: none; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 20px; line-height: 1; }
   .follow:hover { color: var(--text); }
   .follow.on { color: #ff5c7a; border-color: color-mix(in srgb, #ff5c7a 50%, var(--line)); }
@@ -406,7 +412,7 @@
   .mr-follow { height: 40px; flex: none; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-weight: 600; }
   .mr-follow:hover { color: var(--text); }
   .mr-follow.on { color: var(--accent); }
-  .tabs > button.on { color: var(--text); border-bottom-color: var(--accent); }
+  .tablist > button.on { color: var(--text); border-bottom-color: var(--accent); }
   .links { margin-left: auto; display: flex; gap: 12px; }
   .link { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 2px; }
   .link:hover { color: var(--accent); }

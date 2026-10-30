@@ -54,6 +54,11 @@ pub fn profile(cookie: &str) -> Result<Option<Value>, String> {
     })))
 }
 
+/// An author's picture: Twitch ones leave their size as "{0}" for the page to fill in; none at all is None.
+fn avatar(url: Option<&str>) -> Option<String> {
+    url.map(str::trim).filter(|u| u.starts_with("http")).map(|u| u.replace("{0}", "70x70"))
+}
+
 /// One page (20, newest first) of a project's comments, replies nested under each: {comments, total}.
 pub fn comments(project_id: u64, page: u32, cookie: Option<&str>) -> Result<Value, String> {
     let (code, v) = call("GET", &format!("/mods/{project_id}/comments?page={page}&size=20"), cookie, None)?;
@@ -64,7 +69,7 @@ pub fn comments(project_id: u64, page: u32, cookie: Option<&str>) -> Result<Valu
         "id": c["id"], "html": c["renderedHtml"].as_str().or(c["body"].as_str()).unwrap_or_default(),
         "posted": c["datePosted"], "pinned": c["isPinned"], "parentId": c["parentId"],
         "author": { "id": c["author"]["id"], "username": c["author"]["username"], "name": c["author"]["displayName"],
-            "avatar": c["author"]["twitchAvatarUrl"] },
+            "avatar": avatar(c["author"]["twitchAvatarUrl"].as_str()) },
     });
     let list: Vec<Value> = v["data"].as_array().into_iter().flatten().map(|c| {
         let mut top = map(c);
@@ -119,6 +124,8 @@ pub fn set_favorite(cookie: &str, project_id: u64, on: bool) -> Result<(), Strin
 mod tests {
     #[test]
     fn typed_text_becomes_escaped_paragraphs() {
+        assert_eq!(super::avatar(Some("https://x/a-profile_image-{0}.png")).as_deref(), Some("https://x/a-profile_image-70x70.png"));
+        assert_eq!(super::avatar(Some("")), None);
         assert_eq!(super::text_html("hi <b>\nthere\n\nnext & last"), "<p>hi &lt;b&gt;<br>there</p><p>next &amp; last</p>");
     }
 }

@@ -56,6 +56,9 @@
   }
 
   const focus = (el: HTMLElement) => el.focus();
+  // Pictures that didn't load; those authors (and ones with none) get their first letter instead.
+  let broken = $state(new Set<string>());
+  const hue = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
   const mine = (c: Comment) => !!cf.account && c.author?.id === cf.account.id;
 </script>
 
@@ -104,7 +107,12 @@
 
 {#snippet one(c: Comment)}
   <div class="comment" class:mine={mine(c)}>
-    {#if c.author?.avatar}<img class="avatar" src={c.author.avatar} alt="" loading="lazy" />{:else}<div class="avatar"></div>{/if}
+    {#if c.author?.avatar && !broken.has(c.author.avatar)}
+      <img class="avatar" src={c.author.avatar} alt="" loading="lazy" onerror={() => (broken = new Set(broken).add(c.author.avatar!))} />
+    {:else}
+      {@const who = c.author?.name || c.author?.username || "?"}
+      <div class="avatar letter" style:background={`hsl(${hue(who)} 45% 38%)`} aria-hidden="true">{who.trim().charAt(0).toUpperCase()}</div>
+    {/if}
     <div class="main">
       <div class="head">
         <strong>{c.author?.name || c.author?.username || "Someone"}</strong>
@@ -128,6 +136,7 @@
   .comment { display: flex; gap: 10px; }
   .comment.mine .main { border-left: 3px solid var(--accent); padding-left: 8px; }
   .avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; background: var(--panel); object-fit: cover; }
+  .letter { display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 14px; }
   .main { min-width: 0; flex: 1; }
   .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--panel); color: var(--muted); }
