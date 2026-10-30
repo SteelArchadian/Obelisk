@@ -147,6 +147,11 @@ fn mod_files(game: &Path) -> HashMap<String, String> {
 /// Module names in stack frames that are the game, the loader or Java itself, never "the mod".
 const NOT_MODS: [&str; 12] = ["minecraft", "neoforge", "fml_loader", "fml", "forge", "java.base", "java.desktop", "mixinextras", "mixin", "bus", "jdk.internal", "datafixerupper"];
 
+const RAN: &str = "The crash happened inside this mod's code.";
+const RAN_MIXIN: &str = "This mod injected the code that crashed (mixin).";
+const ON_STACK: &str = "Also on the stack: this mod's code was in the call chain, but wasn't what was running.";
+const ON_STACK_MIXIN: &str = "Also on the stack: one of this mod's mixins was in the call chain, but wasn't what was running.";
+
 /// The analysis itself (no file access), so it can be tested on text.
 pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagnosis {
     let lines: Vec<&str> = text.lines().collect();
@@ -177,28 +182,32 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         lines[start..].iter().skip_while(|l| !l.trim_start().starts_with("at ")).take_while(|l| l.trim_start().starts_with("at ") || l.trim_start().starts_with("..."))
             .filter(|l| l.trim_start().starts_with("at ")).copied().take(60).collect()
     };
-    let mut first_mod = true;
+    // Blame goes to whose code was actually running: the innermost frame outside Java and its libraries. A mod
+    // there, or a mixin handler a mod merged into a game class, threw; mods further down were only passing the
+    // call along. When that frame is the game's own code, no mod threw, and none is said to have.
+    let mut top_seen = false;
+    let mut game_threw = false;
     for (i, f) in frames.iter().enumerate() {
         let w = 30u32.saturating_sub(i as u32 * 2).max(1);
         // Mixin handlers name the mod that injected them: handler$abc000$<modid>$method
         let owners = mixin_owners(f);
-        let Some((id, jar)) = frame_mod(f) else { continue };
-        // The first mod frame is where the crash actually happened; weigh it (and a mixin
-        // owner injected right there) far above mods that merely appear further down.
-        let bonus = if first_mod { 60 } else { 0 };
-        let e = score.entry(id.clone()).or_insert((0, jar.clone(), String::new()));
-        e.0 += w + if owners.is_empty() { bonus } else { 0 };
-        if e.2.is_empty() {
-            e.2 = if first_mod && owners.is_empty() { "The crash happened inside this mod's code.".into() } else { "This mod's code is in the crash's stack trace.".into() };
+        let owner = frame_mod(f);
+        let top = !top_seen && (owner.is_some() || !owners.is_empty() || game_frame(f));
+        if top {
+            top_seen = true;
+            game_threw = owner.is_none() && owners.is_empty();
         }
-        for owner in owners {
-            let e = score.entry(owner).or_insert((0, String::new(), String::new()));
-            e.0 += w + bonus;
-            if e.2.is_empty() || bonus > 0 {
-                e.2 = "This mod injected the code that crashed (mixin).".into();
-            }
+        if let Some((id, jar)) = owner {
+            let ran = top && owners.is_empty();
+            let e = score.entry(id).or_insert((0, jar, String::new()));
+            e.0 += w + if ran { 60 } else { 0 };
+            if ran { e.2 = RAN.into() } else if e.2.is_empty() { e.2 = ON_STACK.into() }
         }
-        first_mod = false;
+        for id in owners {
+            let e = score.entry(id).or_insert((0, String::new(), String::new()));
+            e.0 += w + if top { 60 } else { 0 };
+            if top { e.2 = RAN_MIXIN.into() } else if e.2.is_empty() { e.2 = ON_STACK_MIXIN.into() }
+        }
     }
     for l in &lines {
         let t = l.trim();
@@ -479,12 +488,27 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
     }
 
     // A generic "this mod crashed" finding when nothing more specific explains it.
+    if kind == "crash" && f.iter().all(|x| x.severity != "critical") && game_threw {
+        f.push(Finding {
+            severity: "critical".into(),
+            title: "The crash happened in Minecraft's own code".into(),
+            detail: format!("{} Minecraft itself hit the error, not a mod, so a mod most likely handed it bad data or left something in a bad state.{}",
+                plain_error(&d.error), if top.is_some() { " The mods below were in the call chain, the first one most closely; it's a lead, not proof." } else { "" }),
+            fix: match &top {
+                Some(s) => format!("Disable {} to see whether the crash stops. If it does, update it or report the crash (this file) to its author.", s.mod_id),
+                None => "Nothing in the crash points at a mod. Think back to what changed last (a mod added or updated, a config edited) and undo that first.".into(),
+            },
+            action: if top.is_some() { "disable".into() } else { String::new() },
+            target: top.as_ref().map(|s| s.file_name.clone()).unwrap_or_default(),
+            ..Default::default()
+        });
+    }
     if kind == "crash" && f.iter().all(|x| x.severity != "critical") {
         if let Some(s) = &top {
             f.push(Finding {
                 severity: "critical".into(),
                 title: format!("{} crashed the game", s.mod_id),
-                detail: format!("{}{}", plain_error(&d.error), if s.score >= 20 { " The crash happened in this mod's own code." } else { "" }),
+                detail: format!("{}{}", plain_error(&d.error), if s.reason == RAN || s.reason == RAN_MIXIN { " The crash happened in this mod's own code." } else { "" }),
                 fix: format!("Update {0}. If it's already up to date, disable it to confirm, and report the crash (this file) to {0}'s author.", s.mod_id),
                 action: "disable".into(), target: s.file_name.clone(), ..Default::default()
             });
@@ -528,6 +552,19 @@ fn frame_mod(frame: &str) -> Option<(String, String)> {
     }
     let jar = frame.split("~[").nth(1).or_else(|| frame.split(" [").nth(1)).and_then(|j| j.split("%23").next()).unwrap_or("").to_string();
     Some((id, jar))
+}
+
+/// A frame of Minecraft itself. The loader counts as a library: a mod calling its API wrongly (reading a config
+/// before it's loaded, say) throws inside NeoForge, but the mod that called is what was running.
+fn game_frame(frame: &str) -> bool {
+    let Some(t) = frame.trim_start().strip_prefix("at ") else { return false };
+    match t.split_once('/') {
+        Some((layer, rest)) => {
+            let module = if matches!(layer, "TRANSFORMER" | "GAME" | "PLUGIN") { rest.split('/').next().unwrap_or("") } else { layer };
+            module.split('@').next() == Some("minecraft")
+        }
+        None => ["net.minecraft.", "com.mojang.blaze3d."].iter().any(|p| t.starts_with(p)),
+    }
 }
 
 /// Mixin handler methods carry the owning mod's id: handler$abc000$<modid>$name, wrapWithCondition$hpc000$<modid>$…
@@ -648,6 +685,31 @@ mod tests {
         assert!(d.suspects[0].score > d.suspects[1].score + 20);
         assert!(d.findings.iter().any(|f| f.action == "disable" && f.target == "advancedcompassplus-1.0.0.jar"));
         assert!(d.error.starts_with("java.lang.NullPointerException"));
+    }
+
+    #[test]
+    fn a_crash_in_game_code_blames_no_mod_outright() {
+        let t = "Description: Rendering entity\n\njava.lang.NullPointerException: oops\n\
+\tat java.base/java.util.Objects.requireNonNull(Unknown Source)\n\
+\tat TRANSFORMER/minecraft@1.21.1/net.minecraft.client.renderer.entity.EntityRenderer.render(EntityRenderer.java:9) ~[client.jar%23489!/:?] {}\n\
+\tat TRANSFORMER/gnetum@3.3.6/me.decce.gnetum.GuiHelper.renderLayers(GuiHelper.java:68) ~[gnetum-3.3.6.jar%23630!/:?] {re:mixin}\n";
+        let d = analyze("crash", t, &mods());
+        assert_eq!(d.suspects[0].mod_id, "gnetum");
+        assert_eq!(d.suspects[0].reason, ON_STACK);
+        assert_eq!(d.findings[0].title, "The crash happened in Minecraft's own code");
+        assert_eq!(d.findings[0].target, "gnetum-3.3.6.jar");
+    }
+
+    #[test]
+    fn a_mixin_handler_in_game_code_is_what_ran() {
+        let t = "Description: Ticking\n\njava.lang.IllegalStateException: bad\n\
+\tat TRANSFORMER/minecraft@1.21.1/net.minecraft.world.level.Level.handler$abc000$gnetum$onTick(Level.java:5) ~[client.jar%23489!/:?] {re:mixin}\n\
+\tat TRANSFORMER/advancedcompassplus@1.0.0/dev.chill.acplus.Foo.bar(Foo.java:1) ~[advancedcompassplus-1.0.0.jar%23503!/:?] {}\n";
+        let d = analyze("crash", t, &mods());
+        assert_eq!(d.suspects[0].mod_id, "gnetum");
+        assert_eq!(d.suspects[0].reason, RAN_MIXIN);
+        assert_eq!(d.suspects[1].reason, ON_STACK);
+        assert!(d.findings.iter().all(|f| !f.title.contains("Minecraft's own code")));
     }
 
     #[test]
