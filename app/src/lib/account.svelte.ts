@@ -1,6 +1,8 @@
-// Signed-in site accounts: Modrinth (a personal access token kept in Windows Credential Manager) for following
-// projects and notifications. CurseForge has no sign-in for other apps, so it has neither.
+// Signed-in site accounts: Modrinth (a personal access token kept in Windows Credential Manager) and CurseForge
+// (signed in on curseforge.com's own page in a small window; its session stays in Obelisk's web view) for following
+// projects, comments and notifications.
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast, toastError } from "./state.svelte";
 
@@ -14,7 +16,68 @@ export const mr = $state({
   loaded: false,
 });
 
-export const unread = () => mr.notes.filter((n) => !n.read).length;
+export type CfAccount = { id: number; username: string; displayName: string; avatarUrl?: string };
+export type CfNotification = { id: string; title: string; text: string; projectId: number; commentId: number; read: boolean; created: number };
+
+export const cf = $state({
+  account: null as CfAccount | null,
+  favorites: new Set<number>(),
+  notes: [] as CfNotification[],
+  signingIn: false,
+});
+
+export const cfUnread = () => cf.notes.filter((n) => !n.read).length;
+export const unread = () => mr.notes.filter((n) => !n.read).length + cfUnread();
+
+let cfListening = false;
+
+export async function loadCf() {
+  if (!cfListening) {
+    cfListening = true;
+    listen("cf-account", () => { cf.signingIn = false; loadCf(); });
+    listen("cf-notes", () => loadCfNotes());
+  }
+  try {
+    cf.account = await invoke<CfAccount | null>("cf_account");
+    if (cf.account) {
+      try { cf.favorites = new Set(await invoke<number[]>("cf_favorites")); } catch { /* favorites are extra */ }
+    }
+  } catch { /* offline: shown as signed out */ }
+  await loadCfNotes();
+}
+
+export async function loadCfNotes() {
+  try { cf.notes = await invoke<CfNotification[]>("cf_notifications"); } catch { /* keep what we had */ }
+}
+
+/** Opens curseforge.com's sign-in page in a small window; it closes by itself once signed in. */
+export async function cfSignIn() {
+  try { cf.signingIn = true; await invoke("cf_signin"); } catch (e) { cf.signingIn = false; toastError(e); }
+}
+
+export async function cfSignOut() {
+  try {
+    await invoke("cf_signout");
+    cf.account = null;
+    cf.favorites = new Set();
+  } catch (e) { toastError(e); }
+}
+
+export async function toggleCfFavorite(projectId: number) {
+  const on = !cf.favorites.has(projectId);
+  try {
+    await invoke("cf_favorite", { projectId, on });
+    const s = new Set(cf.favorites);
+    on ? s.add(projectId) : s.delete(projectId);
+    cf.favorites = s;
+  } catch (e) { toastError(e); }
+}
+
+export async function cfMarkRead(ids: string[]) {
+  if (!ids.length) return;
+  await invoke("cf_notifications_read", { ids });
+  cf.notes = cf.notes.map((n) => (ids.includes(n.id) ? { ...n, read: true } : n));
+}
 
 export async function loadAccount() {
   try {

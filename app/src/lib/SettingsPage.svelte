@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { mr, signIn, signOut, openLink } from "./account.svelte";
+  import { mr, signIn, signOut, openLink, cf, cfSignIn, cfSignOut } from "./account.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -46,7 +46,7 @@
 
   const SECTIONS = [
     ["general", "General"], ["sync", "Sync & Import"], ["themes", "Themes"],
-    ["minecraft", "Minecraft & Java"], ["curseforge", "CurseForge API"], ["modrinth", "Modrinth account"], ["plugins", "Plugins"], ["about", "About"],
+    ["minecraft", "Minecraft & Java"], ["curseforge", "CurseForge"], ["modrinth", "Modrinth account"], ["plugins", "Plugins"], ["about", "About"],
   ] as const;
 
   let mrInput = $state("");
@@ -400,6 +400,19 @@
         {#if hasKey}<button class="ghost" onclick={() => { keyInput = ""; saveKey(); }}>Remove</button>{/if}
       </div>
 
+      <h2>CurseForge account</h2>
+      <p class="muted">Sign in to comment and reply on CurseForge project pages, keep favorites, and see replies to your comments under the bell. You sign in on CurseForge's own page in a small window, so Obelisk never sees your password; the sign-in stays in Obelisk until you sign out.</p>
+      {#if cf.account}
+        <div class="launcher">
+          {#if cf.account.avatarUrl}<img class="mr-avatar" src={cf.account.avatarUrl} alt="" />{/if}
+          <span>Signed in as <strong>{cf.account.displayName || cf.account.username}</strong></span>
+          <div class="spacer"></div>
+          <button class="ghost" onclick={cfSignOut}>Sign out</button>
+        </div>
+      {:else}
+        <div><button class="primary" disabled={cf.signingIn} onclick={cfSignIn}>{cf.signingIn ? "Finish signing in in the CurseForge window…" : "Sign in to CurseForge"}</button></div>
+      {/if}
+
     {:else if app.settingsSection === "modrinth"}
       <h1>Modrinth account</h1>
       <p class="muted">Sign in to follow projects from their pages and see your Modrinth notifications under the bell. Modrinth signs other apps in with a personal access token: you make one on Modrinth and paste it here. It's kept in Windows Credential Manager and only ever sent to Modrinth.</p>
@@ -422,7 +435,6 @@
         </div>
         {#if mrError}<p class="warn">{mrError}</p>{/if}
       {/if}
-      <p class="muted small">CurseForge doesn't let other apps sign in, so following and notifications there stay on curseforge.com.</p>
 
     {:else}
       <h1>About</h1>

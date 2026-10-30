@@ -1,7 +1,7 @@
 <script lang="ts">
   // The bell on the left rail: Modrinth notifications (when signed in) in one tab, CurseForge in the other.
   import { onMount } from "svelte";
-  import { mr, unread, loadAccount, loadNotes, markRead, openLink } from "./account.svelte";
+  import { mr, cf, unread, cfUnread, loadAccount, loadNotes, markRead, loadCf, loadCfNotes, cfMarkRead, cfSignIn, openLink } from "./account.svelte";
   import { app, closeOverlays } from "./state.svelte";
   import { openProjectById } from "./install";
   import { ago } from "./api";
@@ -9,10 +9,13 @@
   let open = $state(false);
   let tab = $state<"modrinth" | "curseforge">("modrinth");
   const count = $derived(unread());
+  const cfCount = $derived(cfUnread());
+  const mrCount = $derived(count - cfCount);
 
   onMount(() => {
     loadAccount();
-    const t = setInterval(loadNotes, 10 * 60_000);
+    loadCf();
+    const t = setInterval(() => { loadNotes(); loadCfNotes(); }, 10 * 60_000);
     const close = () => (open = false);
     window.addEventListener("click", close);
     return () => { clearInterval(t); window.removeEventListener("click", close); };
@@ -36,22 +39,22 @@
 
 <div class="bell-wrap">
   <button class="bell" class:has={count > 0} title={count ? `${count} unread notification${count === 1 ? "" : "s"}` : "Notifications"}
-    aria-label="Notifications" onclick={(e) => { e.stopPropagation(); open = !open; if (open) loadNotes(); }}>
+    aria-label="Notifications" onclick={(e) => { e.stopPropagation(); open = !open; if (open) { loadNotes(); loadCfNotes(); } }}>
     <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg>
     {#if count}<span class="dot">{count > 99 ? "99+" : count}</span>{/if}
   </button>
   {#if open}
     <div class="pop" role="dialog" aria-label="Notifications" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && (open = false)}>
       <div class="tabs">
-        <button class:on={tab === "modrinth"} onclick={() => (tab = "modrinth")}>Modrinth{#if count} ({count}){/if}</button>
-        <button class:on={tab === "curseforge"} onclick={() => (tab = "curseforge")}>CurseForge</button>
+        <button class:on={tab === "modrinth"} onclick={() => (tab = "modrinth")}>Modrinth{#if mrCount} ({mrCount}){/if}</button>
+        <button class:on={tab === "curseforge"} onclick={() => (tab = "curseforge")}>CurseForge{#if cfCount} ({cfCount}){/if}</button>
       </div>
       {#if tab === "modrinth"}
         {#if !mr.account}
           <p class="muted">Sign in to Modrinth to see your notifications and follow projects.</p>
           <button class="primary" onclick={settings}>Sign in</button>
         {:else}
-          {#if count}<button class="link all" onclick={() => markRead(mr.notes.filter((n) => !n.read).map((n) => n.id))}>Mark all read</button>{/if}
+          {#if mrCount}<button class="link all" onclick={() => markRead(mr.notes.filter((n) => !n.read).map((n) => n.id))}>Mark all read</button>{/if}
           <div class="list">
             {#each mr.notes.slice(0, 50) as n (n.id)}
               <button class="note" class:unread={!n.read} onclick={() => { markRead([n.id]); go(n.link); }}>
@@ -63,8 +66,21 @@
           </div>
         {/if}
       {:else}
-        <p class="muted">CurseForge doesn't let other apps sign in, so its notifications and follows can't show here.</p>
-        <button class="ghost" onclick={() => { open = false; openLink("https://www.curseforge.com/notifications"); }}>Open CurseForge notifications ↗</button>
+        {#if !cf.account}
+          <p class="muted">Sign in to CurseForge to comment and reply from Obelisk, keep favorites, and hear here when someone replies to you.</p>
+          <button class="primary" disabled={cf.signingIn} onclick={cfSignIn}>{cf.signingIn ? "Finish signing in in the CurseForge window…" : "Sign in to CurseForge"}</button>
+        {:else}
+          {#if cfCount}<button class="link all" onclick={() => cfMarkRead(cf.notes.filter((n) => !n.read).map((n) => n.id))}>Mark all read</button>{/if}
+          <div class="list">
+            {#each cf.notes.slice(0, 50) as n (n.id)}
+              <button class="note" class:unread={!n.read} onclick={() => { cfMarkRead([n.id]); open = false; openProjectById(`cf:${n.projectId}`, "comments"); }}>
+                <strong>{n.title}</strong>
+                {#if n.text}<span>{n.text}</span>{/if}
+                <small>{ago(n.created)}</small>
+              </button>
+            {:else}<p class="muted">No replies yet. Obelisk checks the threads you've commented in every 15 minutes.</p>{/each}
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -88,7 +104,6 @@
   .note small { font-size: 11px; color: var(--muted); }
   .muted { color: var(--muted); margin: 0; font-size: 13px; line-height: 1.5; }
   .primary { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 7px 14px; font-weight: 600; align-self: flex-start; }
-  .ghost { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 7px 12px; color: inherit; align-self: flex-start; }
   .link { background: none; border: 0; color: var(--accent); padding: 0; }
   .all { align-self: flex-end; font-size: 12px; }
 </style>

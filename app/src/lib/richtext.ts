@@ -30,6 +30,12 @@ export function renderBody(body: string): string {
   });
 }
 
+/** HTML someone wrote (a comment) -> sanitized HTML, no embeds. */
+export function cleanHtml(html: string): string {
+  DOMPurify.removeAllHooks();
+  return DOMPurify.sanitize(html ?? "", { FORBID_TAGS: ["iframe", "style", "form", "input"] });
+}
+
 // ---- YouTube volume memory ----
 const KEY = "obelisk.ytVolume";
 

@@ -231,11 +231,11 @@ export async function linkTarget(href: string): Promise<LinkTarget | null> {
   return null;
 }
 
-export async function openProjectById(id: string) {
+export async function openProjectById(id: string, tab?: "comments") {
   try {
     if (id.startsWith("cf:")) {
       const { project } = await api.cfProject(Number(id.slice(3)));
-      pushOverlay({ kind: "project", hit: cfToHit(project) });
+      pushOverlay({ kind: "project", hit: cfToHit(project), tab });
       return;
     }
     pushOverlay({ kind: "project", hit: projectToHit(await api.project(id)) });

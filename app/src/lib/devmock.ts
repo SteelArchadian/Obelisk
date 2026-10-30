@@ -137,6 +137,19 @@ export function installDevMock() {
           { id: "a", label: "", startedMs: now - 2 * day, html: "", phases: [], findings: [], contenders: [], whole: { seconds: 60, fps: 98, low1PctFps: 30, topModsCpu: [{ mod: "boundless", sharePct: 30 }] } }] };
       case "get_pins": return [];
       case "has_cf_key": return true;
+      case "cf_account": return sessionStorage.getItem("mock.cfOut") ? null : { id: 7, username: "steel", displayName: "SteelArchadian", avatarUrl: "" };
+      case "cf_signout": sessionStorage.setItem("mock.cfOut", "1"); return null;
+      case "cf_signin": sessionStorage.removeItem("mock.cfOut"); return null;
+      case "cf_favorites": return [];
+      case "cf_favorite": return null;
+      case "cf_notifications": return [{ id: "cf-1", title: "Alex replied on Kaleidoscope Cookery", text: "Try the 1.2 build, it fixes that.", projectId: 1309203, commentId: 5, read: false, created: now - 3600_000 }];
+      case "cf_notifications_read": return null;
+      case "cf_comment_post": return null;
+      case "cf_comments": return { total: 2, me: null, comments: [
+        { id: 5, html: "<p>Does this work with <b>Farmer's Delight</b>?</p>", posted: now - 86400_000, pinned: false, author: { id: 7, username: "steel", name: "SteelArchadian" },
+          replies: [{ id: 6, html: "<p>Try the 1.2 build, it fixes that.</p>", posted: now - 3600_000, pinned: false, author: { id: 9, username: "alex", name: "Alex" } }] },
+        { id: 4, html: "<p>Love the stoves!<script>alert(1)</script></p>", posted: now - 5 * 86400_000, pinned: true, author: { id: 10, username: "sam", name: "Sam" }, replies: [] },
+      ] };
       case "list_accounts": return [];
       case "mr_project": return { id: "LNytGWDc", slug: "create", title: "Create", description: "Aesthetic technology", project_type: "mod", body: "## Create Rotational power.\n\n<center><a href=\"https://modrinth.com/mod/accents\"><img style=\"display: inline;\" src=\"https://i.imgur.com/quXJZzx.png\" width=\"45%\" /></a></center>", gallery: [], loaders: ["neoforge"], issues_url: "github.com/Creators-of-Create/Create/issues", source_url: "https://github.com/Creators-of-Create/Create", downloads: 5_000_000, followers: 1, icon_url: "", categories: ["technology"], game_versions: ["1.21.1"], versions: [], date_modified: new Date(now).toISOString(), published: new Date(now).toISOString(), team: "t" };
       case "mr_versions": case "mr_members": return [];

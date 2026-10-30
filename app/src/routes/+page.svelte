@@ -427,7 +427,7 @@
       {#if app.stack.length}
         {@const top = app.stack[app.stack.length - 1]}
         {#key top}
-          {#if top.kind === "project"}<ProjectPage hit={top.hit} />{:else}<AuthorPage name={top.name} cfId={top.cfId} />{/if}
+          {#if top.kind === "project"}<ProjectPage hit={top.hit} startTab={top.tab} />{:else}<AuthorPage name={top.name} cfId={top.cfId} />{/if}
         {/key}
       {/if}
     </div>

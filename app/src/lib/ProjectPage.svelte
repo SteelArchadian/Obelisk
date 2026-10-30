@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { untrack } from "svelte";
   import { crisp } from "./crisp";
   import { api, compact, ago, versionsLabel, type Hit, type Version } from "./api";
   import { app, popOverlay, closeOverlays, openBrowse, pushOverlay, toastError } from "./state.svelte";
@@ -13,11 +14,12 @@
   import TargetChip from "./TargetChip.svelte";
   import Relations from "./Relations.svelte";
   import { settings } from "./settings.svelte";
-  import { mr, toggleFollow, openLink } from "./account.svelte";
+  import { mr, toggleFollow, openLink, cf, toggleCfFavorite } from "./account.svelte";
+  import Comments from "./Comments.svelte";
 
-  let { hit }: { hit: Hit } = $props();
+  let { hit, startTab }: { hit: Hit; startTab?: "comments" } = $props();
 
-  let tab = $state<"overview" | "changelog" | "gallery" | "versions" | "relations">("overview");
+  let tab = $state<"overview" | "changelog" | "gallery" | "versions" | "relations" | "comments">(untrack(() => startTab) ?? "overview"); // where it opens; the tabs are the user's after that
   let project = $state<any>(null);
   let fetchedAuthor = $state("");
   let author = $derived(hit.author || fetchedAuthor);
@@ -225,6 +227,10 @@
           <button class="mr-follow" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
             aria-pressed={mr.follows.has(mrId!)} onclick={() => toggleFollow(mrId!)}>{mr.follows.has(mrId!) ? "✓ Following" : "+ Follow"}</button>
         {/if}
+        {#if cf.account && cfId}
+          <button class="mr-follow" class:on={cf.favorites.has(Number(cfId))} title={cf.favorites.has(Number(cfId)) ? "In your CurseForge favorites (click to remove)" : "Add to your CurseForge favorites"}
+            aria-pressed={cf.favorites.has(Number(cfId))} onclick={() => toggleCfFavorite(Number(cfId))}>{cf.favorites.has(Number(cfId)) ? "♥ CurseForge" : "♡ CurseForge"}</button>
+        {/if}
         {#if wishPack}
           <button class="follow wish" class:on={isWished(wishPack.id, hit.project_id)} aria-pressed={isWished(wishPack.id, hit.project_id)}
             title={isWished(wishPack.id, hit.project_id) ? `On your wish list for ${wishPack.name} (click to take it off)` : `Wish-list it for ${wishPack.name}, so everyone in the pack can talk it over`}
@@ -250,12 +256,11 @@
   </header>
 
   <nav class="tabs">
-    {#each [["overview", "Description"], ["changelog", "Changelog"], ["versions", `${isCf ? "Files" : "Versions"} (${listed.length})`], ["gallery", `Gallery (${gallery.length})`], ["relations", "Relations"]] as [id, label] (id)}
+    {#each [["overview", "Description"], ["changelog", "Changelog"], ["versions", `${isCf ? "Files" : "Versions"} (${listed.length})`], ["gallery", `Gallery (${gallery.length})`], ["relations", "Relations"], ...(cfId ? [["comments", "Comments"]] : [])] as [id, label] (id)}
       <button class:on={tab === id} onclick={() => (tab = id as any)}>{label}</button>
     {/each}
     {#if project}
       <div class="links">
-        {#if isCf && project.site_url}<button class="link" title="CurseForge's comments (in your browser)" onclick={() => openLink(`${project.site_url.replace(/\/$/, "")}/comments`)}>Comments ↗</button>{/if}
         {#each [["issues_url", "Issues"], ["source_url", "Source"], ["wiki_url", "Wiki"], ["discord_url", "Discord"]] as [k, label] (k)}
           {#if project[k]}<button class="link" title={project[k]} onclick={() => openLink(project[k])}>{label} ↗</button>{/if}
         {/each}
@@ -277,6 +282,8 @@
           <div class="rich">{@html v.changelog === null && isCf ? '<p class="muted">Loading…</p>' : renderBody(v.changelog || "_No changelog._")}</div>
         </section>
       {:else}<div class="muted">{versions.length ? "No versions for this profile. Turn on “Show incompatible versions” in Versions." : "Loading…"}</div>{/each}
+    {:else if tab === "comments" && cfId}
+      <Comments projectId={Number(cfId)} projectName={hit.title} />
     {:else if tab === "relations"}
       <Relations {hit} {cfId} checking={!twin} deps={(versions[0]?.dependencies ?? []).filter((d) => d.project_id) as { project_id: string; dependency_type: string }[]} />
     {:else if tab === "gallery"}
