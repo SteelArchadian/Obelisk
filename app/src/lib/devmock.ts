@@ -96,7 +96,7 @@ export function installDevMock() {
         { id: "c0", author: "me1", authorName: "You", atMs: now - 9 * 86_400_000, label: "Shared the pack", changes: [] }];
       case "share_start": return "obelisk1.eyJwIjoiZGVtbyIsInMiOiJ4IiwibiI6IkZvdW5kYXRpb24iLCJhIjp7ImlkIjoiYWJjIn19";
       case "share_publish": return true;
-      case "share_sync": return 0;
+      case "share_sync": return { received: 0, waiting: [] };
       case "share_apply": return { applied: 1, conflicts: [] };
       case "share_join": return "Foundation";
       case "share_skip": case "share_set_auto": case "share_stop": return null;

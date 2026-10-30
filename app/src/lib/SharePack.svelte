@@ -60,8 +60,11 @@
     await load();
   });
   const sync = () => run("sync", async () => {
-    const n = await invoke<number>("share_sync");
-    toast(n ? `Got ${n} new change${n === 1 ? "" : "s"} from friends.` : "Up to date with everyone who's online.");
+    const r = await invoke<{ received: number; waiting: { instanceId: string; changes: number }[] }>("share_sync");
+    const n = r.received;
+    const here = r.waiting.find((w) => w.instanceId === inst.id)?.changes ?? 0;
+    toast((n ? `Got ${n} new change${n === 1 ? "" : "s"} from friends.` : "Up to date with everyone who's online.")
+      + (here ? ` ${here} waiting to apply below.` : ""));
     await load();
   });
   const apply = (ids: string[]) => run("apply", async () => {
@@ -191,7 +194,7 @@
           {/each}
         </div>
         <label class="row small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /> Apply friends' changes automatically (still backed up first)</label>
-        <label class="row small"><input type="checkbox" checked={st.share.autoSend ?? false} onchange={(e) => setAutoSend(e.currentTarget.checked)} /> Send my changes automatically (once they've settled, never while the game runs)</label>
+        <label class="row small"><input type="checkbox" checked={st.share.autoSend ?? false} onchange={(e) => setAutoSend(e.currentTarget.checked)} /> Send my changes automatically (once they've settled, never while the game runs; each friend's Obelisk still applies them only if they ticked the box above)</label>
       </section>
 
       {#if st.held?.length}

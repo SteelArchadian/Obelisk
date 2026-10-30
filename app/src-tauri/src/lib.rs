@@ -625,9 +625,23 @@ async fn share_publish(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, i
     Ok(share_net(&app, &net).await?.publish(&game, &label)?.is_some())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Waiting { instance_id: String, changes: usize, auto_apply: bool }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Synced { received: usize, waiting: Vec<Waiting> }
+
+/// Pull from friends now. `received` counts changes that just arrived; `waiting` lists every pack with friends'
+/// changes not applied yet (arrived now or earlier, e.g. by the background sync), and whether it applies them itself.
 #[tauri::command]
-async fn share_sync(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>) -> Result<usize, String> {
-    Ok(share_net(&app, &net).await?.sync_all().await.into_iter().map(|(_, n)| n).sum())
+async fn share_sync(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>) -> Result<Synced, String> {
+    let received = share_net(&app, &net).await?.sync_all().await.into_iter().map(|(_, n)| n).sum();
+    let waiting = blocking(|| Ok(prism::share::all(&prism::instances_dir(&prism::data_dir())).into_iter()
+        .map(|(id, game, s)| Waiting { instance_id: id, changes: prism::share::incoming(&game).len(), auto_apply: s.auto_apply })
+        .filter(|w| w.changes > 0).collect())).await?;
+    Ok(Synced { received, waiting })
 }
 
 #[tauri::command]
