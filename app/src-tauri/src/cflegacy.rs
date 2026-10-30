@@ -25,29 +25,54 @@ const SCRIPT: &str = r#"
   if (location.hostname !== "legacy.curseforge.com") return;
   const send = (d) => { location.href = "https://obelisk.invalid/#" + encodeURIComponent(JSON.stringify(d)); };
   let tries = 0;
-  const read = () => {
+  // When a row happened: a data-epoch or datetime attribute, a date in a title, or text like "3 days ago".
+  const when = (row) => {
+    const e = row.querySelector("[data-epoch]");
+    if (e) return { at: Number(e.getAttribute("data-epoch")) || 0, el: e };
+    const t = row.querySelector("time[datetime], [datetime]");
+    if (t) return { at: Math.floor(Date.parse(t.getAttribute("datetime")) / 1000) || 0, el: t };
+    for (const el of row.querySelectorAll("[title]")) {
+      const ms = Date.parse(el.getAttribute("title"));
+      if (ms > 946684800000) return { at: Math.floor(ms / 1000), el };
+    }
+    const m = (row.innerText || "").match(/(\d+|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago/i);
+    if (m) {
+      const n = /^\d/.test(m[1]) ? Number(m[1]) : 1;
+      const unit = { second: 1, minute: 60, hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 }[m[2].toLowerCase()];
+      return { at: Math.floor(Date.now() / 1000) - n * unit, el: null };
+    }
+    return { at: 0, el: null };
+  };
+  const read = async () => {
     tries++;
     if (/just a moment|attention required/i.test(document.title)) { if (tries < 40) setTimeout(read, 1000); return; }
     if (!location.pathname.startsWith("/my-notifications")) { send({ signedIn: false, items: [], path: location.pathname }); return; }
-    const main = document.querySelector("main, #content, .content, .main-content, body");
-    const seen = new Set();
+    // The page draws its list with a script after it loads: wait for rows (or give up on an empty list after ~15 s).
+    const view = document.querySelector(".j-notification-view") || document.querySelector("main, #content, body");
+    if (!view.querySelector("*") && tries < 50) { setTimeout(read, 300); return; }
+    // The rows: the children of whichever element in the list has the most of them.
+    let list = view;
+    for (const el of view.querySelectorAll("*")) if (el.children.length > list.children.length) list = el;
+    const rows = list.children.length > 1 ? [...list.children] : [...view.children];
     const items = [];
-    for (const d of main.querySelectorAll("[data-epoch]")) {
-      if (d.closest("header, footer, nav")) continue;
-      const box = d.closest("li, tr, article, [class*='notification']") || d.parentElement?.parentElement || d.parentElement;
-      if (!box || seen.has(box)) continue;
-      seen.add(box);
-      const copy = box.cloneNode(true);
-      copy.querySelectorAll("[data-epoch], script, style, button").forEach((e) => e.remove());
-      const lines = (copy.innerText || copy.textContent || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+    for (const row of rows) {
+      const { at, el } = when(row);
+      const copy = row.cloneNode(true);
+      copy.querySelectorAll("script, style, button, svg, time, [data-epoch]").forEach((e) => e.remove());
+      if (el && el.getAttribute("title")) copy.querySelectorAll("[title]").forEach((e) => { if (e.getAttribute("title") === el.getAttribute("title")) e.remove(); });
+      const lines = (copy.innerText || copy.textContent || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim())
+        .filter((l) => l && !/^(\d+|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.test(l));
+      if (!lines.length) continue;
       items.push({
-        epoch: Number(d.getAttribute("data-epoch")) || 0,
+        epoch: at,
         lines,
-        unread: /\b(unread|new|is-new|not-read)\b/i.test(box.className + " " + (box.parentElement?.className || "")),
-        links: [...box.querySelectorAll("a[href]")].map((a) => a.href),
+        unread: /(unread|new|is-new|not-read|is-unread)/i.test(row.className + " " + [...row.querySelectorAll("[class]")].map((e) => e.className).join(" ")),
+        links: [...row.querySelectorAll("a[href]")].map((a) => a.href),
       });
     }
-    send({ signedIn: !document.querySelector("a[href*='/login']") || items.length > 0, items, diag: (main.innerHTML || "").slice(0, 60000) });
+    let minimal = "";
+    try { minimal = (await (await fetch("/my-notifications/minimal", { credentials: "include" })).text()).slice(0, 60000); } catch {}
+    send({ signedIn: true, items, diag: (view.innerHTML || "").slice(0, 60000) + "\n<!-- minimal -->\n" + minimal });
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => setTimeout(read, 300));
   else setTimeout(read, 300);
