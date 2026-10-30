@@ -3431,11 +3431,12 @@ dependencies = [
 
 [[package]]
 name = "obelisk"
-version = "0.2.50"
+version = "0.2.51"
 dependencies = [
  "keyring",
  "notify",
  "obelisk-core",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "sysinfo",

@@ -120,6 +120,9 @@ struct Job {
     /// Launches: what each "at" hook did ({event, after, do, t, result or error}).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     hooks: Vec<Value>,
+    /// Launches: screenshots Windows took of the game's window when it stalled ({t, why, path, note}).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    shots: Vec<Value>,
 }
 
 #[derive(Default)]
@@ -898,7 +901,7 @@ fn new_job(jobs: &Shared, kind: &str, copy: &str, owner: &str, output: String) -
     l.next += 1;
     let id = l.next;
     l.list.insert(id, Job { id, kind: kind.into(), copy: copy.into(), owner: owner.into(), state: "queued".into(), pid: None,
-        started: now(), ended: None, detail: String::new(), output, helper_pid: None, java: None, events: vec![], now: Value::Null, hooks: vec![] });
+        started: now(), ended: None, detail: String::new(), output, helper_pid: None, java: None, events: vec![], now: Value::Null, hooks: vec![], shots: vec![] });
     cv.notify_all();
     id
 }
@@ -1282,6 +1285,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let mut watch = super::devrun::Sampler::new(pid, &dir, &runs, id, click_ms, super::devrun::jcmd_for(&java).ok());
         let mut shown = Instant::now();
         let latest = dir.join("logs").join("latest.log");
+        let stdout_file = runs.join(format!("{id}.stdout"));
+        let mut stall = Stall::default();
         let why = loop {
             if let Ok(Some(status)) = game.try_wait() {
                 let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
@@ -1316,6 +1321,10 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                     update(&jobs, id, |j| j.hooks.push(v));
                 });
             }
+            if let Some(why) = stall.check(&latest, &stdout_file, watch.events.len(), &watch.events, stopping.is_some()) {
+                let v = screenshot(pid, &runs, id, why, (prism::timeline::now_ms() - click_ms) as f64 / 1000.0);
+                update(&jobs, id, |j| j.shots.push(v));
+            }
             if let Some(why) = kill_now {
                 super::kill_tree(pid);
                 let _ = game.wait();
@@ -1332,6 +1341,9 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             }
             let hung_on_exit = stopping.is_some_and(|t| t.elapsed() > Duration::from_secs(30));
             if hung_on_exit || t0.elapsed() > Duration::from_secs(timeout) {
+                let v = screenshot(pid, &runs, id, if hung_on_exit { "hung on exit" } else { "ran past its time limit" },
+                    (prism::timeline::now_ms() - click_ms) as f64 / 1000.0);
+                update(&jobs, id, |j| j.shots.push(v));
                 super::kill_tree(pid);
                 let _ = game.wait();
                 break if hung_on_exit { "killed: still alive 30 s after Stopping!".into() } else { format!("killed: ran past {timeout} s") };
@@ -1473,6 +1485,75 @@ fn explain_java_error(line: &str) -> Option<String> {
     let has = line.split("up to ").nth(1).and_then(|r| r.split('.').next()).and_then(|n| n.parse::<u32>().ok());
     Some(format!("a mod needs Java {} but the game ran on Java {} (set the profile's Java, or launch with java: 25)",
         v.saturating_sub(44), has.map(|h| h.saturating_sub(44).to_string()).unwrap_or("?".into())))
+}
+
+/// When a run looks stuck: its log (and output) stopped moving, or it is still loading long after its last stage.
+/// One screenshot per stall; the log moving again (or a new stage) arms the next one.
+#[derive(Default)]
+struct Stall {
+    sizes: (u64, u64),
+    moved: Option<Instant>,
+    stages: usize,
+    staged: Option<Instant>,
+    quiet_shot: bool,
+    slow_shot: bool,
+}
+
+/// No new log line for this long counts as a stall.
+const QUIET_SECS: u64 = 45;
+/// Still loading (no terrainReady yet) this long after the last stage counts too: a game busy in an error loop.
+const SLOW_SECS: u64 = 180;
+
+impl Stall {
+    fn check(&mut self, log: &Path, out: &Path, stages: usize, events: &[Value], stopping: bool) -> Option<&'static str> {
+        let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let sizes = (size(log), size(out));
+        let now = Instant::now();
+        if sizes != self.sizes || self.moved.is_none() {
+            self.sizes = sizes;
+            self.moved = Some(now);
+            self.quiet_shot = false;
+        }
+        if stages != self.stages || self.staged.is_none() {
+            self.stages = stages;
+            self.staged = Some(now);
+            self.slow_shot = false;
+        }
+        if stopping {
+            return None;
+        }
+        if !self.quiet_shot && self.moved.is_some_and(|t| t.elapsed() > Duration::from_secs(QUIET_SECS)) {
+            self.quiet_shot = true;
+            return Some("its log stopped moving");
+        }
+        let loaded = events.iter().any(|e| e["event"] == "terrainReady");
+        if !loaded && !self.slow_shot && self.staged.is_some_and(|t| t.elapsed() > Duration::from_secs(SLOW_SECS)) {
+            self.slow_shot = true;
+            return Some("no next stage for 3 minutes");
+        }
+        None
+    }
+}
+
+/// A screenshot of the game's window into the run folder, as a job record (path, or why there is none).
+fn screenshot(pid: u32, runs: &Path, id: u32, why: &str, t: f64) -> Value {
+    let t = (t * 10.0).round() / 10.0;
+    let mut v = json!({ "t": t, "why": why });
+    let win = super::top_windows().into_iter().filter(|w| w.1 == pid && w.2)
+        .max_by_key(|w| (w.3.starts_with("GLFW") || w.3.starts_with("LWJGL"), w.0 != 0)).map(|w| w.0);
+    let Some(h) = win else {
+        v["error"] = "the game has no window".into();
+        return v;
+    };
+    let out = runs.join(format!("{id}-stall-{}s.png", t.round() as u64));
+    match super::shot::window_png(h, &out) {
+        Ok(note) => {
+            v["path"] = out.to_string_lossy().replace('\\', "/").into();
+            if !note.is_empty() { v["note"] = note.into(); }
+        }
+        Err(e) => v["error"] = e.into(),
+    }
+    v
 }
 
 const JFR_REPO: &str = "repo-";

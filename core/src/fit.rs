@@ -250,6 +250,32 @@ pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
+/// Like `compare`, but with the qualifier order NeoForge and Forge use (Maven's): alpha, beta, milestone, rc and
+/// snapshot come before the release, and any other word after it ("1.2.0-neoforge" is newer than "1.2.0").
+fn compare_maven(a: &str, b: &str) -> std::cmp::Ordering {
+    let qualifier = |s: &str| -> String {
+        let s = s.split('+').next().unwrap_or("").trim();
+        s.find('-').map(|i| s[i + 1..].to_lowercase()).unwrap_or_default()
+    };
+    let rank = |q: &str| -> u8 {
+        let word: String = q.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        match word.as_str() {
+            "alpha" | "a" => 0,
+            "beta" | "b" => 1,
+            "milestone" | "m" => 2,
+            "rc" | "cr" => 3,
+            "snapshot" => 4,
+            "" if q.is_empty() => 5,
+            "ga" | "final" | "release" => 5,
+            "sp" => 6,
+            _ => 7,
+        }
+    };
+    let core = |s: &str| s.split('+').next().unwrap_or("").split('-').next().unwrap_or("").to_string();
+    let (qa, qb) = (qualifier(a), qualifier(b));
+    compare(&core(a), &core(b)).then_with(|| rank(&qa).cmp(&rank(&qb))).then_with(|| qa.cmp(&qb))
+}
+
 /// Does `v` satisfy a range: Maven style ("[1.8.0,)", "[1.21,1.21.2)") for NeoForge/Forge,
 /// semver style (">=0.6 <0.8", "~1.2", "^1.2", "1.21.x", alternatives joined by "||") for Fabric.
 pub fn satisfies(v: &str, range: &str, kind: &str) -> bool {
@@ -277,8 +303,8 @@ fn maven(v: &str, range: &str) -> bool {
         let inner = &g[1..g.len() - 1];
         let (lo, hi) = match inner.split_once(',') { Some((l, h)) => (l.trim(), h.trim()), None => (inner.trim(), inner.trim()) };
         use std::cmp::Ordering::*;
-        let lo_ok = lo.is_empty() || matches!((compare(v, lo), lo_inc), (Greater, _) | (Equal, true));
-        let hi_ok = hi.is_empty() || matches!((compare(v, hi), hi_inc), (Less, _) | (Equal, true));
+        let lo_ok = lo.is_empty() || matches!((compare_maven(v, lo), lo_inc), (Greater, _) | (Equal, true));
+        let hi_ok = hi.is_empty() || matches!((compare_maven(v, hi), hi_inc), (Less, _) | (Equal, true));
         lo_ok && hi_ok
     })
 }
@@ -312,6 +338,14 @@ fn semver_part(v: &str, c: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_loader_tag_after_the_version_is_newer_not_a_pre_release() {
+        assert!(super::satisfies("1.2.0-neoforge+mc1.21.1", "[1.2.0,)", "neoforge"));
+        assert!(!super::satisfies("1.1.2-neoforge+mc1.21.1", "[1.2.0,)", "neoforge"));
+        assert!(!super::satisfies("1.2.0-beta.3", "[1.2.0,)", "neoforge"));
+        assert!(super::satisfies("1.2.0-rc1", "[1.1,1.2.0)", "neoforge"));
+    }
+
     use super::*;
     use std::io::Write;
 

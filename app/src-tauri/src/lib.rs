@@ -4,6 +4,7 @@ mod bridge;
 mod cleanup;
 mod control;
 mod errlog;
+mod shot;
 mod releases;
 mod watch;
 mod datadir;
