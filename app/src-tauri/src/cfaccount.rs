@@ -1,8 +1,9 @@
 //! The user's CurseForge account, signed in on curseforge.com's own sign-in page in a small Obelisk window (Obelisk
 //! never sees the password; the session lives in that window's cookies, shared by all of Obelisk's web views).
-//! With it: comments and replies, favorites, and notifications of replies in threads the user commented in, checked
-//! every 15 minutes (CurseForge has no notification feed of its own for this).
+//! With it: comments and replies, favorites, and the account's notifications (curseforge.com's feed and the legacy
+//! site's page), plus replies in threads the user commented in, checked every 15 minutes.
 
+use crate::cflegacy;
 use obelisk_core::cfsite;
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
@@ -152,22 +153,39 @@ pub async fn cf_favorite(app: tauri::AppHandle, project_id: u64, on: bool) -> Re
     blocking(move || { let (c, _) = signed_in(&app)?; cfsite::set_favorite(&c, project_id, on) }).await
 }
 
-/// The account's CurseForge notifications, newest first: the site's own (approvals, status changes, comments, replies,
-/// messages; see cfsite::notifications). When the site can't be asked, the replies Obelisk found in watched threads.
+/// The account's CurseForge notifications, newest first: curseforge.com's feed (new files, comments, replies,
+/// messages; see cfsite::notifications) together with legacy.curseforge.com/my-notifications (approvals, status
+/// changes with moderation's notes, comments; see cflegacy), each shown once. When the site can't be asked, the
+/// replies Obelisk found in watched threads. The legacy page is read again in the background when its copy is old.
 #[tauri::command]
 pub async fn cf_notifications(app: tauri::AppHandle) -> Result<Value, String> {
-    blocking(move || {
-        let site = signed_in(&app).and_then(|(c, _)| cfsite::notifications(&c, 50));
-        if let Ok(list) = site {
-            return Ok(list.into());
-        }
+    let a = app.clone();
+    let site = blocking(move || signed_in(&a).and_then(|(c, _)| cfsite::notifications(&c, 50))).await;
+    let Ok(mut list) = site else {
         let mut notes = load()["notes"].as_array().cloned().unwrap_or_default();
         notes.sort_by(|a, b| b["created"].as_u64().cmp(&a["created"].as_u64()));
-        Ok(notes.into())
-    }).await
+        return Ok(notes.into());
+    };
+    let (legacy, stale) = cflegacy::cached();
+    if stale {
+        let read = load()["legacyRead"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+        cflegacy::refresh(&app, read);
+    }
+    // The same event on both sites: within five minutes, and the legacy row names the file (or project) the new one does.
+    let fresh: Vec<Value> = legacy.into_iter().filter(|l| {
+        let text = format!("{} {}", l["title"].as_str().unwrap_or_default(), l["text"].as_str().unwrap_or_default()).to_lowercase();
+        let at = l["created"].as_u64().unwrap_or(0);
+        !list.iter().any(|n| {
+            let key = n["key"].as_str().unwrap_or_default().to_lowercase();
+            !key.is_empty() && text.contains(&key) && n["created"].as_u64().is_some_and(|t| t.abs_diff(at) < 300_000)
+        })
+    }).collect();
+    list.extend(fresh);
+    list.sort_by(|a, b| b["created"].as_u64().cmp(&a["created"].as_u64()));
+    Ok(list.into())
 }
 
-/// Mark notifications read: the site's on curseforge.com (so its bell agrees), Obelisk's own here.
+/// Mark notifications read: curseforge.com's on the site (so its bell agrees), the legacy page's and Obelisk's own here.
 #[tauri::command]
 pub async fn cf_notifications_read(app: tauri::AppHandle, ids: Vec<String>) -> Result<(), String> {
     blocking(move || {
@@ -176,10 +194,16 @@ pub async fn cf_notifications_read(app: tauri::AppHandle, ids: Vec<String>) -> R
             let (c, _) = signed_in(&app)?;
             cfsite::notifications_read(&c, Some(site))?;
         }
+        cflegacy::mark_read(&ids);
         let mut st = load();
         for n in st["notes"].as_array_mut().into_iter().flatten() {
             if n["id"].as_str().is_some_and(|i| ids.iter().any(|x| x == i)) { n["read"] = true.into() }
         }
+        let mut read: Vec<Value> = st["legacyRead"].as_array().cloned().unwrap_or_default();
+        read.extend(ids.iter().filter(|i| i.starts_with("legacy-")).map(|i| Value::from(i.as_str())));
+        read.dedup();
+        let skip = read.len().saturating_sub(500);
+        st["legacyRead"] = read.into_iter().skip(skip).collect::<Vec<_>>().into();
         save(&st);
         Ok(())
     }).await

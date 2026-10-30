@@ -4,7 +4,7 @@
   import { mr, cf, unread, cfUnread, loadAccount, loadNotes, markRead, loadCf, loadCfNotes, cfMarkRead, cfSignIn, openLink, type CfNotification } from "./account.svelte";
   import { app, closeOverlays } from "./state.svelte";
   import { openProjectById } from "./install";
-  import { ago } from "./api";
+  import { ago, api } from "./api";
 
   let open = $state(false);
   let tab = $state<"modrinth" | "curseforge">("curseforge");
@@ -31,10 +31,11 @@
 
   // A CurseForge notification opens its project in Obelisk (on its comments or files when that's what it's about);
   // a private message opens on legacy.curseforge.com.
-  function cfGo(n: CfNotification) {
+  async function cfGo(n: CfNotification) {
     cfMarkRead([n.id]);
     open = false;
-    if (n.projectId && n.kind !== "message") openProjectById(`cf:${n.projectId}`, n.tab ?? (n.kind ? undefined : "comments"));
+    const id = n.projectId ?? (n.slug ? await api.cfIdBySlug(n.slug).catch(() => null) : null);
+    if (id && n.kind !== "message") openProjectById(`cf:${id}`, n.tab ?? (n.kind ? undefined : "comments"));
     else if (n.url) openLink(n.url);
   }
 

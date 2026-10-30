@@ -17,9 +17,10 @@ export const mr = $state({
 });
 
 export type CfAccount = { id: number; username: string; displayName: string; avatarUrl?: string };
-/** A CurseForge notification: the site's own ("site-N": approvals, status changes, comments, replies, messages) or a reply Obelisk found. */
+/** A CurseForge notification: curseforge.com's ("site-N"), legacy.curseforge.com/my-notifications' ("legacy-…": approvals,
+ *  status changes with moderation's notes, comments), or a reply Obelisk found in a watched thread ("cf-N"). */
 export type CfNotification = {
-  id: string; title: string; text: string; label?: string; kind?: string; projectId?: number; tab?: "comments" | "versions" | null;
+  id: string; title: string; text: string; label?: string; kind?: string; projectId?: number | null; slug?: string | null; tab?: "comments" | "versions" | null;
   url?: string | null; read: boolean; created: number | string;
 };
 

@@ -4,6 +4,7 @@ mod bridge;
 mod cleanup;
 mod control;
 mod cfaccount;
+mod cflegacy;
 mod errlog;
 mod shot;
 mod releases;
