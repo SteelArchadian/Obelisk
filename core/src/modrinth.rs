@@ -89,7 +89,7 @@ pub fn facets(q: &SearchQuery) -> String {
 }
 
 /// A failure worth another try: the connection dropped, Modrinth is busy (429) or had a server error.
-fn passing(e: &ureq::Error) -> bool {
+pub(crate) fn passing(e: &ureq::Error) -> bool {
     match e {
         ureq::Error::Transport(_) => true,
         ureq::Error::Status(code, _) => *code == 429 || *code >= 500,

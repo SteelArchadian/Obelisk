@@ -223,7 +223,8 @@ export async function linkTarget(href: string): Promise<LinkTarget | null> {
     const type = CF_SECTIONS[parts[1] ?? ""];
     if (type && !parts[2]) return { search: type, query };
     if (type && parts[2] && parts[2] !== "search" && parts[2] !== "category") {
-      const id = await api.cfIdBySlug(parts[2]).catch(() => null);
+      // A failed lookup throws (the caller says so) rather than quietly sending a mod link to the browser.
+      const id = await api.cfIdBySlug(parts[2]);
       return id ? { project: `cf:${id}` } : null;
     }
   }

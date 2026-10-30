@@ -152,13 +152,26 @@ impl Client {
     }
 
     fn get(&self, path: &str) -> Result<Value, String> {
-        self.agent.get(&format!("{API}{path}")).set("x-api-key", &self.key).set("Accept", "application/json")
-            .call().map_err(|e| format!("CurseForge: {e}"))?.into_json().map_err(|e| e.to_string())
+        self.retrying(|| self.agent.get(&format!("{API}{path}")).set("x-api-key", &self.key).set("Accept", "application/json").call())
     }
 
+    /// Every POST here is a read-only lookup (projects, files, fingerprints), so it's safe to send again.
     fn post(&self, path: &str, body: Value) -> Result<Value, String> {
-        self.agent.post(&format!("{API}{path}")).set("x-api-key", &self.key).set("Accept", "application/json")
-            .send_json(body).map_err(|e| format!("CurseForge: {e}"))?.into_json().map_err(|e| e.to_string())
+        self.retrying(|| self.agent.post(&format!("{API}{path}")).set("x-api-key", &self.key).set("Accept", "application/json")
+            .send_json(body.clone()))
+    }
+
+    /// A dropped connection or a busy server gets two more tries (see modrinth::passing).
+    fn retrying(&self, send: impl Fn() -> Result<ureq::Response, ureq::Error>) -> Result<Value, String> {
+        let mut wait = 400;
+        for attempt in 1.. {
+            match send() {
+                Ok(r) => return r.into_json().map_err(|e| e.to_string()),
+                Err(e) if attempt < 3 && crate::modrinth::passing(&e) => { std::thread::sleep(std::time::Duration::from_millis(wait)); wait *= 3; }
+                Err(e) => return Err(format!("CurseForge: {e}")),
+            }
+        }
+        unreachable!()
     }
 
     pub fn search(&self, q: &SearchQuery) -> Result<Value, String> {

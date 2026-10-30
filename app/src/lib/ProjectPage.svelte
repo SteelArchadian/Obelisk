@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { crisp } from "./crisp";
   import { api, compact, ago, versionsLabel, type Hit, type Version } from "./api";
-  import { app, popOverlay, closeOverlays, openBrowse, pushOverlay } from "./state.svelte";
+  import { app, popOverlay, closeOverlays, openBrowse, pushOverlay, toastError } from "./state.svelte";
   import { cap, install, isInstalled, linkTarget, openProjectById } from "./install";
   import { cfFileToVersion } from "./cf";
   import SourceBadges from "./SourceBadges.svelte";
@@ -100,15 +100,22 @@
   // Links to Modrinth or CurseForge mod, author and search pages open inside Obelisk; anything else in the browser.
   async function onClick(e: MouseEvent) {
     const a = (e.target as HTMLElement).closest("a");
-    if (!a?.href || !/^https?:/.test(a.href)) return;
+    const raw = a?.getAttribute("href");
+    if (!raw || raw.startsWith("#")) return;
+    // Relative links (CurseForge writes its link-outs as "/linkout?...") belong to the site the text came from,
+    // not to Obelisk's own page.
+    let href: string;
+    try { href = new URL(raw, isCf ? "https://www.curseforge.com" : "https://modrinth.com").href; } catch { return; }
+    if (!/^https?:/.test(href)) return;
     e.preventDefault();
-    const t = await linkTarget(a.href);
+    let t: Awaited<ReturnType<typeof linkTarget>>;
+    try { t = await linkTarget(href); } catch (err) { toastError(`Couldn't open that page in Obelisk: ${err}`); return; }
     if (t && "project" in t) openProjectById(t.project);
     else if (t && "search" in t) openBrowse(t.search, t.query);
     else if (t && "author" in t && !t.cf) pushOverlay({ kind: "author", name: t.author });
     // A CurseForge member is found by id; we know it only for this project's own author.
     else if (t && "author" in t && isCf && t.author.toLowerCase() === author.toLowerCase()) openAuthor();
-    else openLink(a.href);
+    else openLink(href);
   }
 
   async function installVersion(v: Version) {
