@@ -138,7 +138,7 @@ export function installDevMock() {
       case "get_pins": return [];
       case "has_cf_key": return true;
       case "list_accounts": return [];
-      case "mr_project": return { id: "LNytGWDc", slug: "create", title: "Create", description: "Aesthetic technology", project_type: "mod", body: "## Create Rotational power.", gallery: [], loaders: ["neoforge"], issues_url: "github.com/Creators-of-Create/Create/issues", source_url: "https://github.com/Creators-of-Create/Create", downloads: 5_000_000, followers: 1, icon_url: "", categories: ["technology"], game_versions: ["1.21.1"], versions: [], date_modified: new Date(now).toISOString(), published: new Date(now).toISOString(), team: "t" };
+      case "mr_project": return { id: "LNytGWDc", slug: "create", title: "Create", description: "Aesthetic technology", project_type: "mod", body: "## Create Rotational power.\n\n<center><a href=\"https://modrinth.com/mod/accents\"><img style=\"display: inline;\" src=\"https://i.imgur.com/quXJZzx.png\" width=\"45%\" /></a></center>", gallery: [], loaders: ["neoforge"], issues_url: "github.com/Creators-of-Create/Create/issues", source_url: "https://github.com/Creators-of-Create/Create", downloads: 5_000_000, followers: 1, icon_url: "", categories: ["technology"], game_versions: ["1.21.1"], versions: [], date_modified: new Date(now).toISOString(), published: new Date(now).toISOString(), team: "t" };
       case "mr_versions": case "mr_members": return [];
       case "cross_site": return { mr: "LNytGWDc", cf: 398521 };
       case "collab_code": return { code: "VZ2UFJ", expiresMs: Date.now() + 1_800_000 };

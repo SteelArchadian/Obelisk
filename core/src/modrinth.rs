@@ -88,6 +88,14 @@ pub fn facets(q: &SearchQuery) -> String {
     serde_json::to_string(&groups).unwrap_or_else(|_| "[]".into())
 }
 
+/// A failure worth another try: the connection dropped, Modrinth is busy (429) or had a server error.
+fn passing(e: &ureq::Error) -> bool {
+    match e {
+        ureq::Error::Transport(_) => true,
+        ureq::Error::Status(code, _) => *code == 429 || *code >= 500,
+    }
+}
+
 fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -177,9 +185,15 @@ impl Client {
     }
 
     fn get(&self, path: &str) -> Result<Value, String> {
-        self.agent.get(&format!("{API}{path}")).call()
-            .map_err(|e| format!("Modrinth: {e}"))?
-            .into_json().map_err(|e| e.to_string())
+        let mut wait = 400;
+        for attempt in 1.. {
+            match self.agent.get(&format!("{API}{path}")).call() {
+                Ok(r) => return r.into_json().map_err(|e| e.to_string()),
+                Err(e) if attempt < 3 && passing(&e) => { std::thread::sleep(std::time::Duration::from_millis(wait)); wait *= 3; }
+                Err(e) => return Err(format!("Modrinth: {e}")),
+            }
+        }
+        unreachable!()
     }
 
     pub fn search(&self, q: &SearchQuery) -> Result<Value, String> {
@@ -227,14 +241,28 @@ impl Client {
         serde_json::from_value(self.get(&format!("/version/{}", enc(id)))?).map_err(|e| e.to_string())
     }
 
+    /// A read-only lookup sent as POST. ureq re-sends a GET whose pooled connection Modrinth had already closed, but
+    /// never a POST, so these met "connection was forcibly closed" now and then; a dropped connection or a busy server
+    /// gets two more tries.
+    fn post_json(&self, path: &str, body: Value) -> Result<Value, String> {
+        let mut wait = 400;
+        for attempt in 1.. {
+            match self.agent.post(&format!("{API}{path}")).send_json(body.clone()) {
+                Ok(r) => return r.into_json().map_err(|e| e.to_string()),
+                Err(e) if attempt < 3 && passing(&e) => { std::thread::sleep(std::time::Duration::from_millis(wait)); wait *= 3; }
+                Err(e) => return Err(format!("Modrinth: {e}")),
+            }
+        }
+        unreachable!()
+    }
+
     /// sha1 -> the Modrinth version that contains exactly that file.
     pub fn lookup_hashes(&self, sha1s: &[String]) -> Result<HashMap<String, Version>, String> {
         if sha1s.is_empty() {
             return Ok(HashMap::new());
         }
         let body = serde_json::json!({ "hashes": sha1s, "algorithm": "sha1" });
-        let v: Value = self.agent.post(&format!("{API}/version_files")).send_json(body)
-            .map_err(|e| format!("Modrinth: {e}"))?.into_json().map_err(|e| e.to_string())?;
+        let v = self.post_json("/version_files", body)?;
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
 
@@ -244,8 +272,7 @@ impl Client {
             return Ok(HashMap::new());
         }
         let body = serde_json::json!({ "hashes": sha1s, "algorithm": "sha1", "loaders": loaders, "game_versions": game_versions });
-        let v: Value = self.agent.post(&format!("{API}/version_files/update")).send_json(body)
-            .map_err(|e| format!("Modrinth: {e}"))?.into_json().map_err(|e| e.to_string())?;
+        let v = self.post_json("/version_files/update", body)?;
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
 

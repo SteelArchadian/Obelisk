@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { Instance, ProjectType, Hit, Installed } from "./api";
 
 export type Page = "library" | "instance" | "discover" | "browse" | "settings";
@@ -64,6 +65,8 @@ export function toast(msg: string) {
 /** Something went wrong: shown tinted red, long enough to read (20 s, or until its ✕). */
 export function toastError(e: unknown) {
   app.toast = String(e);
+  // Kept in Obelisk's errors.jsonl (this PC only) so the causes can be found and fixed.
+  invoke("report_error", { message: app.toast, context: "window" }).catch(() => {});
   app.toastError = true;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (app.toast = ""), 20000);

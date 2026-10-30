@@ -451,7 +451,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-optout"],
+            "release-rollback", "release-optout", "errors"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -459,6 +459,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "app" => super::bridge::call(app, args),
         "launch" => launch(args, jobs),
         "gate" => gate(args, jobs),
+        "errors" => Ok(super::errlog::recent(num(args, "limit", 30, 1, 200)? as usize, args.get("since").and_then(|v| v.as_u64()).unwrap_or(0))),
         "release-submit" | "release-status" | "release-promote" | "release-rollback" | "release-optout" => super::releases::command(cmd, args),
         "status" => {
             let (m, _) = &**jobs;

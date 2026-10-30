@@ -300,6 +300,7 @@ pub fn start() {
         if c::bench_ready() {
             if let Err(e) = tick() {
                 log(&format!("release worker: {e}"));
+                super::errlog::record("releases", &e);
             }
         }
         std::thread::sleep(Duration::from_secs(60));

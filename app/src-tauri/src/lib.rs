@@ -3,6 +3,7 @@ use obelisk_core as prism;
 mod bridge;
 mod cleanup;
 mod control;
+mod errlog;
 mod releases;
 mod watch;
 mod datadir;
@@ -664,6 +665,12 @@ async fn share_set_auto(instance_id: String, on: bool) -> Result<(), String> {
     let mut s = prism::share::get(&game).ok_or("not shared")?;
     s.auto_apply = on;
     prism::share::save(&game, &s)
+}
+
+/// An error the window showed (state.svelte.ts toastError), for errors.jsonl.
+#[tauri::command]
+fn report_error(message: String, context: String) {
+    errlog::record(if context.is_empty() { "window" } else { &context }, &message);
 }
 
 #[tauri::command]
@@ -2156,7 +2163,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_set_auto_send, releases_call, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
