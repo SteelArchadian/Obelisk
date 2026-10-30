@@ -1170,7 +1170,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         // on exit) still leaves everything up to its last second there, and stitch_jfr turns that into the file.
         let (out, stamp) = (jfr.to_string_lossy().replace('\\', "/"), now());
         extra.push(format!("-XX:FlightRecorderOptions:repository={out}/{JFR_REPO}{stamp}"));
-        extra.push(format!("-XX:StartFlightRecording=name=lightning,settings=profile,class-loading=true{roots},flush-interval=1s,filename={out}/obelisk-{stamp}.jfr,dumponexit=true"));
+        // Its own name: the Lightning mod takes over a recording called "lightning" and stops it when its start-up
+        // capture ends, which cut this one off at the first join.
+        extra.push(format!("-XX:StartFlightRecording=name=obelisk,settings=profile,class-loading=true{roots},flush-interval=1s,filename={out}/obelisk-{stamp}.jfr,dumponexit=true"));
     }
     let swap = ModSwap::plan(&dir, args)?;
     let hooks = plan_hooks(args)?;
