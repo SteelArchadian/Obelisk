@@ -1166,8 +1166,11 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         let _ = std::fs::create_dir_all(&jfr);
         // jfr_roots: old-object samples keep their reference chain to a GC root (who holds them), found when the recording is written.
         let roots = if args.get("jfr_roots").and_then(|v| v.as_bool()).unwrap_or(false) { ",path-to-gc-roots=true" } else { "" };
-        extra.push(format!("-XX:StartFlightRecording=name=lightning,settings=profile,class-loading=true{roots},filename={}/obelisk-{}.jfr,dumponexit=true",
-            jfr.to_string_lossy().replace('\\', "/"), now()));
+        // The recording also streams to its own repository, flushed every second: a game that is killed (no dump
+        // on exit) still leaves everything up to its last second there, and stitch_jfr turns that into the file.
+        let (out, stamp) = (jfr.to_string_lossy().replace('\\', "/"), now());
+        extra.push(format!("-XX:FlightRecorderOptions:repository={out}/{JFR_REPO}{stamp}"));
+        extra.push(format!("-XX:StartFlightRecording=name=lightning,settings=profile,class-loading=true{roots},flush-interval=1s,filename={out}/obelisk-{stamp}.jfr,dumponexit=true"));
     }
     let swap = ModSwap::plan(&dir, args)?;
     let hooks = plan_hooks(args)?;
@@ -1342,6 +1345,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started)).count();
         Ok(if crashes > 0 { format!("{why}; {crashes} new crash report(s)") } else { why })
     })();
+    stitch_jfr(&dir.join("jfr"));
     let restored = swap.restore();
     if new_world {
         for n in save_names(&dir).difference(&saves_before) {
@@ -1467,6 +1471,48 @@ fn explain_java_error(line: &str) -> Option<String> {
     let has = line.split("up to ").nth(1).and_then(|r| r.split('.').next()).and_then(|n| n.parse::<u32>().ok());
     Some(format!("a mod needs Java {} but the game ran on Java {} (set the profile's Java, or launch with java: 25)",
         v.saturating_sub(44), has.map(|h| h.saturating_sub(44).to_string()).unwrap_or("?".into())))
+}
+
+const JFR_REPO: &str = "repo-";
+
+/// After a run with a recording: a game that was killed never wrote its recording (or wrote it from an earlier
+/// point), but its repository holds every chunk flushed up to its last second. Chunks joined in order are a valid
+/// recording, so that becomes obelisk-<stamp>.jfr when it holds more; the repository is then removed.
+fn stitch_jfr(jfr: &Path) {
+    for repo in std::fs::read_dir(jfr).into_iter().flatten().flatten().map(|e| e.path())
+        .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(JFR_REPO))) {
+        let stamp = repo.file_name().unwrap().to_string_lossy()[JFR_REPO.len()..].to_string();
+        let mut chunks = vec![];
+        let mut dirs = vec![repo.clone()];
+        while let Some(d) = dirs.pop() {
+            for p in std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()) {
+                if p.is_dir() { dirs.push(p) } else if p.extension().is_some_and(|x| x == "jfr") { chunks.push(p) }
+            }
+        }
+        chunks.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
+        let joined: Vec<u8> = chunks.iter().filter_map(|c| std::fs::read(c).ok()).flat_map(close_chunk).collect();
+        let out = jfr.join(format!("obelisk-{stamp}.jfr"));
+        let tmp = jfr.join(format!("obelisk-{stamp}.jfr.obelisk-tmp"));
+        let have = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        if joined.len() as u64 > have && std::fs::write(&tmp, &joined).is_ok() {
+            let _ = std::fs::rename(&tmp, &out);
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+}
+
+/// A chunk the JVM was still writing: its header (rewritten at every flush) gives the size up to the last flush,
+/// and its file state (byte 64) stays "being written" until it is set to 0, the state of a finished chunk.
+fn close_chunk(mut b: Vec<u8>) -> Vec<u8> {
+    if b.len() < 68 || !b.starts_with(b"FLR\0") {
+        return vec![];
+    }
+    let size = u64::from_be_bytes(b[8..16].try_into().unwrap()) as usize;
+    if size >= 68 && size < b.len() {
+        b.truncate(size);
+    }
+    b[64] = 0;
+    b
 }
 
 fn source_file(copy: &str) -> PathBuf {
