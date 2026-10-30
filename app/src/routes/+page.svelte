@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -132,6 +132,7 @@
     showWelcome = !settings.welcomed;
     loadAccounts();
     await syncInstances();
+    restoreNav();
     // Update checks run quietly in the background: now, then every 12 hours.
     backgroundCheck(app.instances);
   });
@@ -249,6 +250,40 @@
   let last: Snap | null = null;
   let restoring = false;
 
+  // The last few pages survive a restart (an update, a crash): Obelisk opens where you were, and Back still
+  // retraces your steps. Profiles are kept by id; a page whose profile is gone is dropped.
+  type SavedSnap = { page: Page; current: string | null; stack: Overlay[] };
+  const NAV_KEY = "obelisk.nav";
+  const savedNav = (() => {
+    try { return JSON.parse(localStorage.getItem(NAV_KEY) ?? "null") as { at: number; past: SavedSnap[]; last: SavedSnap } | null; }
+    catch { return null; }
+  })();
+  let navReady = false;
+
+  function saveNav() {
+    if (!navReady || !last) return;
+    const pack = (s: Snap): SavedSnap => ({ page: s.page, current: s.current?.id ?? null, stack: s.stack });
+    try { localStorage.setItem(NAV_KEY, JSON.stringify({ at: Date.now(), past: past.slice(-9).map(pack), last: pack(last) })); } catch {}
+  }
+
+  function restoreNav() {
+    navReady = true;
+    if (!savedNav?.last || Date.now() - savedNav.at > 24 * 3600_000) return;
+    const unpack = (s: SavedSnap): Snap | null => {
+      const current = s.current ? app.instances.find((i) => i.id === s.current) ?? null : null;
+      if ((s.current && !current) || (s.page === "instance" && !current)) return null;
+      return { page: s.page, current, stack: s.stack ?? [] };
+    };
+    const to = unpack(savedNav.last);
+    if (!to) return;
+    past = (savedNav.past ?? []).map(unpack).filter((x): x is Snap => !!x);
+    future = [];
+    restoring = true;
+    app.page = to.page;
+    app.current = to.current;
+    app.stack = to.stack;
+  }
+
   $effect(() => {
     const snap: Snap = { page: app.page, current: app.current, stack: [...app.stack] };
     if (restoring) { restoring = false; last = snap; return; }
@@ -258,6 +293,7 @@
       future = [];
     }
     last = snap;
+    untrack(saveNav);
   });
 
   function travel(from: Snap[], to: Snap[]) {
@@ -268,6 +304,8 @@
     app.page = snap.page;
     app.current = snap.current;
     app.stack = snap.stack;
+    last = snap;
+    saveNav();
   }
 
   function onMouseUp(e: MouseEvent) {

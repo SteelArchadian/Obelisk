@@ -2053,7 +2053,7 @@ pub fn run() {
             // Obelisk's window starts hidden. Started with Windows it stays in the tray until opened; otherwise the
             // small update window comes first (selfupdate.rs) and opens it.
             let hidden = std::env::args().any(|a| a == "--hidden");
-            if !hidden {
+            if !hidden && !selfupdate::resume_window(app.handle()) {
                 selfupdate::start_window(app.handle());
             }
             // Local control API for the user's Minecraft chats (see control.rs).

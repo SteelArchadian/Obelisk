@@ -75,6 +75,7 @@ async fn install_inner(app: &tauri::AppHandle, u: Update) -> Result<(), String> 
     }, || {}).await.map_err(|e| format!("couldn't download the update: {e}"))?;
     let notes = serde_json::to_vec(&Available::from(&u)).unwrap_or_default();
     let _ = std::fs::write(crate::datadir::root().join(WHATS_NEW), notes);
+    remember_window(app);
     super::control::stop();
     // On Windows this starts the installer quietly (it starts the new Obelisk when done) and ends this process.
     u.install(bytes).map_err(|e| {
@@ -122,6 +123,48 @@ pub fn whats_new(app: tauri::AppHandle) -> Option<Available> {
     let note: Available = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
     let _ = std::fs::remove_file(&path);
     (note.version == app.package_info().version.to_string()).then_some(note)
+}
+
+const RESUME: &str = "resume-window.json";
+
+/// How Obelisk's window was when an update began (often one the user didn't start, while working in another app),
+/// so the new version comes back the same way instead of jumping in front of them.
+fn remember_window(app: &tauri::AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let state = if !w.is_visible().unwrap_or(false) { "hidden" }
+        else if w.is_minimized().unwrap_or(false) { "minimized" }
+        else if w.is_focused().unwrap_or(false) { "focused" }
+        else { "behind" };
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let _ = std::fs::write(crate::datadir::root().join(RESUME), serde_json::json!({ "state": state, "at": at }).to_string());
+}
+
+/// Right after an update: bring the window back as it was, without the start-up window. False on a normal start.
+pub fn resume_window(app: &tauri::AppHandle) -> bool {
+    let path = crate::datadir::root().join(RESUME);
+    let Some(v) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { return false };
+    let _ = std::fs::remove_file(&path);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if now.saturating_sub(v["at"].as_u64().unwrap_or(0)) > 15 * 60 {
+        return false;
+    }
+    // ShowWindow's SW_SHOWNOACTIVATE and SW_SHOWMINNOACTIVE: shown, but the app in front stays in front.
+    let show_quietly = |cmd: i32| {
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+        }
+        if let Some(Ok(h)) = app.get_webview_window("main").map(|w| w.hwnd()) {
+            unsafe { ShowWindow(h.0 as isize, cmd) };
+        }
+    };
+    match v["state"].as_str().unwrap_or("") {
+        "focused" => open_main(app),
+        "behind" => show_quietly(4),
+        "minimized" => show_quietly(7),
+        _ => {} // it was in the tray: it stays there
+    }
+    true
 }
 
 /// A normal start: the small update window comes first and Obelisk's own window (created hidden) after it. If that
