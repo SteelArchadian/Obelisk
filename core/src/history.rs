@@ -238,7 +238,7 @@ pub(crate) fn current(game: &Path, prev: &[FileEntry]) -> Result<Vec<FileEntry>,
 }
 
 /// Mod id, name and version of a jar (from its own metadata).
-fn mod_label(p: &Path) -> Option<(String, String, String)> {
+pub(crate) fn mod_label(p: &Path) -> Option<(String, String, String)> {
     let f = fs::File::open(p).ok()?;
     let mut z = zip::ZipArchive::new(f).ok()?;
     let mut text = |n: &str| -> Option<String> {

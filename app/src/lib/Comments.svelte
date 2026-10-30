@@ -68,7 +68,7 @@
   {:else}
     <div class="signin">
       <span class="muted">Sign in to CurseForge to comment and reply here.</span>
-      <button class="ghost" disabled={cf.signingIn} onclick={cfSignIn}>{cf.signingIn ? "Finish in the CurseForge window…" : "Sign in"}</button>
+      <button class="ghost" onclick={cfSignIn}>{cf.signingIn ? "Show the sign-in window" : "Sign in"}</button>
     </div>
   {/if}
 

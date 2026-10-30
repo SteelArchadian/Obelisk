@@ -36,6 +36,7 @@ export async function loadCf() {
     cfListening = true;
     listen("cf-account", () => { cf.signingIn = false; loadCf(); });
     listen("cf-notes", () => loadCfNotes());
+    listen("cf-signin-ended", () => { cf.signingIn = false; });
   }
   try {
     cf.account = await invoke<CfAccount | null>("cf_account");

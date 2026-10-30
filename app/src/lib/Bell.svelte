@@ -68,7 +68,7 @@
       {:else}
         {#if !cf.account}
           <p class="muted">Sign in to CurseForge to comment and reply from Obelisk, keep favorites, and hear here when someone replies to you.</p>
-          <button class="primary" disabled={cf.signingIn} onclick={cfSignIn}>{cf.signingIn ? "Finish signing in in the CurseForge window…" : "Sign in to CurseForge"}</button>
+          <button class="primary" onclick={cfSignIn}>{cf.signingIn ? "Show the CurseForge sign-in window" : "Sign in to CurseForge"}</button>
         {:else}
           {#if cfCount}<button class="link all" onclick={() => cfMarkRead(cf.notes.filter((n) => !n.read).map((n) => n.id))}>Mark all read</button>{/if}
           <div class="list">

@@ -456,6 +456,34 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     }
     // Files a later change replaces aren't needed (nor written): judged against everything incoming.
     let skip = superseded(&incoming(game));
+    apply_sets(game, todo, skip, true)
+}
+
+/// Apply one file of an incoming change and leave the rest of it waiting (the change stays incoming, so the
+/// other files can still be applied or skipped). Checked like any applied file.
+pub fn apply_file(game: &Path, id: &str, path: &str) -> Result<Applied, String> {
+    let mut cs = incoming(game).into_iter().find(|c| c.id == id).ok_or("no such incoming change")?;
+    cs.entries.retain(|e| e.path == path);
+    if cs.entries.is_empty() {
+        return Err(format!("that change doesn't include {path}"));
+    }
+    apply_sets(game, vec![cs], HashSet::new(), false)
+}
+
+/// The jars an incoming change brings, as they'd land: path, size, sha1, md5 and the mod id and version the jar
+/// declares (md5, id and version once its file has arrived).
+pub fn jar_details(game: &Path, cs: &Changeset) -> Vec<serde_json::Value> {
+    use md5::{Digest, Md5};
+    cs.entries.iter().filter(|e| e.path.starts_with("mods/") && e.path.ends_with(".jar")).map(|e| {
+        let blob = e.hash.as_deref().and_then(|h| blob_path(game, h));
+        let md5 = blob.as_ref().and_then(|b| fs::read(b).ok()).map(|b| format!("{:x}", Md5::digest(&b)));
+        let label = blob.as_ref().and_then(|b| history::mod_label(b));
+        serde_json::json!({ "path": e.path, "removed": e.hash.is_none(), "size": e.size, "sha1": e.hash, "md5": md5,
+            "modId": label.as_ref().map(|l| l.0.clone()), "version": label.as_ref().map(|l| l.2.clone()) })
+    }).collect()
+}
+
+fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>, whole: bool) -> Result<Applied, String> {
     if let Some(missing) = todo.iter().find(|c| !needed_blobs(game, c, &skip).is_empty()) {
         return Err(format!("Still downloading the files for {}'s changes. Try again in a moment.", missing.author_name));
     }
@@ -495,7 +523,9 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
                 None => { base.remove(&e.path); }
             }
         }
-        st.applied.push(cs.id.clone());
+        if whole {
+            st.applied.push(cs.id.clone());
+        }
         out.applied += 1;
     }
     // Re-read sizes/mtimes so the next "my changes" check doesn't rehash everything.
@@ -992,6 +1022,19 @@ mod tests {
         assert_eq!(inc.len(), 1);
         skip(&a, &inc[0].id).unwrap();
         assert!(incoming(&a).is_empty() && !a.join("mods/jei.jar").exists());
+
+        // Sam changes a jar and a config; Alex sees the jar's md5 first, takes only the jar, the rest stays waiting.
+        fs::write(b.join("mods/jei.jar"), "jei 2").unwrap();
+        fs::write(b.join("config/create.toml"), "speed=9").unwrap();
+        publish(&b, &sam, "").unwrap().unwrap();
+        transfer(&b, &a);
+        let inc = incoming(&a);
+        let jars = jar_details(&a, &inc[0]);
+        assert_eq!((jars.len(), jars[0]["md5"].as_str()), (1, Some("ab3716b2416d2f1921d95271eb7068d6")));
+        apply_file(&a, &inc[0].id, "mods/jei.jar").unwrap();
+        assert_eq!(fs::read_to_string(a.join("mods/jei.jar")).unwrap(), "jei 2");
+        assert_eq!(fs::read_to_string(a.join("config/create.toml")).unwrap(), "speed=5");
+        assert_eq!(incoming(&a).len(), 1, "the rest of the change still waits");
     }
 
     #[test]

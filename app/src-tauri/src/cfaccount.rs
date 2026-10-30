@@ -49,17 +49,27 @@ pub async fn cf_account(app: tauri::AppHandle) -> Result<Value, String> {
 #[tauri::command]
 pub async fn cf_signin(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(WINDOW) {
+        // Already open (maybe behind something): bring it back.
+        let _ = w.unminimize();
+        let _ = w.show();
         let _ = w.set_focus();
         return Ok(());
     }
     let url = format!("{0}/api/v1/auth/login?returnUrl={0}/&registrationCompletedUrl={0}/signup/confirmation", cfsite::SITE);
-    tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::External(url.parse().map_err(|e| format!("{e}"))?))
-        .title("Sign in to CurseForge").inner_size(520.0, 760.0).center().build().map_err(|e| e.to_string())?;
+    let mut b = tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::External(url.parse().map_err(|e| format!("{e}"))?))
+        .title("Sign in to CurseForge").inner_size(520.0, 760.0).center();
+    // Owned by Obelisk's window, so clicking back into Obelisk doesn't bury it.
+    if let Some(main) = app.get_webview_window("main") {
+        b = b.parent(&main).map_err(|e| e.to_string())?;
+    }
+    b.build().map_err(|e| e.to_string())?;
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Whatever ends the sign-in, the page hears it ("cf-signin-ended"), so its button never stays stuck.
         for _ in 0..600 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             if app2.get_webview_window(WINDOW).is_none() {
+                let _ = app2.emit("cf-signin-ended", ());
                 return; // closed by the user
             }
             let a = app2.clone();
@@ -70,6 +80,8 @@ pub async fn cf_signin(app: tauri::AppHandle) -> Result<(), String> {
                 return;
             }
         }
+        if let Some(w) = app2.get_webview_window(WINDOW) { let _ = w.close(); }
+        let _ = app2.emit("cf-signin-ended", ());
     });
     Ok(())
 }

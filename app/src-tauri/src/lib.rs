@@ -463,7 +463,8 @@ struct ShareStatus {
     /// Set when the owner removed us: who and when (the pack's page says so until dismissed).
     ended: Option<prism::share::Ended>,
     share: Option<prism::share::Share>,
-    incoming: Vec<prism::share::Changeset>,
+    /// Friends' changes waiting, each with `jars`: the mod jars it brings (path, sha1, md5, modId, version).
+    incoming: Vec<serde_json::Value>,
     local: Vec<prism::history::Change>,
     /// Friends' files Obelisk blocked (signs of malware), and why.
     held: Vec<prism::held::Held>,
@@ -477,9 +478,14 @@ async fn share_status(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, in
     };
     let me = share_net(&app, &net).await?.id();
     blocking(move || {
-        let mut incoming = prism::share::incoming(&game);
-        // Don't ship whole baselines to the UI: the changelog is what it shows.
-        for c in &mut incoming { c.entries.clear(); }
+        // Don't ship whole baselines to the UI: the changelog is what it shows, plus the jars it brings.
+        let incoming = prism::share::incoming(&game).into_iter().map(|mut c| {
+            let jars = prism::share::jar_details(&game, &c);
+            c.entries.clear();
+            let mut v = serde_json::to_value(&c).unwrap_or_default();
+            v["jars"] = jars.into();
+            v
+        }).collect();
         let owner = prism::share::owner(&game, &share);
         Ok(ShareStatus { shared: true, me, owner, ended: None, local: prism::share::local_changes(&game)?, held: prism::held::list(&game), incoming, share: Some(share) })
     }).await
@@ -652,6 +658,15 @@ async fn share_sync(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>) -> R
 async fn share_apply(app: tauri::AppHandle, instance_id: String, ids: Vec<String>) -> Result<prism::share::Applied, String> {
     let game = game(&instance_id)?;
     let r = blocking(move || prism::share::apply(&game, &ids)).await?;
+    if !r.blocked.is_empty() { announce_held(&app, &instance_id); }
+    Ok(r)
+}
+
+/// Apply only one file (e.g. "mods/x.jar") of a friend's change; the rest of that change stays waiting.
+#[tauri::command]
+async fn share_apply_file(app: tauri::AppHandle, instance_id: String, id: String, path: String) -> Result<prism::share::Applied, String> {
+    let game = game(&instance_id)?;
+    let r = blocking(move || prism::share::apply_file(&game, &id, &path)).await?;
     if !r.blocked.is_empty() { announce_held(&app, &instance_id); }
     Ok(r)
 }
@@ -2166,7 +2181,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

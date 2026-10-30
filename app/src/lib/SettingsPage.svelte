@@ -410,7 +410,7 @@
           <button class="ghost" onclick={cfSignOut}>Sign out</button>
         </div>
       {:else}
-        <div><button class="primary" disabled={cf.signingIn} onclick={cfSignIn}>{cf.signingIn ? "Finish signing in in the CurseForge window…" : "Sign in to CurseForge"}</button></div>
+        <div><button class="primary" onclick={cfSignIn}>{cf.signingIn ? "Show the CurseForge sign-in window" : "Sign in to CurseForge"}</button></div>
       {/if}
 
     {:else if app.settingsSection === "modrinth"}
