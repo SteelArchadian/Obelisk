@@ -17,7 +17,11 @@ export const mr = $state({
 });
 
 export type CfAccount = { id: number; username: string; displayName: string; avatarUrl?: string };
-export type CfNotification = { id: string; title: string; text: string; projectId: number; commentId: number; read: boolean; created: number };
+/** A CurseForge notification: the site's own ("site-N": approvals, status changes, comments, replies, messages) or a reply Obelisk found. */
+export type CfNotification = {
+  id: string; title: string; text: string; label?: string; kind?: string; projectId?: number; tab?: "comments" | "versions" | null;
+  url?: string | null; read: boolean; created: number | string;
+};
 
 export const cf = $state({
   account: null as CfAccount | null,
@@ -76,8 +80,8 @@ export async function toggleCfFavorite(projectId: number) {
 
 export async function cfMarkRead(ids: string[]) {
   if (!ids.length) return;
-  await invoke("cf_notifications_read", { ids });
   cf.notes = cf.notes.map((n) => (ids.includes(n.id) ? { ...n, read: true } : n));
+  try { await invoke("cf_notifications_read", { ids }); } catch (e) { toastError(e); }
 }
 
 export async function loadAccount() {

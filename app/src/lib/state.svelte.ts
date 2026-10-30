@@ -3,7 +3,7 @@ import type { Instance, ProjectType, Hit, Installed } from "./api";
 
 export type Page = "library" | "instance" | "discover" | "browse" | "settings";
 export type ProfileDialog = { kind: "options" | "clone" | "delete" | "purge"; inst: Instance; tab?: "options" | "backups" };
-export type Overlay = { kind: "project"; hit: Hit; tab?: "comments" } | { kind: "author"; name: string; cfId?: number };
+export type Overlay = { kind: "project"; hit: Hit; tab?: "comments" | "versions" } | { kind: "author"; name: string; cfId?: number };
 /** `world` is the world folder a data pack goes into. */
 export type PendingInstall = { hit: Hit; versionId?: string; loaderOverride?: string; world?: string };
 

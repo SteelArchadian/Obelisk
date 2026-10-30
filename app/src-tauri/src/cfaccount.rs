@@ -152,21 +152,37 @@ pub async fn cf_favorite(app: tauri::AppHandle, project_id: u64, on: bool) -> Re
     blocking(move || { let (c, _) = signed_in(&app)?; cfsite::set_favorite(&c, project_id, on) }).await
 }
 
-/// Replies to the user's comments, newest first ({id, title, text, projectId, commentId, read, created}).
+/// The account's CurseForge notifications, newest first: the site's own (approvals, status changes, comments, replies,
+/// messages; see cfsite::notifications). When the site can't be asked, the replies Obelisk found in watched threads.
 #[tauri::command]
-pub fn cf_notifications() -> Value {
-    let mut notes = load()["notes"].as_array().cloned().unwrap_or_default();
-    notes.sort_by(|a, b| b["created"].as_u64().cmp(&a["created"].as_u64()));
-    notes.into()
+pub async fn cf_notifications(app: tauri::AppHandle) -> Result<Value, String> {
+    blocking(move || {
+        let site = signed_in(&app).and_then(|(c, _)| cfsite::notifications(&c, 50));
+        if let Ok(list) = site {
+            return Ok(list.into());
+        }
+        let mut notes = load()["notes"].as_array().cloned().unwrap_or_default();
+        notes.sort_by(|a, b| b["created"].as_u64().cmp(&a["created"].as_u64()));
+        Ok(notes.into())
+    }).await
 }
 
+/// Mark notifications read: the site's on curseforge.com (so its bell agrees), Obelisk's own here.
 #[tauri::command]
-pub fn cf_notifications_read(ids: Vec<String>) {
-    let mut st = load();
-    for n in st["notes"].as_array_mut().into_iter().flatten() {
-        if n["id"].as_str().is_some_and(|i| ids.iter().any(|x| x == i)) { n["read"] = true.into() }
-    }
-    save(&st);
+pub async fn cf_notifications_read(app: tauri::AppHandle, ids: Vec<String>) -> Result<(), String> {
+    blocking(move || {
+        let site: Vec<u64> = ids.iter().filter_map(|i| i.strip_prefix("site-")?.parse().ok()).collect();
+        if !site.is_empty() {
+            let (c, _) = signed_in(&app)?;
+            cfsite::notifications_read(&c, Some(site))?;
+        }
+        let mut st = load();
+        for n in st["notes"].as_array_mut().into_iter().flatten() {
+            if n["id"].as_str().is_some_and(|i| ids.iter().any(|x| x == i)) { n["read"] = true.into() }
+        }
+        save(&st);
+        Ok(())
+    }).await
 }
 
 // ---- watched threads ----
@@ -249,18 +265,22 @@ fn plain(html: &str) -> String {
     if t.chars().count() > 160 { format!("{}…", t.chars().take(160).collect::<String>()) } else { t }
 }
 
-/// Every 15 minutes while signed in: new replies become notifications ("cf-notes" event with how many).
+/// Every 15 minutes while signed in: when the site counts more new notifications than last time, or a watched thread
+/// has a new reply, the bell reloads ("cf-notes" event).
 pub fn start(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
+        let mut last = 0u64;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             let a = app.clone();
-            let n = blocking(move || {
-                if load()["threads"].as_array().is_none_or(|t| t.is_empty()) { return Ok(0) }
+            let (count, replies) = blocking(move || {
                 let (c, me) = signed_in(&a)?;
-                Ok(check(&c, me["id"].as_u64().unwrap_or(0)))
-            }).await.unwrap_or(0);
-            if n > 0 { let _ = app.emit("cf-notes", n); }
+                let count = cfsite::notifications_count(&c).unwrap_or(0);
+                let watching = load()["threads"].as_array().is_some_and(|t| !t.is_empty());
+                Ok((count, if watching { check(&c, me["id"].as_u64().unwrap_or(0)) } else { 0 }))
+            }).await.unwrap_or((0, 0));
+            if count > last || replies > 0 { let _ = app.emit("cf-notes", count.max(replies as u64)); }
+            last = count;
             tokio::time::sleep(std::time::Duration::from_secs(CHECK_MINS * 60 - 60)).await;
         }
     });

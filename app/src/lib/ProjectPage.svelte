@@ -17,7 +17,7 @@
   import { mr, toggleFollow, openLink, cf, toggleCfFavorite } from "./account.svelte";
   import Comments from "./Comments.svelte";
 
-  let { hit, startTab }: { hit: Hit; startTab?: "comments" } = $props();
+  let { hit, startTab }: { hit: Hit; startTab?: "comments" | "versions" } = $props();
 
   let tab = $state<"overview" | "changelog" | "gallery" | "versions" | "relations" | "comments">(untrack(() => startTab) ?? "overview"); // where it opens; the tabs are the user's after that
   let project = $state<any>(null);

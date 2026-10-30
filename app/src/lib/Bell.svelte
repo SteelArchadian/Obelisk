@@ -1,13 +1,13 @@
 <script lang="ts">
-  // The bell on the left rail: Modrinth notifications (when signed in) in one tab, CurseForge in the other.
+  // The bell on the left rail: CurseForge notifications (when signed in) in the first tab, Modrinth in the other.
   import { onMount } from "svelte";
-  import { mr, cf, unread, cfUnread, loadAccount, loadNotes, markRead, loadCf, loadCfNotes, cfMarkRead, cfSignIn, openLink } from "./account.svelte";
+  import { mr, cf, unread, cfUnread, loadAccount, loadNotes, markRead, loadCf, loadCfNotes, cfMarkRead, cfSignIn, openLink, type CfNotification } from "./account.svelte";
   import { app, closeOverlays } from "./state.svelte";
   import { openProjectById } from "./install";
   import { ago } from "./api";
 
   let open = $state(false);
-  let tab = $state<"modrinth" | "curseforge">("modrinth");
+  let tab = $state<"modrinth" | "curseforge">("curseforge");
   const count = $derived(unread());
   const cfCount = $derived(cfUnread());
   const mrCount = $derived(count - cfCount);
@@ -29,6 +29,15 @@
     else openLink(`https://modrinth.com${link.startsWith("/") ? "" : "/"}${link}`);
   }
 
+  // A CurseForge notification opens its project in Obelisk (on its comments or files when that's what it's about);
+  // a private message opens on legacy.curseforge.com.
+  function cfGo(n: CfNotification) {
+    cfMarkRead([n.id]);
+    open = false;
+    if (n.projectId && n.kind !== "message") openProjectById(`cf:${n.projectId}`, n.tab ?? (n.kind ? undefined : "comments"));
+    else if (n.url) openLink(n.url);
+  }
+
   function settings() {
     open = false;
     closeOverlays();
@@ -46,8 +55,8 @@
   {#if open}
     <div class="pop" role="dialog" aria-label="Notifications" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && (open = false)}>
       <div class="tabs">
-        <button class:on={tab === "modrinth"} onclick={() => (tab = "modrinth")}>Modrinth{#if mrCount} ({mrCount}){/if}</button>
         <button class:on={tab === "curseforge"} onclick={() => (tab = "curseforge")}>CurseForge{#if cfCount} ({cfCount}){/if}</button>
+        <button class:on={tab === "modrinth"} onclick={() => (tab = "modrinth")}>Modrinth{#if mrCount} ({mrCount}){/if}</button>
       </div>
       {#if tab === "modrinth"}
         {#if !mr.account}
@@ -67,18 +76,18 @@
         {/if}
       {:else}
         {#if !cf.account}
-          <p class="muted">Sign in to CurseForge to comment and reply from Obelisk, keep favorites, and hear here when someone replies to you.</p>
+          <p class="muted">Sign in to CurseForge to see your notifications here (approvals, status changes, comments and replies), comment from Obelisk and keep favorites.</p>
           <button class="primary" onclick={cfSignIn}>{cf.signingIn ? "Show the CurseForge sign-in window" : "Sign in to CurseForge"}</button>
         {:else}
           {#if cfCount}<button class="link all" onclick={() => cfMarkRead(cf.notes.filter((n) => !n.read).map((n) => n.id))}>Mark all read</button>{/if}
           <div class="list">
             {#each cf.notes.slice(0, 50) as n (n.id)}
-              <button class="note" class:unread={!n.read} onclick={() => { cfMarkRead([n.id]); open = false; openProjectById(`cf:${n.projectId}`, "comments"); }}>
+              <button class="note" class:unread={!n.read} onclick={() => cfGo(n)}>
                 <strong>{n.title}</strong>
                 {#if n.text}<span>{n.text}</span>{/if}
-                <small>{ago(n.created)}</small>
+                <small>{#if n.label}<em class="label {n.label.toLowerCase().replace(/\s+/g, '-')}">{n.label}</em> {/if}{ago(n.created)}</small>
               </button>
-            {:else}<p class="muted">No replies yet. Obelisk checks the threads you've commented in every 15 minutes.</p>{/each}
+            {:else}<p class="muted">No notifications yet. Approvals, status changes, comments on your projects and replies to you show up here.</p>{/each}
           </div>
         {/if}
       {/if}
@@ -102,6 +111,10 @@
   .note.unread { border-left-color: var(--accent); color: var(--text); }
   .note span { font-size: 13px; color: var(--muted); }
   .note small { font-size: 11px; color: var(--muted); }
+  .label { font-style: normal; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: var(--panel); color: var(--text-2); }
+  .label.approved, .label.released { color: #5cc87a; }
+  .label.changes-required, .label.under-review, .label.under-manual-review { color: #e0a040; }
+  .label.rejected, .label.deleted, .label.malware-detected { color: #e05c5c; }
   .muted { color: var(--muted); margin: 0; font-size: 13px; line-height: 1.5; }
   .primary { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 7px 14px; font-weight: 600; align-self: flex-start; }
   .link { background: none; border: 0; color: var(--accent); padding: 0; }

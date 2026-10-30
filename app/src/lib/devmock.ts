@@ -142,7 +142,11 @@ export function installDevMock() {
       case "cf_signin": sessionStorage.removeItem("mock.cfOut"); return null;
       case "cf_favorites": return [];
       case "cf_favorite": return null;
-      case "cf_notifications": return [{ id: "cf-1", title: "Alex replied on Kaleidoscope Cookery", text: "Try the 1.2 build, it fixes that.", projectId: 1309203, commentId: 5, read: false, created: now - 3600_000 }];
+      case "cf_notifications": return [
+        { id: "site-3", kind: "file", title: "kaleidoscope-compat-1.2.jar has been approved by moderation and is now live!", text: "", label: "Approved", projectId: 1309203, tab: "versions", read: false, created: new Date(now - 1800_000).toISOString() },
+        { id: "site-2", kind: "comment", title: "Alex made a comment on \"Kaleidoscope Compat\"", text: "Try the 1.2 build, it fixes that.", label: "", projectId: 1309203, tab: "comments", read: false, created: new Date(now - 3600_000).toISOString() },
+        { id: "site-1", kind: "status", title: "The status of the project \"Kaleidoscope Compat\" was changed", text: "Please add a description of what the mod changes.", label: "Changes Required", projectId: 1309203, tab: null, read: true, created: new Date(now - 5 * 86400_000).toISOString() },
+      ];
       case "cf_notifications_read": return null;
       case "cf_comment_post": return null;
       case "cf_comments": return { total: 2, me: null, comments: [
