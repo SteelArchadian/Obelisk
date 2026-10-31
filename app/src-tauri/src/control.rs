@@ -479,11 +479,29 @@ fn game_running_in(dir: &Path) -> bool {
 
 // ---------------------------------------------------------------- commands
 
+/// List and object arguments that came as JSON text: an assistant whose tool list predates an option (its MCP helper
+/// started before an update) sends a new list option as a string, e.g. "gc": "[\"-XX:+UseG1GC\"]".
+fn unstring(args: &Value) -> Value {
+    const STRUCTURED: &[&str] = &["gc", "jvm", "add_mods", "disable_mods", "config", "at", "camera", "test_world"];
+    let mut a = args.clone();
+    if let Some(map) = a.as_object_mut() {
+        for key in STRUCTURED {
+            let parsed = map.get(*key).and_then(Value::as_str).map(str::trim)
+                .filter(|t| t.starts_with('[') || t.starts_with('{')).and_then(|t| serde_json::from_str::<Value>(t).ok());
+            if let Some(v) = parsed { map.insert((*key).to_string(), v); }
+        }
+    }
+    a
+}
+
 fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> Result<Value, String> {
-    if !matches!(cmd, "ping" | "help" | "app-commands" | "app") {
+    if !matches!(cmd, "ping" | "help" | "app-commands" | "app" | "mcp-tools") {
         tb_ready()?;
     }
+    let args = &unstring(args);
     match cmd {
+        // The MCP helper's tool list comes from here, so a running helper picks up an updated Obelisk's tools.
+        "mcp-tools" => Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "tools": super::mcp::tools() })),
         "ping" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",

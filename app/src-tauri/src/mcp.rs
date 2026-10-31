@@ -11,7 +11,7 @@ fn copy_arg() -> Value {
     json!({ "type": "string", "description": "A test copy folder directly in the test bench (see copies). Read-only tools and the mod tools also take \"play\" for the play instance (mod changes there take a safety backup first; it is never launched)." })
 }
 
-fn tools() -> Value {
+pub(crate) fn tools() -> Value {
     let copy = copy_arg();
     let obj = |props: Value, req: &[&str]| json!({ "type": "object", "properties": props, "required": req });
     let t = |name: &str, desc: &str, schema: Value| json!({ "name": name, "description": desc, "inputSchema": schema });
@@ -140,9 +140,20 @@ fn call(cmd: &str, args: &Value) -> Result<Value, String> {
     if ok { Ok(v) } else { Err(v["error"].as_str().map(String::from).unwrap_or_else(|| v.to_string())) }
 }
 
+/// The running Obelisk's tool list and version (an update brings new tools); this helper's own list when it isn't running.
+fn live_tools() -> (Value, Option<String>) {
+    match call("mcp-tools", &json!({})) {
+        Ok(v) if v["tools"].is_array() => (v["tools"].clone(), v["version"].as_str().map(String::from)),
+        _ => (tools(), None),
+    }
+}
+
 pub fn serve() {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
+    // The Obelisk version whose tools the assistant has; after a call, a different one means Obelisk updated meanwhile,
+    // and the assistant is told to fetch the list again (tools/list_changed).
+    let mut listed: Option<String> = None;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
@@ -151,12 +162,16 @@ pub fn serve() {
         let result = match method {
             "initialize" => Ok(json!({
                 "protocolVersion": msg.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18")),
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "obelisk", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status."
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools() })),
+            "tools/list" => {
+                let (list, version) = live_tools();
+                listed = version;
+                Ok(json!({ "tools": list }))
+            }
             "tools/call" => {
                 let name = msg.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("").replace('_', "-");
                 let mut args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
@@ -176,6 +191,14 @@ pub fn serve() {
         };
         if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
             break;
+        }
+        if method == "tools/call" && listed.is_some() {
+            let now = call("ping", &json!({})).ok().and_then(|v| v["version"].as_str().map(String::from));
+            if now.is_some() && now != listed {
+                listed = now;
+                let note = json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" });
+                if writeln!(out, "{note}").and_then(|_| out.flush()).is_err() { break; }
+            }
         }
     }
 }
