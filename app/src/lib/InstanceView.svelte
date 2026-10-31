@@ -178,7 +178,8 @@
       return (c || a.name.localeCompare(b.name)) * dir;
     });
   });
-  let allChecked = $derived(rows.length > 0 && rows.every((r) => selected.has(r.fileName)));
+  const keyOf = (i: Item) => i.trashId ?? i.fileName;
+  let allChecked = $derived(rows.length > 0 && rows.every((r) => selected.has(keyOf(r))));
   let pending = $derived([...infos.values()].filter((f) => f.update && !pins.has(pinKey(f))));
   let pendingHere = $derived(pending.filter((f) => f.kind === kind));
   let total = $derived(content.mods.length + content.resourcepacks.length + content.shaderpacks.length);
@@ -343,7 +344,33 @@
     selected = s;
   }
   function toggleAll() {
-    selected = allChecked ? new Set() : new Set(rows.map((r) => r.fileName));
+    selected = allChecked ? new Set() : new Set(rows.map(keyOf));
+  }
+
+  // Drag a box over rows to select them (Ctrl/Shift adds to what's already selected).
+  let tbodyEl = $state<HTMLDivElement>();
+  let box = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  function boxStart(e: MouseEvent) {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button, input, a, select")) return;
+    const start = { x: e.clientX, y: e.clientY };
+    const base = e.ctrlKey || e.shiftKey || e.metaKey ? new Set(selected) : new Set<string>();
+    let dragging = false;
+    const move = (m: MouseEvent) => {
+      if (!dragging && Math.hypot(m.clientX - start.x, m.clientY - start.y) < 6) return;
+      dragging = true;
+      m.preventDefault();
+      box = { x0: start.x, y0: start.y, x1: m.clientX, y1: m.clientY };
+      const top = Math.min(start.y, m.clientY), bottom = Math.max(start.y, m.clientY);
+      const s = new Set(base);
+      for (const el of tbodyEl?.querySelectorAll<HTMLElement>(".row[data-key]") ?? []) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > top && r.top < bottom) s.add(el.dataset.key!);
+      }
+      selected = s;
+    };
+    const up = () => { box = null; removeEventListener("mousemove", move); removeEventListener("mouseup", up); };
+    addEventListener("mousemove", move);
+    addEventListener("mouseup", up);
   }
 
   /** The key a pin is stored under: the project when known (survives updates), else the file. */
@@ -393,11 +420,13 @@
     const cur = filters[group];
     filters = { ...filters, [group]: cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value] };
   }
-  function sortFrom(v: string) {
-    const [key, dir] = v.split(":");
-    if (key === "installed" || key === "modified") { dateMode = key; sortKey = "date"; }
-    else sortKey = key as SortKey;
-    sortAsc = dir === "asc";
+  /** Filter and sort → Sort by: which option is ticked, and ticking/unticking one (unticked goes back to name). */
+  const sortOn = (opt: string) => (opt === "authors" ? sortKey === "authors" : sortKey === "date" && dateMode === opt);
+  function sortTick(opt: string) {
+    if (sortOn(opt)) { sortKey = "name"; sortAsc = true; return; }
+    if (opt === "authors") { sortKey = "authors"; sortAsc = true; return; }
+    dateMode = opt as typeof dateMode; sortKey = "date"; sortAsc = false;
+    try { localStorage.setItem("obelisk.dateMode", dateMode); } catch {}
   }
 
   async function setEnabled(item: Item, want: boolean) {
@@ -495,8 +524,16 @@
 
   async function removeIds(ids: string[]) {
     if (!confirm(`Delete ${ids.length} item${ids.length === 1 ? "" : "s"} for good? This can't be undone.`)) return;
-    for (const id of ids) await invoke("remove_trash", { instanceId: current.id, id }).catch((e) => toastError(e));
-    selected = new Set();
+    await deleteNow(...ids);
+  }
+  /** A row's Delete: asks once by turning into "Sure?", then deletes for good. */
+  let armed = $state<string | null>(null);
+  async function deleteNow(...ids: string[]) {
+    armed = null;
+    const gone = new Set(ids);
+    trash = trash.filter((t) => !gone.has(t.id));
+    selected = new Set([...selected].filter((k) => !gone.has(k)));
+    await Promise.all(ids.map((id) => invoke("remove_trash", { instanceId: current.id, id }).catch((e) => toastError(e))));
     trash = await invoke<TrashEntry[]>("list_trash", { instanceId: current.id });
   }
 
@@ -721,18 +758,19 @@
           {#if showFilters}
             <div class="filters" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && (showFilters = false)}>
               <div class="fhead"><strong>Filter and sort</strong>{#if filterCount}<button class="link" onclick={() => (filters = { ...NO_FILTERS })}>Reset</button>{/if}</div>
-              <label class="fsort">Sort by
-                <select value={sortKey === "date" ? `${dateMode}:${sortAsc ? "asc" : "desc"}` : `${sortKey}:${sortAsc ? "asc" : "desc"}`} onchange={(e) => sortFrom(e.currentTarget.value)}>
-                  <option value="name:asc">Name (A–Z)</option>
-                  <option value="name:desc">Name (Z–A)</option>
-                  <option value="installed:desc">Installed (newest first)</option>
-                  <option value="installed:asc">Installed (oldest first)</option>
-                  <option value="modified:desc">Last modified (newest first)</option>
-                  <option value="modified:asc">Last modified (oldest first)</option>
-                  <option value="authors:asc">Author</option>
-                  <option value="update:asc">Updates first</option>
-                </select>
-              </label>
+              <section class="fsort">
+                <h5>Sort by</h5>
+                {#each [["installed", "Installed"], ["modified", "Last modified"], ["authors", "Author"]] as [v, l] (v)}
+                  <div class="fsrow">
+                    <label class="fopt"><input type="checkbox" checked={sortOn(v)} onchange={() => sortTick(v)} /> {l}</label>
+                    {#if sortOn(v)}
+                      <button class="dir" onclick={() => (sortAsc = !sortAsc)} title="Flip the order">
+                        {sortAsc ? "▲" : "▼"} {v === "authors" ? (sortAsc ? "A–Z" : "Z–A") : sortAsc ? "Oldest first" : "Newest first"}
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </section>
               <div class="fgroups">
                 <section>
                   <h5>Status</h5>
@@ -769,7 +807,7 @@
       <div class="table" role="table" style:--cols={colTemplate} bind:clientWidth={tableW}>
         <div class="thead" role="row" tabindex="-1" title="Right-click to choose columns"
           oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); colMenu = { x: Math.min(e.clientX, innerWidth - 230), y: e.clientY }; }}>
-          <span><input type="checkbox" checked={allChecked} onchange={toggleAll} aria-label="Select all" /></span>
+          <span>{#if viewTrash}<input type="checkbox" checked={allChecked} onchange={toggleAll} aria-label="Select all" />{/if}</span>
           {#each [["name", "Name"], ["date", ""], ["authors", "Author"], ["env", "Env"], ["source", "Source"], ["update", viewTrash ? "" : "Action"], ["enabled", viewTrash ? "" : "Active"]].filter(([k]) => k === "name" || vis(k)) as [key, label] (key)}
             {#if key === "date"}
               <div class="pop">
@@ -802,12 +840,15 @@
             {/each}
           </div>
         {/if}
-        <div class="tbody">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions (drag-to-select is a mouse extra; rows keep their own checkboxes) -->
+        <div class="tbody" bind:this={tbodyEl} role="rowgroup" onmousedown={boxStart} class:boxing={!!box}>
+          {#if box}<div class="selbox" style:left="{Math.min(box.x0, box.x1)}px" style:top="{Math.min(box.y0, box.y1)}px"
+            style:width="{Math.abs(box.x1 - box.x0)}px" style:height="{Math.abs(box.y1 - box.y0)}px"></div>{/if}
           {#each rows as item (item.trashId ?? item.fileName)}
             {@const f = infoOf(item)}
             {@const src = item.source === "local" && f?.provider ? f.provider : item.source}
             {@const when = viewTrash || dateMode === "installed" ? item.installedMs : item.modifiedMs}
-            <div class="row" class:off={!item.enabled} class:picked={selected.has(item.fileName)} role="row" tabindex="-1" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); dateMenu = false; menu = { item, x: e.clientX, y: e.clientY }; }}>
+            <div class="row" data-key={keyOf(item)} class:off={!item.enabled} class:picked={selected.has(keyOf(item))} role="row" tabindex="-1" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); dateMenu = false; menu = { item, x: e.clientX, y: e.clientY }; }}>
               <span><input type="checkbox" checked={selected.has(item.trashId ?? item.fileName)} onchange={() => toggleRow(item.trashId ?? item.fileName)} aria-label="Select {item.name}" /></span>
               <div class="name">
                 {#if icons[item.fileName] || f?.iconUrl}<img class="thumb" use:crisp src={icons[item.fileName] || f?.iconUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="thumb">{initials(item.name)}</div>{/if}
@@ -840,6 +881,9 @@
                 {/if}
               </span>{/if}
               {#if vis("enabled")}<span class="center">
+                {#if item.trashId}<button class="del" class:armed={armed === item.trashId} title="Delete for good (it skips the Recycle Bin)"
+                  onclick={() => (armed === item.trashId ? deleteNow(item.trashId!) : (armed = item.trashId!))}
+                  onmouseleave={() => armed === item.trashId && (armed = null)}>{armed === item.trashId ? "Sure?" : "Delete"}</button>{/if}
                 {#if !item.trashId}<button class="switch" class:on={item.enabled} role="switch" aria-checked={item.enabled}
                   aria-label="Toggle {item.name}" onclick={() => setEnabled(item, !item.enabled)}><i></i></button>{/if}
               </span>{/if}
@@ -1005,10 +1049,14 @@
   .fcount { position: absolute; top: -6px; right: -6px; background: var(--accent); color: #fff; border-radius: 999px; font-size: 10.5px; min-width: 17px; height: 17px; display: grid; place-items: center; padding: 0 4px; }
   .filters { position: absolute; right: 0; top: 42px; z-index: 40; width: min(460px, calc(100vw - 110px)); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: 0 14px 40px rgb(0 0 0 / 0.45); display: flex; flex-direction: column; gap: 10px; }
   .fhead { display: flex; justify-content: space-between; align-items: center; }
-  .fsort { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
-  .fsort select { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 5px; padding: 6px 8px; }
+  .fsrow { display: flex; align-items: center; gap: 10px; min-height: 26px; }
+  .fsrow .dir { margin-left: auto; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
+  .del { background: var(--danger); color: #fff; border: 0; border-radius: 4px; padding: 5px 8px; font-weight: 600; font-size: 12px; }
+  .del.armed { filter: brightness(1.25); }
+  .tbody.boxing { user-select: none; }
+  .selbox { position: fixed; z-index: 30; pointer-events: none; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
   .fgroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
-  .fgroups h5 { margin: 8px 0 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); display: flex; justify-content: space-between; }
+  .fgroups h5, .fsort h5 { margin: 8px 0 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); display: flex; justify-content: space-between; }
   .fopt { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; cursor: pointer; }
   .fopt input { accent-color: var(--accent); }
   .fsearch { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 5px; padding: 6px 8px; margin-bottom: 4px; }
