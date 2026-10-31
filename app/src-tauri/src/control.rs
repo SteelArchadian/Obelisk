@@ -948,9 +948,7 @@ fn essential_no_update(dir: &Path) {
     let mut lines: Vec<String> = text.lines().filter(|l| l.split('=').next().map(str::trim) != Some("autoUpdate")).map(String::from).collect();
     lines.push("autoUpdate=false".into());
     let _ = std::fs::create_dir_all(dir.join("essential"));
-    let _ = std::fs::write(&file, lines.join("
-") + "
-");
+    let _ = std::fs::write(&file, lines.join("\n") + "\n");
 }
 
 /// Absolute AFK Cinema's master switch is `general.enabled` in a commented JSON file, so it's switched as text
@@ -991,6 +989,58 @@ fn afk_switched_off(text: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}false{}", &text[..start], &text[start + 4..]))
+}
+
+/// Properties that make a launch an FPS measurement (Lightning captures, pack and load benchmarks).
+const FPS_PROPS: &[&str] = &["-Dlightning.capture", "-Dpackbench.", "-Dspeedloader.autobench"];
+/// The frame cap an FPS run uses: high enough that no laptop or desktop here reaches it, so the numbers are the game's.
+const FPS_RUN_MAX: &str = "260";
+
+fn get_option(path: &Path, key: &str) -> Option<String> {
+    std::fs::read_to_string(path).ok()?.lines().find_map(|l| l.strip_prefix(&format!("{key}:")).map(str::to_string))
+}
+
+/// An FPS run measures the game, not a cap: vsync off (Minecraft's default is on, which holds a run at the monitor's
+/// 60 Hz) and the frame limit at FPS_RUN_MAX. Returns what the copy had, for `uncap_undo` after the run.
+fn uncap(options: &Path) -> [(&'static str, Option<String>); 2] {
+    let before = [("enableVsync", get_option(options, "enableVsync")), ("maxFps", get_option(options, "maxFps"))];
+    set_option(options, "enableVsync", "false");
+    set_option(options, "maxFps", FPS_RUN_MAX);
+    before
+}
+
+/// Put the copy's own vsync and frame limit back (the game may have rewritten the file meanwhile; only these two change).
+fn uncap_undo(options: &Path, before: &[(&'static str, Option<String>); 2]) {
+    for (key, value) in before {
+        match value {
+            Some(v) => set_option(options, key, v),
+            None => {
+                let Ok(text) = std::fs::read_to_string(options) else { continue };
+                let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with(&format!("{key}:"))).collect();
+                let _ = std::fs::write(options, kept.join("\n") + "\n");
+            }
+        }
+    }
+}
+
+/// The FPS run's line: the vsync and frame cap it really ran with (Lightning's capture says, else options.txt), and a
+/// warning when the frames still look capped (median at 16.6 ms, 60 FPS, with more time waiting on the swap than the GPU took).
+fn fps_report(dir: &Path, since_ms: u64) -> String {
+    let options = dir.join("options.txt");
+    let run = prism::lightning::runs(dir, 1).into_iter().find(|r| r.started_ms >= since_ms.saturating_sub(5_000));
+    let raw = run.as_ref().and_then(|r| std::fs::read(dir.join("lightning").join("captures").join(format!("lightning-{}.results.json", r.id))).ok())
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null);
+    let vsync = raw["run"]["vsync"].as_bool().map(|v| v.to_string()).or_else(|| get_option(&options, "enableVsync")).unwrap_or("?".into());
+    let max = raw["run"]["fpsLimit"].as_u64().map(|v| v.to_string()).or_else(|| get_option(&options, "maxFps")).unwrap_or("?".into());
+    let source = if raw["run"].is_object() { "per Lightning" } else { "per options.txt" };
+    let mut line = format!("vsync {vsync}, maxFps {max} ({source})");
+    let w = &raw["whole"];
+    if let (Some(p50), Some(swap), Some(gpu)) = (w["frameP50"].as_f64(), w["swapWaitP50"].as_f64(), w["gpuFrameP50"].as_f64()) {
+        if (16.3..=17.0).contains(&p50) && swap > gpu {
+            line.push_str(&format!("; WARNING: frames look capped at 60 FPS (frameP50 {p50:.1} ms, swapWait {swap:.1} ms > GPU {gpu:.1} ms): some cap is on (driver vsync, a frame limiter or the monitor), so these FPS numbers aren't the game's"));
+        }
+    }
+    line
 }
 
 fn set_option(path: &Path, key: &str, value: &str) {
@@ -1247,6 +1297,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         return;
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
+    let fps_run = perf || cmd.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)));
+    let caps = std::sync::Mutex::new(None);
     let result = (|| -> Result<String, String> {
         swap.apply()?;
         // Test rules: harness jar (no mouse grab, no focus), muted, keeps running unfocused.
@@ -1266,6 +1318,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         }
         set_option(&dir.join("options.txt"), "soundCategory_master", "0.0");
         test_rules(&dir);
+        if fps_run { *caps.lock().expect("caps") = Some(uncap(&dir.join("options.txt"))); }
         // Run logs live beside the copies, never inside one: a copy's folder must match the pack it came from.
         let runs = tb().root.join("obelisk-runs").join(dir.file_name().unwrap_or_default());
         let _ = std::fs::create_dir_all(&runs);
@@ -1355,11 +1408,13 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let times: Vec<String> = prism::timeline::phases(&t).iter().filter(|p| !p.idle && p.key != "launcher")
             .map(|p| format!("{} {:.1}s", p.key, p.ms as f64 / 1000.0)).collect();
         let why = if times.is_empty() { why } else { format!("{why}; {}", times.join(", ")) };
+        let why = if fps_run { format!("{why}; {}", fps_report(&dir, click_ms.max(0) as u64)) } else { why };
         let crashes = std::fs::read_dir(dir.join("crash-reports")).into_iter().flatten().flatten()
             .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started)).count();
         Ok(if crashes > 0 { format!("{why}; {crashes} new crash report(s)") } else { why })
     })();
     stitch_jfr(&dir.join("jfr"));
+    if let Some(before) = caps.lock().expect("caps").take() { uncap_undo(&dir.join("options.txt"), &before); }
     let restored = swap.restore();
     if new_world {
         for n in save_names(&dir).difference(&saves_before) {
