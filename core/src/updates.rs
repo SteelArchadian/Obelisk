@@ -76,6 +76,56 @@ fn env_from_sides(client: &str, server: &str) -> String {
     }
 }
 
+/// Fingerprints already worked out, by SHA-1 (reading every jar again would take seconds in a big pack).
+static FINGERPRINTS: std::sync::Mutex<Option<HashMap<String, u32>>> = std::sync::Mutex::new(None);
+
+/// The profile's CurseForge files, quickly (for "Installed" on project pages): Prism's metadata, then one batched
+/// fingerprint match for the files nothing else names. No update lookups.
+pub fn cf_installed(game: &Path, hash_cache: &Path, cf: &curseforge::Client) -> Vec<modrinth::Installed> {
+    let mut out = Vec::new();
+    let mut unknown: Vec<(String, String, String)> = Vec::new(); // kind, file, sha1
+    for kind in crate::KINDS {
+        let index = index_map(&game.join(kind).join(".index"));
+        for (file, sha1) in crate::file_sha1s(game, kind, hash_cache) {
+            let base = file.trim_end_matches(".disabled").to_string();
+            match index.get(&base) {
+                Some((p, id, current)) if p == "curseforge" => out.push(modrinth::Installed {
+                    project_id: format!("cf:{id}"), version_id: current.clone(), kind: kind.to_string(), file_name: file }),
+                Some(_) => {}
+                None => unknown.push((kind.to_string(), file, sha1)),
+            }
+        }
+    }
+    let mut fps: HashMap<u32, usize> = HashMap::new();
+    {
+        let mut known = FINGERPRINTS.lock().unwrap();
+        let known = known.get_or_insert_with(HashMap::new);
+        for (n, (kind, file, sha1)) in unknown.iter().enumerate() {
+            let fp = match known.get(sha1) {
+                Some(&fp) => fp,
+                None => {
+                    let Ok(bytes) = fs::read(game.join(kind).join(file)) else { continue };
+                    let fp = curseforge::fingerprint(&bytes);
+                    known.insert(sha1.clone(), fp);
+                    fp
+                }
+            };
+            fps.insert(fp, n);
+        }
+    }
+    if fps.is_empty() {
+        return out;
+    }
+    for (fp, mod_id, file) in cf.match_fingerprints(&fps.keys().copied().collect::<Vec<_>>()).unwrap_or_default() {
+        if let Some(&n) = fps.get(&fp) {
+            let (kind, name, _) = &unknown[n];
+            out.push(modrinth::Installed { project_id: format!("cf:{mod_id}"), version_id: file["id"].as_u64().unwrap_or(0).to_string(),
+                kind: kind.clone(), file_name: name.clone() });
+        }
+    }
+    out
+}
+
 /// Look at every file in a profile. Network: a handful of batched calls, not one per mod.
 pub fn check(game: &Path, hash_cache: &Path, mr: &modrinth::Client, cf: Option<&curseforge::Client>, loader: &str, mc: &str) -> Result<Vec<FileInfo>, String> {
     let mut infos: Vec<FileInfo> = Vec::new();

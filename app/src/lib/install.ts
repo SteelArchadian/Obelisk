@@ -50,6 +50,8 @@ export async function setTarget(inst: Instance | null) {
 export async function refreshInstalled() {
   const inst = app.target;
   if (!inst) return;
+  // CurseForge files are matched in a quick call of their own, alongside Modrinth's.
+  const cfQuick = api.cfInstalled(inst.id).catch(() => [] as Installed[]);
   try {
     const list = await api.installed(inst.id);
     if (app.target?.id !== inst.id) return;
@@ -58,6 +60,12 @@ export async function refreshInstalled() {
   } catch (e) {
     toast(`Couldn't check installed mods: ${e}`);
   }
+  cfQuick.then((cf) => {
+    if (app.target?.id !== inst.id || !cf.length) return;
+    const m = new Map(app.installed);
+    for (const i of cf) m.set(i.projectId, i);
+    app.installed = m;
+  });
   // CurseForge-only files are identified by fingerprint in the (slower) update check. Its results
   // can be hours old, so only count files that are still in the profile (not ones deleted since).
   updatesFor(inst.id).then(async (infos) => {

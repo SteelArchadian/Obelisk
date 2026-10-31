@@ -73,6 +73,7 @@ export const api = {
   project: (id: string) => invoke<any>("mr_project", { id }),
   versions: (id: string, changelog = false) => invoke<Version[]>("mr_versions", { id, changelog }),
   installed: (instanceId: string) => invoke<Installed[]>("mr_installed", { instanceId }),
+  cfInstalled: (instanceId: string) => invoke<Installed[]>("cf_installed", { instanceId }),
   install: (instanceId: string, req: { projectId: string; projectType: string; versionId?: string; loaderOverride?: string; force?: boolean }, world?: string) =>
     invoke<string[]>("mr_install", { instanceId, req, world }),
   worlds: (instanceId: string) => invoke<World[]>("list_worlds", { instanceId }),

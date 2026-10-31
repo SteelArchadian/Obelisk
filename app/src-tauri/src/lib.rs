@@ -298,6 +298,14 @@ async fn mr_installed(app: tauri::AppHandle, mr: tauri::State<'_, Mr>, instance_
     blocking(move || mr.installed(&game, &cache)).await
 }
 
+/// The profile's CurseForge projects ("cf:<id>"), quickly: what project pages need to say "Installed" (the full
+/// update check also looks up every newer version, which takes much longer in a big pack). Empty without a key.
+#[tauri::command]
+async fn cf_installed(app: tauri::AppHandle, instance_id: String) -> Result<Vec<prism::modrinth::Installed>, String> {
+    let (game, cache) = (game(&instance_id)?, hash_cache(&app)?);
+    blocking(move || Ok(cf_client().map(|cf| prism::updates::cf_installed(&game, &cache, &cf)).unwrap_or_default())).await
+}
+
 /// Install (or switch the version of) a mod/resource pack/shader plus its required dependencies.
 #[tauri::command]
 async fn mr_install(app: tauri::AppHandle, mr: tauri::State<'_, Mr>, instance_id: String, req: prism::modrinth::InstallRequest, world: Option<String>) -> Result<Vec<String>, String> {
@@ -2178,7 +2186,7 @@ pub fn run() {
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
-            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, mr_install, import_pack, open_prism,
+            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,

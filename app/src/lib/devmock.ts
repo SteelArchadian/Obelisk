@@ -166,6 +166,7 @@ export function installDevMock() {
       case "mr_dependencies": return { projects: [{ id: "P7dR8mSH", title: "Fabric API", icon_url: "", project_type: "mod", downloads: 9000000 }], versions: [] };
       case "cf_relations": return { data: Array.from({ length: 20 }, (_, k) => ({ id: args.index + k + 1, name: `Addon ${args.index + k + 1} (${args.sort})`, authorName: "someone", logoUrl: "", type: "RequiredDependency", categoryClass: { name: "Mods" }, downloads: 1000 * (k + 1) })), pagination: { totalCount: 60 } };
       case "mr_installed": return [];
+      case "cf_installed": return [];
       default: return null;
     }
   });
