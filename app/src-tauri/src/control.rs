@@ -482,7 +482,7 @@ fn game_running_in(dir: &Path) -> bool {
 /// List and object arguments that came as JSON text: an assistant whose tool list predates an option (its MCP helper
 /// started before an update) sends a new list option as a string, e.g. "gc": "[\"-XX:+UseG1GC\"]".
 fn unstring(args: &Value) -> Value {
-    const STRUCTURED: &[&str] = &["gc", "jvm", "add_mods", "disable_mods", "config", "at", "camera", "test_world"];
+    const STRUCTURED: &[&str] = &["gc", "options", "jvm", "add_mods", "disable_mods", "config", "at", "camera", "test_world"];
     let mut a = args.clone();
     if let Some(map) = a.as_object_mut() {
         for key in STRUCTURED {
@@ -986,6 +986,9 @@ fn test_rules(dir: &Path) {
     }
     set_option(&options, "pauseOnLostFocus", "false");
     set_option(&options, "onboardAccessibility", "false");
+    // Render distance 6 (user, 2026-10-31): light enough for every PC here; a run that needs more asks for it
+    // ("options").
+    set_option(&options, "renderDistance", TEST_RENDER_DISTANCE);
     // Windowed: a borderless or fullscreen game copied from the play instance covers the desktop and
     // glitches Wallpaper Engine while it's parked off-screen.
     let _ = prism::window::set(dir, prism::window::Mode::Windowed);
@@ -1048,6 +1051,9 @@ fn afk_switched_off(text: &str) -> Option<String> {
     Some(format!("{}false{}", &text[..start], &text[start + 4..]))
 }
 
+/// The render distance every test copy runs at unless a run asks for another ("options").
+const TEST_RENDER_DISTANCE: &str = "6";
+
 /// Properties that make a launch an FPS measurement (Lightning captures, pack and load benchmarks).
 const FPS_PROPS: &[&str] = &["-Dlightning.capture", "-Dpackbench.", "-Dspeedloader.autobench"];
 /// The frame cap an FPS run uses: high enough that no laptop or desktop here reaches it, so the numbers are the game's.
@@ -1059,15 +1065,32 @@ fn get_option(path: &Path, key: &str) -> Option<String> {
 
 /// An FPS run measures the game, not a cap: vsync off (Minecraft's default is on, which holds a run at the monitor's
 /// 60 Hz) and the frame limit at FPS_RUN_MAX. Returns what the copy had, for `uncap_undo` after the run.
-fn uncap(options: &Path) -> [(&'static str, Option<String>); 2] {
-    let before = [("enableVsync", get_option(options, "enableVsync")), ("maxFps", get_option(options, "maxFps"))];
-    set_option(options, "enableVsync", "false");
-    set_option(options, "maxFps", FPS_RUN_MAX);
-    before
+fn uncap(options: &Path) -> Vec<(String, Option<String>)> {
+    set_for_run(options, &[("enableVsync".into(), "false".into()), ("maxFps".into(), FPS_RUN_MAX.into())])
 }
 
-/// Put the copy's own vsync and frame limit back (the game may have rewritten the file meanwhile; only these two change).
-fn uncap_undo(options: &Path, before: &[(&'static str, Option<String>); 2]) {
+/// Set options for one run; returns what the copy had, for `uncap_undo` after it.
+fn set_for_run(options: &Path, set: &[(String, String)]) -> Vec<(String, Option<String>)> {
+    set.iter().map(|(key, value)| {
+        let before = get_option(options, key);
+        set_option(options, key, value);
+        (key.clone(), before)
+    }).collect()
+}
+
+/// This run's options ("options": {"renderDistance": 12, ...}), set for the run and put back after it.
+fn run_options(args: &Value) -> Result<Vec<(String, String)>, String> {
+    let Some(map) = args.get("options").filter(|v| !v.is_null()) else { return Ok(vec![]) };
+    let map = map.as_object().ok_or("\"options\" must be an object of options.txt keys, e.g. {\"renderDistance\": 12}")?;
+    map.iter().map(|(k, v)| {
+        let value = match v { Value::String(s) => s.clone(), Value::Bool(_) | Value::Number(_) => v.to_string(), _ => return Err(format!("option {k}: give a text, number or true/false")) };
+        if k.is_empty() || k.contains([':', '\n', '\r']) || value.contains(['\n', '\r']) { return Err(format!("option {k:?}: not an options.txt key and value")) }
+        Ok((k.clone(), value))
+    }).collect()
+}
+
+/// Put back what the copy had before a run's settings (the game may have rewritten the file meanwhile; only these keys change).
+fn uncap_undo(options: &Path, before: &[(String, Option<String>)]) {
     for (key, value) in before {
         match value {
             Some(v) => set_option(options, key, v),
@@ -1316,19 +1339,20 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         for (i, a) in flags.iter().enumerate() { cmd.insert(i, a.clone()) }
     }
     let gc_used = gc.map(|f| f.join(" "));
+    let set = run_options(args)?;
     let lock = format!("{owner} - {purpose} (obelisk)");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
     // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used));
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used, set));
     Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc }))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, java: String, cmd: Vec<String>,
-    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>) {
+    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>) {
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
@@ -1364,6 +1388,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
     let fps_run = perf || cmd.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)));
     let caps = std::sync::Mutex::new(None);
+    let run_set = std::sync::Mutex::new(None);
     let result = (|| -> Result<String, String> {
         swap.apply()?;
         // Test rules: harness jar (no mouse grab, no focus), muted, keeps running unfocused.
@@ -1384,6 +1409,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         set_option(&dir.join("options.txt"), "soundCategory_master", "0.0");
         test_rules(&dir);
         if fps_run { *caps.lock().expect("caps") = Some(uncap(&dir.join("options.txt"))); }
+        if !set.is_empty() { *run_set.lock().expect("run options") = Some(set_for_run(&dir.join("options.txt"), &set)); }
         // Run logs live beside the copies, never inside one: a copy's folder must match the pack it came from.
         let runs = tb().root.join("obelisk-runs").join(dir.file_name().unwrap_or_default());
         let _ = std::fs::create_dir_all(&runs);
@@ -1495,6 +1521,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         Ok(if crashes > 0 { format!("{why}; {crashes} new crash report(s)") } else { why })
     })();
     stitch_jfr(&dir.join("jfr"));
+    if let Some(before) = run_set.lock().expect("run options").take() { uncap_undo(&dir.join("options.txt"), &before); }
     if let Some(before) = caps.lock().expect("caps").take() { uncap_undo(&dir.join("options.txt"), &before); }
     let restored = swap.restore();
     if new_world {
