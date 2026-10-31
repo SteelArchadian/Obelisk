@@ -200,6 +200,14 @@ pub async fn cf_notifications(app: tauri::AppHandle) -> Result<Value, String> {
         let read = load()["legacyRead"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
         cflegacy::refresh(&app, read);
     }
+    // The legacy page keeps moderation's notes (why changes are required) that the new feed leaves out: give them to
+    // the new site's copy of the same notification.
+    for l in &legacy {
+        let (Some(sid), Some(text)) = (l["siteId"].as_u64(), l["text"].as_str().filter(|t| !t.is_empty())) else { continue };
+        if let Some(n) = list.iter_mut().find(|n| n["siteId"].as_u64() == Some(sid) && n["text"].as_str().is_none_or(str::is_empty)) {
+            n["text"] = text.into();
+        }
+    }
     // The same event on both sites: within five minutes, and the legacy row names the file (or project) the new one does.
     let fresh: Vec<Value> = legacy.into_iter().filter(|l| {
         let text = format!("{} {}", l["title"].as_str().unwrap_or_default(), l["text"].as_str().unwrap_or_default()).to_lowercase();

@@ -110,7 +110,7 @@
   .note { display: flex; flex-direction: column; gap: 2px; text-align: left; background: none; border: 0; border-left: 3px solid transparent; padding: 7px 8px; border-radius: 4px; color: var(--text-2); }
   .note:hover { background: var(--panel); }
   .note.unread { border-left-color: var(--accent); color: var(--text); }
-  .note span { font-size: 13px; color: var(--muted); }
+  .note span { font-size: 13px; color: var(--muted); white-space: pre-line; }
   .note small { font-size: 11px; color: var(--muted); }
   .label { font-style: normal; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: var(--panel); color: var(--text-2); }
   .label.approved, .label.released { color: #5cc87a; }
