@@ -417,7 +417,9 @@ fn is_gc_flag(a: &str) -> bool {
     let name = rest.trim_start_matches(['+', '-']).split('=').next().unwrap_or("");
     let exact = ["ConcGCThreads", "ParallelGCThreads", "MaxGCPauseMillis", "GCPauseIntervalMillis", "ParallelRefProcEnabled",
         "UseStringDeduplication", "SoftMaxHeapSize", "InitiatingHeapOccupancyPercent", "GCTimeRatio", "MaxTenuringThreshold",
-        "UseDynamicNumberOfGCThreads", "UseAdaptiveSizePolicy"];
+        "UseDynamicNumberOfGCThreads", "UseAdaptiveSizePolicy",
+        // Some G1 tuning (G1NewSizePercent, G1MaxNewSizePercent) is experimental and needs this first.
+        "UnlockExperimentalVMOptions"];
     (name.starts_with("Use") && name.ends_with("GC")) || name.starts_with("G1") || name.starts_with("Shenandoah")
         || (name.starts_with('Z') && name.len() > 1) || exact.contains(&name)
 }
@@ -1292,7 +1294,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // A GC A/B run: every GC setting from the profile and the bench defaults out, this run's in.
     let gc = gc_flags(args)?;
     if let Some(flags) = &gc {
-        cmd.retain(|a| !is_gc_flag(a));
+        cmd.retain(|a| !is_gc_flag(a) || a == "-XX:+UnlockExperimentalVMOptions");
         for (i, a) in flags.iter().enumerate() { cmd.insert(i, a.clone()) }
     }
     let gc_used = gc.map(|f| f.join(" "));
