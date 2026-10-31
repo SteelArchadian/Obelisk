@@ -1,7 +1,7 @@
 [package]
 name = "obelisk-core"
 version = "0.1.0"
-license = "LGPL-3.0-only"
+license = "GPL-3.0-only"
 edition = "2024"
 description = "Obelisk's Prism Launcher data layer (no UI)"
 
