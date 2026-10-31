@@ -91,6 +91,8 @@ enum Req {
     /// A joiner's pack downloaded and set up: only now are they listed as a member (older Obelisk answers
     /// "bad request"; it lists people when they first connect).
     Joined,
+    /// The owner's options.txt, once, for a member's copy that has none of its own yet (share::seed_options).
+    Options,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -374,6 +376,17 @@ impl Net {
             if mine.owner.is_empty() {
                 mine.owner = o;
                 share::save(game, &mine)?;
+            }
+        }
+        // The owner's settings, once (a member's copy, never the owner's own; older Obelisk answers "bad request").
+        let owner = share::get(game).map(|s| share::owner(game, &s));
+        if owner.as_deref() == Some(them.id.as_str()) && them.id != self.id() && share::wants_options(game) {
+            if let Ok(v) = sess.call(&Req::Options).await {
+                match v.as_str().map(|t| share::seed_options(game, t)) {
+                    Some(Ok(true)) => trace("took the owner's game settings (options.txt), once"),
+                    Some(Err(e)) => trace(format!("couldn't take the owner's game settings: {e}")),
+                    _ => {}
+                }
             }
         }
         if share::merge_removals(game, &self.id(), &log.removed)? {
@@ -1044,6 +1057,16 @@ impl Handler {
                 (ok(serde_json::to_value(LogReply { ids: share::log_ids(game), members: s.members, owner, removed: s.removed }).unwrap_or_default()), vec![])
             }
             Req::Wishes => (ok(serde_json::to_value(share::wishes(game)).unwrap_or_default()), vec![]),
+            Req::Options => {
+                // Only the owner hands out settings, and only to members.
+                let Some(s) = share::get(game) else { return (err("not shared"), vec![]) };
+                let me = self.me.to_string();
+                if share::owner(game, &s) != me || !s.members.iter().any(|m| m.id == peer.to_string()) {
+                    return (err("settings come from the pack's owner"), vec![]);
+                }
+                let text = std::fs::read_to_string(game.join("options.txt")).unwrap_or_default();
+                (ok(serde_json::Value::String(text)), vec![])
+            }
             Req::Joined => {
                 self.joining.lock().unwrap().remove(&peer.to_string());
                 match share::merge_members(game, &[Member { id: peer.to_string(), name: their_name.to_string(), last_seen_ms: now_ms() }]) {
@@ -1249,6 +1272,20 @@ name=Pack
         x.set_wishes(&gx, vec![serde_json::json!({ "hit": { "project_id": "AANobbMI" } })]).unwrap();
         o.sync_all().await;
         assert_eq!(share::wishes(&game).get(&x.id()).map(|w| w.name.as_str()), Some("Xan"), "wish lists travel");
+        std::fs::write(game.join("options.txt"), "renderDistance:6
+").unwrap();
+        std::fs::write(gm.join("options.txt"), "renderDistance:2
+").unwrap();
+        m.sync_all().await;
+        assert_eq!(std::fs::read_to_string(gm.join("options.txt")).unwrap(), "renderDistance:6
+", "a member takes the owner's settings");
+        assert_eq!(std::fs::read_to_string(gm.join("options.txt.obelisk-pre-seed")).unwrap(), "renderDistance:2
+");
+        std::fs::write(gm.join("options.txt"), "renderDistance:4
+").unwrap();
+        m.sync_all().await;
+        assert_eq!(std::fs::read_to_string(gm.join("options.txt")).unwrap(), "renderDistance:4
+", "only once");
 
         o.remove(&game, &x.id()).unwrap();
         assert!(m.remove(&gm, &o.id()).is_err(), "only the owner removes people");

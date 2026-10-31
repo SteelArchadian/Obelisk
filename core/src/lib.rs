@@ -20,6 +20,7 @@ pub mod history;
 pub mod java;
 pub mod timeline;
 pub mod tomlset;
+pub mod overrides;
 pub mod packtrash;
 pub mod share;
 pub mod share_net;

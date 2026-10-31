@@ -161,6 +161,35 @@ struct OldHeld {
     reasons: Vec<String>,
 }
 
+/// Settings (options.txt) aren't shared: each PC keeps its own. A member's copy takes the owner's once, the first
+/// time it can (any options.txt it already had is kept beside it as options.txt.obelisk-pre-seed).
+pub fn seed_options(game: &Path, text: &str) -> Result<bool, String> {
+    let marker = dir(game).join("options-seeded");
+    if marker.exists() || text.trim().is_empty() || text.len() > 256 * 1024 || text.contains('\0') {
+        return Ok(false);
+    }
+    let path = game.join("options.txt");
+    if path.is_file() {
+        let bak = game.join("options.txt.obelisk-pre-seed");
+        if !bak.exists() {
+            fs::copy(&path, &bak).map_err(|e| format!("options.txt backup: {e}"))?;
+        }
+    }
+    fs::write(&path, text).map_err(|e| format!("options.txt: {e}"))?;
+    fs::create_dir_all(dir(game)).map_err(|e| e.to_string())?;
+    fs::write(&marker, now_ms_text()).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Whether this copy still waits for the owner's settings.
+pub fn wants_options(game: &Path) -> bool {
+    !dir(game).join("options-seeded").exists()
+}
+
+fn now_ms_text() -> String {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0).to_string()
+}
+
 fn dir(game: &Path) -> PathBuf {
     game.join(".obelisk").join("share")
 }

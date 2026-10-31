@@ -1408,6 +1408,12 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         }
         set_option(&dir.join("options.txt"), "soundCategory_master", "0.0");
         test_rules(&dir);
+        // This PC's own lighter settings for the copy (pc-overrides.json), keyed by the copy's name.
+        let copy = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let copy = if copy.eq_ignore_ascii_case("minecraft") || copy.eq_ignore_ascii_case(".minecraft") {
+            dir.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or(copy)
+        } else { copy };
+        for p in super::apply_pc_overrides(&dir, &[&copy]) { eprintln!("pc override: {p}") }
         if fps_run { *caps.lock().expect("caps") = Some(uncap(&dir.join("options.txt"))); }
         if !set.is_empty() { *run_set.lock().expect("run options") = Some(set_for_run(&dir.join("options.txt"), &set)); }
         // Run logs live beside the copies, never inside one: a copy's folder must match the pack it came from.

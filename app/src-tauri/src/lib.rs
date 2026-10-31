@@ -596,6 +596,33 @@ fn announce_held(app: &tauri::AppHandle, instance_id: &str) {
     }
 }
 
+/// This PC's own settings per profile (pc-overrides.json; see prism::overrides), applied before every launch.
+#[tauri::command]
+fn pc_overrides_get() -> serde_json::Value {
+    let path = datadir::root().join(prism::overrides::FILE);
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| serde_json::json!({ "profiles": {} }))
+}
+
+#[tauri::command]
+fn pc_overrides_set(overrides: serde_json::Value) -> Result<(), String> {
+    prism::overrides::validate(&overrides)?;
+    let path = datadir::root().join(prism::overrides::FILE);
+    if path.is_file() {
+        let _ = std::fs::copy(&path, path.with_extension("json.bak"));
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&overrides).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Put this PC's overrides for a profile in place: those under any of `names` (and "*"). Returns what couldn't be.
+pub(crate) fn apply_pc_overrides(game: &std::path::Path, names: &[&str]) -> Vec<String> {
+    let all = pc_overrides_get();
+    let profiles = all.get("profiles");
+    let name = names.iter().copied().find(|n| !n.is_empty() && profiles.and_then(|p| p.get(*n)).is_some()).unwrap_or("*");
+    let (options, files) = prism::overrides::for_profile(&all, name);
+    if options.is_empty() && files.is_empty() { return vec![] }
+    prism::overrides::apply(game, &options, &files)
+}
+
 /// Import/Join → Details: what the last import or join did, step by step (to see why one failed).
 #[tauri::command]
 fn share_trace() -> Vec<String> {
@@ -1502,6 +1529,8 @@ async fn launch(app: tauri::AppHandle, instance_id: String) -> Result<Option<Str
         prism::shaders_off(&game_dir)?;
     }
     // Paths an older Obelisk wrote with bare backslashes make Prism find no packs (it then shows its own window).
+    let name = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == instance_id).map(|i| i.name).unwrap_or_default();
+    for p in apply_pc_overrides(&game_dir, &[&instance_id, &name]) { eprintln!("pc override: {p}") }
     let data = prism::data_dir();
     let healed = prism::heal_cfg(&data.join("prismlauncher.cfg")).unwrap_or(false);
     let inst_cfg = game_dir.parent().unwrap_or(&game_dir).join("instance.cfg");
@@ -2190,7 +2219,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, pc_overrides_get, pc_overrides_set, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
