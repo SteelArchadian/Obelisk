@@ -802,6 +802,11 @@ fn snapshot(jcmd: &Path, pid: u32, out: &Path, kind: &str) -> Result<Value, Stri
             let parsed: Vec<Vec<JThread>> = dumps.iter().map(|d| parse_threads(d)).collect();
             Ok(json!({ "file": file, "threads": summarize_threads(&parsed) }))
         }
+        "heapinfo" => {
+            let file = out.join(format!("heapinfo-{}.txt", now()));
+            std::fs::write(&file, run(&["GC.heap_info"])?).map_err(|e| e.to_string())?;
+            Ok(json!({ "file": file }))
+        }
         _ => Err("kind must be histogram, dump or threads".into()),
     }
 }
@@ -1340,6 +1345,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let latest = dir.join("logs").join("latest.log");
         let stdout_file = runs.join(format!("{id}.stdout"));
         let mut stall = Stall::default();
+        let mut frozen_since: Option<Instant> = None;
         let why = loop {
             if let Ok(Some(status)) = game.try_wait() {
                 let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
@@ -1377,6 +1383,20 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             if let Some(why) = stall.check(&latest, &stdout_file, watch.events.len(), &watch.events, stopping.is_some()) {
                 let v = screenshot(pid, &runs, id, why, (prism::timeline::now_ms() - click_ms) as f64 / 1000.0);
                 update(&jobs, id, |j| j.shots.push(v));
+            }
+            // Hung: while loading, no progress for HUNG_SECS; once settled at the title screen or in a world (where a run
+            // can wait or a capture run quietly for minutes) the game's window not responding for that long.
+            let in_world = watch.events.last().is_some_and(|e| ["titleScreen", "terrainReady", "leaveDone"].iter().any(|s| e["event"] == *s));
+            let frozen = in_world && game_window(pid).is_some_and(super::shot::is_hung);
+            if !frozen { frozen_since = None } else if frozen_since.is_none() { frozen_since = Some(Instant::now()) }
+            let hung = stopping.is_none() && if in_world {
+                frozen_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(HUNG_SECS))
+            } else {
+                stall.quiet_for() >= Duration::from_secs(HUNG_SECS)
+            };
+            if hung && kill_now.is_none() {
+                let t = (prism::timeline::now_ms() - click_ms) as f64 / 1000.0;
+                break corpse(pid, &mut game, &java, &runs, id, &dir, t, if in_world { "window not responding" } else { "no progress" }, &jobs);
             }
             if let Some(why) = kill_now {
                 super::kill_tree(pid);
@@ -1427,6 +1447,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     };
     let _ = bench(&["release", &lock]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     let (state, detail) = match result {
+        Ok(d) if d.starts_with("HUNG") => ("hung", d),
         Ok(d) if d.starts_with("killed") || d.contains("crash report") => ("failed", d),
         Ok(d) => ("done", d),
         Err(e) => ("failed", e),
@@ -1559,7 +1580,17 @@ const QUIET_SECS: u64 = 45;
 /// Still loading (no terrainReady yet) this long after the last stage counts too: a game busy in an error loop.
 const SLOW_SECS: u64 = 180;
 
+/// No progress at all for this long (no new log or output line, no new stage; in a world: the window not
+/// responding) and the run is killed as hung, its state kept for diagnosis (user, 2026-10-30: 90 s, every test).
+const HUNG_SECS: u64 = 90;
+
 impl Stall {
+    /// How long since the run last showed progress (a log or output line, or a new stage).
+    fn quiet_for(&self) -> Duration {
+        let since = |t: Option<Instant>| t.map(|t| t.elapsed()).unwrap_or_default();
+        since(self.moved).min(since(self.staged))
+    }
+
     fn check(&mut self, log: &Path, out: &Path, stages: usize, events: &[Value], stopping: bool) -> Option<&'static str> {
         let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         let sizes = (size(log), size(out));
@@ -1590,13 +1621,38 @@ impl Stall {
     }
 }
 
+/// The game's main window (the GLFW/LWJGL one when there are several).
+fn game_window(pid: u32) -> Option<isize> {
+    super::top_windows().into_iter().filter(|w| w.1 == pid && w.2)
+        .max_by_key(|w| (w.3.starts_with("GLFW") || w.3.starts_with("LWJGL"), w.0 != 0)).map(|w| w.0)
+}
+
+/// A hung run, killed and kept for diagnosis, in this order: screenshot, thread dumps and heap info (jcmd), kill by
+/// PID (the whole tree), the log copied beside them. Returns the job's result ("HUNG ...", with every path).
+#[allow(clippy::too_many_arguments)]
+fn corpse(pid: u32, game: &mut std::process::Child, java: &str, runs: &Path, id: u32, dir: &Path, t: f64, how: &str, jobs: &Shared) -> String {
+    let shot = screenshot(pid, runs, id, "hung", t);
+    update(jobs, id, |j| j.shots.push(shot.clone()));
+    let path = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let jcmd = super::devrun::jcmd_for(java);
+    let dumps: Vec<String> = ["threads", "heapinfo"].iter().map(|k| match jcmd.as_ref().map_err(|e| e.clone()).and_then(|j| snapshot(j, pid, runs, k)) {
+        Ok(v) => v["file"].as_str().unwrap_or_default().replace('\\', "/"),
+        Err(e) => format!("({k}: {e})"),
+    }).collect();
+    super::kill_tree(pid);
+    let _ = game.wait();
+    let log = runs.join(format!("{id}-hung-latest.log"));
+    let kept = std::fs::copy(dir.join("logs").join("latest.log"), &log).is_ok();
+    format!("HUNG ({how} for {HUNG_SECS} s, at {t:.0} s): killed; screenshot {}; threads {}; heap {}; log {}; stdout {}; JFR {}",
+        shot["path"].as_str().map(str::to_string).unwrap_or_else(|| format!("({})", shot["error"].as_str().unwrap_or("none"))),
+        dumps[0], dumps[1], if kept { path(&log) } else { "(none)".into() }, path(&runs.join(format!("{id}.stdout"))), path(&dir.join("jfr")))
+}
+
 /// A screenshot of the game's window into the run folder, as a job record (path, or why there is none).
 fn screenshot(pid: u32, runs: &Path, id: u32, why: &str, t: f64) -> Value {
     let t = (t * 10.0).round() / 10.0;
     let mut v = json!({ "t": t, "why": why });
-    let win = super::top_windows().into_iter().filter(|w| w.1 == pid && w.2)
-        .max_by_key(|w| (w.3.starts_with("GLFW") || w.3.starts_with("LWJGL"), w.0 != 0)).map(|w| w.0);
-    let Some(h) = win else {
+    let Some(h) = game_window(pid) else {
         v["error"] = "the game has no window".into();
         return v;
     };

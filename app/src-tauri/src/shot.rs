@@ -20,6 +20,7 @@ unsafe extern "system" {
     fn PrintWindow(h: isize, dc: isize, flags: u32) -> i32;
     fn IsIconic(h: isize) -> i32;
     fn ShowWindow(h: isize, cmd: i32) -> i32;
+    fn IsHungAppWindow(h: isize) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -30,6 +31,11 @@ unsafe extern "system" {
     fn DeleteObject(o: isize) -> i32;
     fn DeleteDC(dc: isize) -> i32;
     fn GetDIBits(dc: isize, bmp: isize, start: u32, lines: u32, bits: *mut u8, info: *mut BitmapInfo, usage: u32) -> i32;
+}
+
+/// Windows counts the window as not responding (it hasn't taken its messages for 5 s): a frozen game.
+pub fn is_hung(h: isize) -> bool {
+    unsafe { IsHungAppWindow(h) != 0 }
 }
 
 /// PrintWindow's PW_RENDERFULLCONTENT: asks DWM for what the window shows, which also works for OpenGL games.
