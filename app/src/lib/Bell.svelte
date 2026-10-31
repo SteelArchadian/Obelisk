@@ -138,16 +138,17 @@
   .bell { position: relative; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 10px; background: none; color: var(--muted); }
   .bell:hover, .bell.has { color: var(--text); }
   .dot { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; display: grid; place-items: center; }
-  .pop { position: absolute; left: calc(100% + 12px); bottom: -6px; z-index: 40; width: min(340px, calc(100vw - 90px)); max-height: min(480px, calc(100vh - 40px)); display: flex; flex-direction: column; gap: 10px;
+  .pop { position: absolute; left: calc(100% + 12px); bottom: -6px; z-index: 40; width: min(420px, calc(100vw - 90px)); max-height: min(600px, calc(100vh - 40px)); display: flex; flex-direction: column; gap: 10px;
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; box-shadow: 0 12px 34px rgb(0 0 0 / 0.5); }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
   .tabs button { flex: 1; background: none; border: 0; padding: 6px 8px 8px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
   .tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-  .list { overflow-y: auto; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
-  .note { display: flex; gap: 9px; align-items: flex-start; text-align: left; background: none; border: 0; border-left: 3px solid transparent; padding: 7px 8px; border-radius: 4px; color: var(--text-2); }
+  /* Up and down only: a note (themes frame it with a thick border) always fits the list's width. */
+  .list { overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+  .note { box-sizing: border-box; width: 100%; min-width: 0; flex: none; display: flex; gap: 9px; align-items: flex-start; text-align: left; background: none; border: 0; border-left: 3px solid transparent; padding: 7px 8px; border-radius: 4px; color: var(--text-2); }
   .note:hover { background: var(--panel); }
   .note.unread { border-left-color: var(--accent); color: var(--text); }
-  .body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; overflow-wrap: anywhere; }
   .ico { flex: none; width: 24px; height: 24px; display: grid; place-items: center; margin-top: 1px; border-radius: 4px; background: var(--panel); color: var(--muted); }
   .ico.comment { color: #6aa8ff; }
   .ico.alert { color: #e0a040; }
