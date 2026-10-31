@@ -1,6 +1,6 @@
 [package]
 name = "obelisk"
-version = "0.2.70"
+version = "0.2.71"
 description = "Obelisk - a CurseForge-style front end for Prism Launcher"
 authors = ["SteelArchadian"]
 license = "GPL-3.0-only"

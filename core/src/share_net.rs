@@ -49,7 +49,15 @@ pub fn trace_start(what: &str, version: &str) {
     t.push(format!("{} · Obelisk {version} · {what}", chrono_now()));
 }
 
+tokio::task_local! {
+    /// Set for background syncs: they don't write into the readout (it would bury the last import's or join's).
+    static QUIET: bool;
+}
+
 pub(crate) fn trace(line: impl Into<String>) {
+    if QUIET.try_with(|q| *q).unwrap_or(false) {
+        return;
+    }
     let mut t = TRACE.lock().unwrap();
     if t.len() < 2000 {
         t.push(format!("{} {}", chrono_now(), line.into()));
@@ -386,6 +394,10 @@ impl Net {
 
     /// Pull from every other member of every shared pack. Quietly skips anyone offline.
     pub async fn sync_all(&self) -> Vec<(String, usize)> {
+        QUIET.scope(true, self.sync_each()).await
+    }
+
+    async fn sync_each(&self) -> Vec<(String, usize)> {
         let mut out = Vec::new();
         for (inst, game, s) in share::all(&self.instances) {
             let mut total = 0;
