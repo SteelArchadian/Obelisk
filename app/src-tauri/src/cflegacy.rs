@@ -76,8 +76,16 @@ const SCRIPT: &str = r#"
       const subject = copy.querySelector(".subject");
       let lines;
       if (subject) {
-        const rest = [...copy.querySelectorAll("p")].filter((p) => p !== subject && !subject.contains(p)).map(flat).filter(Boolean);
-        lines = [flat(subject), rest.join("\n")];
+        // Everything else in the notification, line by line (its notes are loose text broken with <br>), less the
+        // site's stock lines.
+        const title = flat(subject);
+        const body = copy.querySelector(".project-notification") || copy;
+        (subject.closest("a") || subject).remove();
+        body.querySelectorAll("br").forEach((e) => e.replaceWith("\n"));
+        body.querySelectorAll("p, div, li").forEach((e) => e.append("\n"));
+        const rest = (body.textContent || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim())
+          .filter((l) => l && !/^notes:$/i.test(l) && !/^if you have any questions,? please contact/i.test(l) && !/^file uploaded successfully\.?$/i.test(l));
+        lines = [title, rest.join("\n")];
       } else {
         lines = (copy.innerText || copy.textContent || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim());
       }
