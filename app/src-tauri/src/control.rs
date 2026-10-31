@@ -411,6 +411,38 @@ fn mcw_jar(p: &str) -> Result<PathBuf, String> {
     Ok(c)
 }
 
+/// A garbage-collector setting: which collector, or how one is tuned (not memory size, not anything else).
+fn is_gc_flag(a: &str) -> bool {
+    let Some(rest) = a.strip_prefix("-XX:") else { return false };
+    let name = rest.trim_start_matches(['+', '-']).split('=').next().unwrap_or("");
+    let exact = ["ConcGCThreads", "ParallelGCThreads", "MaxGCPauseMillis", "GCPauseIntervalMillis", "ParallelRefProcEnabled",
+        "UseStringDeduplication", "SoftMaxHeapSize", "InitiatingHeapOccupancyPercent", "GCTimeRatio", "MaxTenuringThreshold",
+        "UseDynamicNumberOfGCThreads", "UseAdaptiveSizePolicy"];
+    (name.starts_with("Use") && name.ends_with("GC")) || name.starts_with("G1") || name.starts_with("Shenandoah")
+        || (name.starts_with('Z') && name.len() > 1) || exact.contains(&name)
+}
+
+/// "gc": this run's garbage collector and its tuning, in place of the profile's and the bench's (for GC A/B runs).
+/// Exactly one -XX:+Use...GC, then only GC settings; nothing is saved, the next run is back to the profile's.
+fn gc_flags(args: &Value) -> Result<Option<Vec<String>>, String> {
+    let Some(list) = args.get("gc").filter(|v| !v.is_null()) else { return Ok(None) };
+    let list = list.as_array().ok_or("\"gc\" must be a list of -XX GC flags, e.g. [\"-XX:+UseG1GC\", \"-XX:MaxGCPauseMillis=50\"]")?;
+    let mut out = vec![];
+    for v in list {
+        let a = v.as_str().ok_or("\"gc\" entries must be strings")?;
+        let ok = is_gc_flag(a) && a.len() <= 80 && a.chars().all(|c| c.is_ascii_alphanumeric() || ":+-=._".contains(c));
+        if !ok {
+            return Err(format!("{a}: not a GC flag (allowed: -XX:+Use...GC, G1*/Z*/Shenandoah* settings, ConcGCThreads, MaxGCPauseMillis and the like)"));
+        }
+        out.push(a.to_string());
+    }
+    let collectors = out.iter().filter(|a| a.starts_with("-XX:+Use") && a.ends_with("GC")).count();
+    if collectors != 1 {
+        return Err(format!("\"gc\" needs exactly one collector (-XX:+UseZGC, -XX:+UseG1GC, -XX:+UseShenandoahGC...), got {collectors}"));
+    }
+    Ok(Some(out))
+}
+
 fn jvm_props(args: &Value) -> Result<Vec<String>, String> {
     let Some(list) = args.get("jvm") else { return Ok(vec![]) };
     let list = list.as_array().ok_or("\"jvm\" must be a list of -Dmod.key=value strings")?;
@@ -1257,18 +1289,26 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         if !java.contains("jdk-25") { return Err("compact_headers needs java 25".into()); }
         cmd.insert(0, "-XX:+UseCompactObjectHeaders".into());
     }
+    // A GC A/B run: every GC setting from the profile and the bench defaults out, this run's in.
+    let gc = gc_flags(args)?;
+    if let Some(flags) = &gc {
+        cmd.retain(|a| !is_gc_flag(a));
+        for (i, a) in flags.iter().enumerate() { cmd.insert(i, a.clone()) }
+    }
+    let gc_used = gc.map(|f| f.join(" "));
     let lock = format!("{owner} - {purpose} (obelisk)");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
     // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks));
-    Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") }))
+    let reply_gc = gc_used.clone();
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used));
+    Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc }))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, java: String, cmd: Vec<String>,
-    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>) {
+    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>) {
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
@@ -1429,6 +1469,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             .map(|p| format!("{} {:.1}s", p.key, p.ms as f64 / 1000.0)).collect();
         let why = if times.is_empty() { why } else { format!("{why}; {}", times.join(", ")) };
         let why = if fps_run { format!("{why}; {}", fps_report(&dir, click_ms.max(0) as u64)) } else { why };
+        let why = match &gc_used { Some(g) => format!("{why}; GC flags for this run: {g}"), None => why };
         let crashes = std::fs::read_dir(dir.join("crash-reports")).into_iter().flatten().flatten()
             .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started)).count();
         Ok(if crashes > 0 { format!("{why}; {crashes} new crash report(s)") } else { why })
