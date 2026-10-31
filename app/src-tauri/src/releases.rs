@@ -14,8 +14,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+/// TEST DUMMY's display name in Prism. Its folder is found by that name, so renaming the folder doesn't lose it.
+const TEST_NAME: &str = "TEST DUMMY";
+/// The folder used when no pack shows that name.
+const TEST_FOLDER: &str = "Test Dummy";
+
 /// TEST DUMMY's folder in the instances folder.
-const TEST_PACK: &str = "Foundation (EXPERIMENTAL)";
+fn test_pack_id() -> String {
+    packs().into_iter().find(|p| p.name.eq_ignore_ascii_case(TEST_NAME)).map(|p| p.id).unwrap_or_else(|| TEST_FOLDER.to_string())
+}
 /// Clean TEST DUMMY sessions that prove a test build.
 const PROVEN_SESSIONS: usize = 3;
 /// How long after an install a crash naming the build rolls it back.
@@ -216,8 +223,9 @@ fn submit(args: &Value) -> Result<Value, String> {
 /// Queue a build for every pack its line reaches.
 fn enqueue(r: &mut Registry, b: &Build) -> Vec<Value> {
     let mut out = vec![];
+    let td = test_pack_id();
     for p in packs() {
-        if b.channel == "test" && p.id != TEST_PACK {
+        if b.channel == "test" && p.id != td {
             continue;
         }
         let Some(cur) = installed_file(&p.game, &b.mod_id) else { continue };
@@ -269,9 +277,9 @@ fn promote(args: &Value) -> Result<Value, String> {
 
 /// Three TEST DUMMY sessions since the build went in, and no crash there that names it.
 fn proven(r: &Registry, b: &Build) -> Result<String, String> {
-    let o = r.rollouts.iter().rev().find(|o| o.mod_id == b.mod_id && o.version == b.version && o.pack == TEST_PACK && o.state == "installed")
+    let o = r.rollouts.iter().rev().find(|o| o.mod_id == b.mod_id && o.version == b.version && o.pack == test_pack_id() && o.state == "installed")
         .ok_or("this build isn't installed in TEST DUMMY")?;
-    let p = pack(TEST_PACK)?;
+    let p = pack(&test_pack_id())?;
     let since = std::time::UNIX_EPOCH + Duration::from_secs(o.installed_at);
     // Each session leaves one log: latest.log while it's the newest, then a dated .log.gz.
     let sessions = std::fs::read_dir(p.game.join("logs")).into_iter().flatten().flatten().filter(|e| {
@@ -514,5 +522,5 @@ fn status() -> Value {
     }).collect();
     let queue: Vec<&Rollout> = r.rollouts.iter().filter(|o| matches!(o.state.as_str(), "queued" | "gating")).collect();
     let recent: Vec<&Rollout> = r.rollouts.iter().rev().filter(|o| !matches!(o.state.as_str(), "queued" | "gating")).take(30).collect();
-    json!({ "mods": lines, "packs": per_pack, "queue": queue, "recent": recent, "testPack": TEST_PACK })
+    json!({ "mods": lines, "packs": per_pack, "queue": queue, "recent": recent, "testPack": test_pack_id() })
 }

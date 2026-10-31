@@ -39,6 +39,24 @@
     else if (n.url) openLink(n.url);
   }
 
+  /** Which little icon a notification gets: comments and replies a speech bubble, moderation (status) an alert. */
+  type Icon = "comment" | "alert" | "message" | "invite" | "file" | "other";
+  function cfIcon(n: CfNotification): Icon {
+    if (n.kind === "comment" || n.kind === "reply") return "comment";
+    if (n.kind === "status" || (n.kind === "file" && n.label)) return "alert";
+    if (n.kind === "message") return "message";
+    if (n.kind === "invite") return "invite";
+    return n.kind === "file" ? "file" : "other";
+  }
+  function mrIcon(type?: string): Icon {
+    if (type === "status_change" || type === "moderator_message") return "alert";
+    if (type === "team_invite" || type === "organization_invite") return "invite";
+    if (type === "project_update") return "file";
+    return "other";
+  }
+  /** The alert takes the moderation result's colour (approved green, changes amber, rejected red). */
+  const tone = (label?: string) => (label ?? "").toLowerCase().replace(/\s+/g, "-");
+
   function settings() {
     open = false;
     closeOverlays();
@@ -46,6 +64,19 @@
     app.settingsSection = "modrinth";
   }
 </script>
+
+{#snippet icon(kind: Icon, toneClass: string)}
+  <span class="ico {kind} {toneClass}" aria-hidden="true">
+    <svg viewBox="0 0 16 16" width="16" height="16" shape-rendering="crispEdges">
+      {#if kind === "comment"}<path d="M2 2h12v9H7l-3 3v-3H2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter" /><path d="M5 5h6v1.5H5zM5 7.5h4V9H5z" fill="currentColor" />
+      {:else if kind === "alert"}<path d="M8 1.5L15 14H1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter" /><path d="M7.25 5.5h1.5v4.5h-1.5zM7.25 11h1.5v1.5h-1.5z" fill="currentColor" />
+      {:else if kind === "message"}<path d="M1.5 3.5h13v9h-13z" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M2 4l6 5 6-5" fill="none" stroke="currentColor" stroke-width="1.5" />
+      {:else if kind === "invite"}<path d="M6 2.5a2.5 2.5 0 1 1 0 5a2.5 2.5 0 0 1 0-5zM1.5 14v-1.5c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5V14" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M12.25 4h1.5v5h-1.5zM10.5 5.75h5v1.5h-5z" fill="currentColor" />
+      {:else if kind === "file"}<path d="M3 1.5h7l3 3v10H3z" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M7.25 6h1.5v4h1.75L8 12.5L5.5 10h1.75z" fill="currentColor" />
+      {:else}<path d="M4 11V7.5a4 4 0 0 1 8 0V11l1 1.5H3zM6.5 14h3" fill="none" stroke="currentColor" stroke-width="1.5" />{/if}
+    </svg>
+  </span>
+{/snippet}
 
 <div class="bell-wrap">
   <button class="bell" class:has={count > 0} title={count ? `${count} unread notification${count === 1 ? "" : "s"}` : "Notifications"}
@@ -68,9 +99,12 @@
           <div class="list">
             {#each mr.notes.slice(0, 50) as n (n.id)}
               <button class="note" class:unread={!n.read} onclick={() => { markRead([n.id]); go(n.link); }}>
-                <strong>{n.title}</strong>
-                {#if n.text}<span>{n.text}</span>{/if}
-                <small>{ago(n.created)}</small>
+                {@render icon(mrIcon(n.type), "")}
+                <div class="body">
+                  <strong>{n.title}</strong>
+                  {#if n.text}<span>{n.text}</span>{/if}
+                  <small>{ago(n.created)}</small>
+                </div>
               </button>
             {:else}<p class="muted">No notifications.</p>{/each}
           </div>
@@ -84,9 +118,12 @@
           <div class="list">
             {#each cf.notes.slice(0, 50) as n (n.id)}
               <button class="note" class:unread={!n.read} onclick={() => cfGo(n)}>
-                <strong>{n.title}</strong>
-                {#if n.text}<span>{n.text}</span>{/if}
-                <small>{#if n.label}<em class="label {n.label.toLowerCase().replace(/\s+/g, '-')}">{n.label}</em> {/if}{ago(n.created)}</small>
+                {@render icon(cfIcon(n), tone(n.label))}
+                <div class="body">
+                  <strong>{n.title}</strong>
+                  {#if n.text}<span>{n.text}</span>{/if}
+                  <small>{#if n.label}<em class="label {tone(n.label)}">{n.label}</em> {/if}{ago(n.created)}</small>
+                </div>
               </button>
             {:else}<p class="muted">No notifications yet. Approvals, status changes, comments on your projects and replies to you show up here.</p>{/each}
           </div>
@@ -107,11 +144,19 @@
   .tabs button { flex: 1; background: none; border: 0; padding: 6px 8px 8px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
   .tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
   .list { overflow-y: auto; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
-  .note { display: flex; flex-direction: column; gap: 2px; text-align: left; background: none; border: 0; border-left: 3px solid transparent; padding: 7px 8px; border-radius: 4px; color: var(--text-2); }
+  .note { display: flex; gap: 9px; align-items: flex-start; text-align: left; background: none; border: 0; border-left: 3px solid transparent; padding: 7px 8px; border-radius: 4px; color: var(--text-2); }
   .note:hover { background: var(--panel); }
   .note.unread { border-left-color: var(--accent); color: var(--text); }
-  .note span { font-size: 13px; color: var(--muted); white-space: pre-line; }
-  .note small { font-size: 11px; color: var(--muted); }
+  .body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ico { flex: none; width: 24px; height: 24px; display: grid; place-items: center; margin-top: 1px; border-radius: 4px; background: var(--panel); color: var(--muted); }
+  .ico.comment { color: #6aa8ff; }
+  .ico.alert { color: #e0a040; }
+  .ico.alert.approved, .ico.alert.released { color: #5cc87a; }
+  .ico.alert.rejected, .ico.alert.deleted, .ico.alert.malware-detected { color: #e05c5c; }
+  .ico.message { color: #b48cff; }
+  .ico.invite, .ico.file { color: var(--text-2); }
+  .body span { font-size: 13px; color: var(--muted); white-space: pre-line; }
+  .body small { font-size: 11px; color: var(--muted); }
   .label { font-style: normal; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: var(--panel); color: var(--text-2); }
   .label.approved, .label.released { color: #5cc87a; }
   .label.changes-required, .label.under-review, .label.under-manual-review { color: #e0a040; }

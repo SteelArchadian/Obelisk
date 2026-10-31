@@ -881,7 +881,7 @@
                 {/if}
               </span>{/if}
               {#if vis("enabled")}<span class="center">
-                {#if item.trashId}<button class="del" class:armed={armed === item.trashId} title="Delete for good (it skips the Recycle Bin)"
+                {#if item.trashId}<button class="upd del" class:armed={armed === item.trashId} title="Delete for good (it skips the Recycle Bin)"
                   onclick={() => (armed === item.trashId ? deleteNow(item.trashId!) : (armed = item.trashId!))}
                   onmouseleave={() => armed === item.trashId && (armed = null)}>{armed === item.trashId ? "Sure?" : "Delete"}</button>{/if}
                 {#if !item.trashId}<button class="switch" class:on={item.enabled} role="switch" aria-checked={item.enabled}
@@ -1051,8 +1051,10 @@
   .fhead { display: flex; justify-content: space-between; align-items: center; }
   .fsrow { display: flex; align-items: center; gap: 10px; min-height: 26px; }
   .fsrow .dir { margin-left: auto; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
-  .del { background: var(--danger); color: #fff; border: 0; border-radius: 4px; padding: 5px 8px; font-weight: 600; font-size: 12px; }
-  .del.armed { filter: brightness(1.25); }
+  /* Delete for good: the same button as Restore beside it, in red (themes turn it into their red plate). */
+  .upd.del { background: var(--danger); }
+  .upd.del:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 85%, #fff); }
+  .upd.del.armed { outline: 2px solid var(--danger); outline-offset: 2px; }
   .tbody.boxing { user-select: none; }
   .selbox { position: fixed; z-index: 30; pointer-events: none; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
   .fgroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
