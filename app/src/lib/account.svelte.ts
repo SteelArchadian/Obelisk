@@ -42,9 +42,12 @@ export async function loadCf() {
     listen("cf-account", () => { cf.signingIn = false; loadCf(); });
     listen("cf-notes", () => loadCfNotes());
     listen("cf-signin-ended", () => { cf.signingIn = false; });
+    // Back in Obelisk during a sign-in: ask again, so a sign-in that finished unnoticed still shows.
+    window.addEventListener("focus", () => { if (cf.signingIn) loadCf(); });
   }
   try {
     cf.account = await invoke<CfAccount | null>("cf_account");
+    if (cf.account) cf.signingIn = false;
     if (cf.account) {
       try { cf.favorites = new Set(await invoke<number[]>("cf_favorites")); } catch { /* favorites are extra */ }
     }

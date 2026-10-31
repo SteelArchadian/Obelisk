@@ -45,15 +45,63 @@ pub async fn cf_account(app: tauri::AppHandle) -> Result<Value, String> {
     }).await
 }
 
+/// A watcher is looking at the sign-in window (one at a time).
+static WATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How long the sign-in window may stay open (making a new account, with its e-mail check, takes a while).
+const SIGNIN_MAX_SECS: u64 = 2 * 60 * 60;
+
+/// The account the sign-in window's session belongs to, if it's signed in yet. A check that hangs (WebView2 cookie
+/// calls can) counts as "not yet" instead of stopping the watch.
+async fn signed_in_now(app: &tauri::AppHandle) -> Option<Value> {
+    let a = app.clone();
+    let check = blocking(move || { let c = cookie(&a); if c.is_empty() { Ok(None) } else { cfsite::profile(&c) } });
+    tokio::time::timeout(std::time::Duration::from_secs(20), check).await.ok()?.ok().flatten()
+}
+
+/// Watch the sign-in window until it's signed in (window closed, "cf-account"), closed ("cf-signin-ended") or
+/// SIGNIN_MAX_SECS pass: whatever ends it, the page hears it, so its button never stays stuck.
+fn watch_signin(app: tauri::AppHandle) {
+    if WATCHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
+        let ended = loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if app.get_webview_window(WINDOW).is_none() {
+                break None; // closed by the user
+            }
+            if let Some(me) = signed_in_now(&app).await {
+                break Some(me);
+            }
+            if started.elapsed().as_secs() > SIGNIN_MAX_SECS {
+                break None;
+            }
+        };
+        if let Some(w) = app.get_webview_window(WINDOW) { let _ = w.close(); }
+        WATCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        match ended {
+            Some(me) => { let _ = app.emit("cf-account", me); }
+            None => { let _ = app.emit("cf-signin-ended", ()); }
+        }
+    });
+}
+
 /// Open curseforge.com's sign-in page in a small window; it closes itself once the account is signed in
 /// ("cf-account" event).
 #[tauri::command]
 pub async fn cf_signin(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(WINDOW) {
-        // Already open (maybe behind something): bring it back.
+        // Already open: signed in meanwhile (and nobody noticed)? Then that's the end of it; else bring it back.
+        if let Some(me) = signed_in_now(&app).await {
+            let _ = w.close();
+            let _ = app.emit("cf-account", me);
+            return Ok(());
+        }
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        watch_signin(app);
         return Ok(());
     }
     let url = format!("{0}/api/v1/auth/login?returnUrl={0}/&registrationCompletedUrl={0}/signup/confirmation", cfsite::SITE);
@@ -64,26 +112,7 @@ pub async fn cf_signin(app: tauri::AppHandle) -> Result<(), String> {
         b = b.parent(&main).map_err(|e| e.to_string())?;
     }
     b.build().map_err(|e| e.to_string())?;
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        // Whatever ends the sign-in, the page hears it ("cf-signin-ended"), so its button never stays stuck.
-        for _ in 0..600 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            if app2.get_webview_window(WINDOW).is_none() {
-                let _ = app2.emit("cf-signin-ended", ());
-                return; // closed by the user
-            }
-            let a = app2.clone();
-            let me = blocking(move || { let c = cookie(&a); if c.is_empty() { Ok(None) } else { cfsite::profile(&c) } }).await;
-            if let Ok(Some(me)) = me {
-                if let Some(w) = app2.get_webview_window(WINDOW) { let _ = w.close(); }
-                let _ = app2.emit("cf-account", me);
-                return;
-            }
-        }
-        if let Some(w) = app2.get_webview_window(WINDOW) { let _ = w.close(); }
-        let _ = app2.emit("cf-signin-ended", ());
-    });
+    watch_signin(app);
     Ok(())
 }
 
