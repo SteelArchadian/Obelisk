@@ -214,26 +214,15 @@ pub async fn ai_connect(assistant: String) -> Result<String, String> {
     let exe = if helper.is_file() { helper } else { me }.to_string_lossy().into_owned();
     let home = std::path::PathBuf::from(std::env::var("USERPROFILE").map_err(|e| e.to_string())?);
     match assistant.as_str() {
-        // Claude Code (also the desktop app's Code tab): user-scope servers live in ~/.claude.json.
+        // Claude Code (also the desktop app's Code tab): user-scope servers live in ~/.claude.json. The desktop app's
+        // own chats read claude_desktop_config.json instead: both get the entry.
         "claude" => {
-            let path = home.join(".claude.json");
-            let mut cfg: Value = match std::fs::read(&path) {
-                Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("~/.claude.json isn't valid JSON ({e}); left it alone"))?,
-                Err(_) => json!({}),
-            };
-            let entry = json!({ "type": "stdio", "command": exe, "args": ["--mcp"], "env": {} });
-            if cfg.pointer("/mcpServers/obelisk") == Some(&entry) {
-                return Ok("Already connected.".into());
+            let code = add_server(&home.join(".claude.json"), json!({ "type": "stdio", "command": exe, "args": ["--mcp"], "env": {} }))?;
+            let mut chat = false;
+            for path in claude_desktop_configs() {
+                chat |= add_server(&path, json!({ "command": exe, "args": ["--mcp"] }))?;
             }
-            if path.exists() {
-                std::fs::copy(&path, home.join(".claude.json.obelisk-bak")).map_err(|e| e.to_string())?;
-            }
-            let obj = cfg.as_object_mut().ok_or("~/.claude.json isn't a JSON object; left it alone")?;
-            let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
-            servers.as_object_mut().ok_or("mcpServers in ~/.claude.json isn't an object; left it alone")?
-                .insert("obelisk".into(), entry);
-            write_atomic(&path, &serde_json::to_vec_pretty(&cfg).map_err(|e| e.to_string())?)?;
-            Ok("Connected to Claude.".into())
+            Ok(if code || chat { "Connected to Claude. Restart Claude (quit it from the tray too) and start a new chat." } else { "Already connected." }.into())
         }
         // Codex: ~/.codex/config.toml. A literal TOML string keeps the backslashes in the path.
         "gpt" => {
@@ -254,6 +243,50 @@ pub async fn ai_connect(assistant: String) -> Result<String, String> {
         }
         _ => Err("unknown assistant".into()),
     }
+}
+
+/// Put the "obelisk" entry into an assistant's JSON config (a backup of the file first). False when it was already there.
+fn add_server(path: &std::path::Path, entry: Value) -> Result<bool, String> {
+    let shown = path.display();
+    let mut cfg: Value = match std::fs::read(path) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{shown} isn't valid JSON ({e}); left it alone"))?,
+        Err(_) => json!({}),
+    };
+    if cfg.pointer("/mcpServers/obelisk") == Some(&entry) {
+        return Ok(false);
+    }
+    if path.exists() {
+        let mut bak = path.as_os_str().to_owned();
+        bak.push(".obelisk-bak");
+        std::fs::copy(path, bak).map_err(|e| e.to_string())?;
+    } else if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let obj = cfg.as_object_mut().ok_or_else(|| format!("{shown} isn't a JSON object; left it alone"))?;
+    let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
+    servers.as_object_mut().ok_or_else(|| format!("mcpServers in {shown} isn't an object; left it alone"))?
+        .insert("obelisk".into(), entry);
+    write_atomic(path, &serde_json::to_vec_pretty(&cfg).map_err(|e| e.to_string())?)?;
+    Ok(true)
+}
+
+/// The Claude desktop app's config for its chats: %APPDATA%\Claude, and the Store version's own copy of that folder
+/// (it reads that one when it exists).
+pub(crate) fn claude_desktop_configs() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(roaming) = std::env::var("APPDATA") {
+        out.push(std::path::PathBuf::from(roaming).join("Claude").join("claude_desktop_config.json"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let packages = std::path::PathBuf::from(local).join("Packages");
+        for e in std::fs::read_dir(&packages).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().starts_with("Claude_") {
+                let dir = e.path().join("LocalCache").join("Roaming").join("Claude");
+                if dir.is_dir() { out.push(dir.join("claude_desktop_config.json")) }
+            }
+        }
+    }
+    out
 }
 
 /// Write beside the file, then swap it in, so a crash never leaves half a config.

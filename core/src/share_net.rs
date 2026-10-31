@@ -88,6 +88,9 @@ enum Req {
     Instance,
     /// Everyone's wish lists (older Obelisk answers "bad request", which is skipped).
     Wishes,
+    /// A joiner's pack downloaded and set up: only now are they listed as a member (older Obelisk answers
+    /// "bad request"; it lists people when they first connect).
+    Joined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -241,7 +244,7 @@ impl Net {
     pub async fn start(key: [u8; 32], instances: PathBuf, name: String) -> Result<Net, String> {
         let endpoint = Endpoint::builder(presets::N0).secret_key(SecretKey::from_bytes(&key)).bind().await.map_err(|e| e.to_string())?;
         let name = Arc::new(Mutex::new(name));
-        let handler = Handler { instances: instances.clone(), name: name.clone(), me: endpoint.id() };
+        let handler = Handler { instances: instances.clone(), name: name.clone(), me: endpoint.id(), joining: Default::default() };
         let offers: Offers = Default::default();
         let router = Router::builder(endpoint.clone()).accept(ALPN, handler).accept(ALPN_PACK, PackHandler { offers: offers.clone() }).spawn();
         Ok(Net { endpoint, _router: router, instances, name, offers })
@@ -784,12 +787,25 @@ impl Net {
             match self.pull(&game, addr.clone()).await {
                 Err(e) if e.contains(RESENT) => {
                     trace("the host sent changed files again; downloading once more");
-                    self.pull(&game, addr).await?;
+                    self.pull(&game, addr.clone()).await?;
                 }
                 r => { r?; }
             }
             let a = share::apply(&game, &[])?;
             trace(format!("applied {} change(s); {} file(s) blocked", a.applied, a.blocked.len()));
+            // Only now does the host list us as a member (an older host already did when we connected).
+            if let Some(mine) = share::get(&game) {
+                match self.connect(&mine, addr.clone()).await {
+                    Ok((sess, _, _)) => {
+                        match sess.call(&Req::Joined).await {
+                            Ok(_) => trace("told the host the join worked"),
+                            Err(e) => trace(format!("the host didn't take the joined note ({e}); it lists us once we sync")),
+                        }
+                        sess.conn.close(0u32.into(), b"done");
+                    }
+                    Err(e) => trace(format!("couldn't reach the host to say the join worked ({e}); it lists us once we sync")),
+                }
+            }
             Ok::<_, String>(a)
         }.await;
         if let Err(e) = result {
@@ -922,16 +938,30 @@ struct Handler {
     instances: PathBuf,
     name: Arc<Mutex<String>>,
     me: EndpointId,
+    /// People who connected without being members yet (joining), and since when.
+    joining: Arc<Mutex<HashMap<String, std::time::Instant>>>,
 }
+
+/// Someone who keeps syncing this long after they started joining has the pack, even if their Obelisk is too old to
+/// say "joined": they're listed then. A join that failed removed its profile, so it never syncs again.
+const JOIN_PROOF_SECS: u64 = 30 * 60;
 
 impl ProtocolHandler for Handler {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
         let peer = conn.remote_id();
         let mut authed: Option<PathBuf> = None;
+        let (mut their_name, mut joining) = (String::new(), false);
         while let Ok((mut send, mut recv)) = conn.accept_bi().await {
             let Ok(bytes) = recv.read_to_end(64 * 1024).await else { break };
             let (head, body) = match serde_json::from_slice::<Req>(&bytes) {
-                Ok(req) => self.answer(req, peer, &mut authed),
+                Ok(req) => {
+                    match &req {
+                        Req::Hello { name, .. } => their_name = name.clone(),
+                        Req::Instance => joining = true, // the start of a join
+                        _ => {}
+                    }
+                    self.answer(req, peer, &mut authed, &their_name)
+                }
                 Err(_) => (Resp { error: Some("bad request".into()), ..Default::default() }, Vec::new()),
             };
             let h = serde_json::to_vec(&head).unwrap_or_default();
@@ -945,13 +975,35 @@ impl ProtocolHandler for Handler {
                 break; // failed Hello: nothing more for them
             }
         }
+        if let Some(game) = &authed {
+            self.not_yet_member(game, peer, &their_name, joining);
+        }
         conn.closed().await;
         Ok(())
     }
 }
 
 impl Handler {
-    fn answer(&self, req: Req, peer: EndpointId, authed: &mut Option<PathBuf>) -> (Resp, Vec<u8>) {
+    /// After a connection from someone who isn't listed yet: a join under way (or one that may have failed) keeps them
+    /// unlisted; an older Obelisk that keeps syncing long after joining gets listed (see JOIN_PROOF_SECS).
+    fn not_yet_member(&self, game: &Path, peer: EndpointId, name: &str, joining: bool) {
+        let id = peer.to_string();
+        if share::get(game).is_none_or(|s| s.members.iter().any(|m| m.id == id)) {
+            return;
+        }
+        let mut j = self.joining.lock().unwrap();
+        if joining {
+            j.insert(id, std::time::Instant::now());
+            return;
+        }
+        let since = *j.entry(id.clone()).or_insert_with(std::time::Instant::now);
+        if since.elapsed().as_secs() >= JOIN_PROOF_SECS {
+            j.remove(&id);
+            let _ = share::merge_members(game, &[Member { id, name: name.to_string(), last_seen_ms: now_ms() }]);
+        }
+    }
+
+    fn answer(&self, req: Req, peer: EndpointId, authed: &mut Option<PathBuf>, their_name: &str) -> (Resp, Vec<u8>) {
         let ok = |v: serde_json::Value| Resp { value: Some(v), ..Default::default() };
         let err = |e: &str| Resp { error: Some(e.into()), ..Default::default() };
         if let Req::Hello { pack, name, proof } = &req {
@@ -976,7 +1028,10 @@ impl Handler {
             if stale && !s.members.iter().any(|m| m.id == peer_id) {
                 return (err("This invite is no longer valid. Ask for a new one."), vec![]);
             }
-            let _ = share::merge_members(&game, &[Member { id: peer_id.clone(), name: name.clone(), last_seen_ms: now_ms() }]);
+            // Members are seen again; someone new is listed only once their join worked (Req::Joined).
+            if s.members.iter().any(|m| m.id == peer_id) {
+                let _ = share::merge_members(&game, &[Member { id: peer_id.clone(), name: name.clone(), last_seen_ms: now_ms() }]);
+            }
             *authed = Some(game);
             let reply = HelloReply { proof: share::proof(&secret, pack, &me, &peer_id), rekey: stale.then(|| s.secret.clone()), ..mine };
             return (ok(serde_json::to_value(reply).unwrap_or_default()), vec![]);
@@ -989,6 +1044,13 @@ impl Handler {
                 (ok(serde_json::to_value(LogReply { ids: share::log_ids(game), members: s.members, owner, removed: s.removed }).unwrap_or_default()), vec![])
             }
             Req::Wishes => (ok(serde_json::to_value(share::wishes(game)).unwrap_or_default()), vec![]),
+            Req::Joined => {
+                self.joining.lock().unwrap().remove(&peer.to_string());
+                match share::merge_members(game, &[Member { id: peer.to_string(), name: their_name.to_string(), last_seen_ms: now_ms() }]) {
+                    Ok(_) => (ok(serde_json::Value::Bool(true)), vec![]),
+                    Err(e) => (err(&e), vec![]),
+                }
+            }
             Req::Changeset { id } => match share::read_changeset(game, &id) {
                 Some(cs) => (ok(serde_json::to_value(cs).unwrap_or_default()), vec![]),
                 None => (err("no such change"), vec![]),
@@ -1180,6 +1242,9 @@ name=Pack
         let gm = inst("m").join(m.join(&code).await.unwrap()).join("minecraft");
         let gx = inst("x").join(x.join(&code).await.unwrap()).join("minecraft");
         assert_eq!(share::get(&gm).unwrap().owner, o.id(), "the owner comes along when joining");
+        let listed = share::get(&game).unwrap().members;
+        assert!(listed.iter().any(|mm| mm.id == m.id() && mm.name == "Mia") && listed.iter().any(|mm| mm.id == x.id() && mm.name == "Xan"),
+            "the host lists people once their join worked");
 
         x.set_wishes(&gx, vec![serde_json::json!({ "hit": { "project_id": "AANobbMI" } })]).unwrap();
         o.sync_all().await;

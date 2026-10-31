@@ -71,11 +71,12 @@ pub fn uninstall(keep_data: bool) -> Result<(), String> {
 
 /// Take out only the "obelisk" MCP server entries Settings → Plugins → Connect added; the rest is the user's.
 fn forget_assistants(home: &Path) {
-    let claude = home.join(".claude.json");
-    if let Some(mut cfg) = std::fs::read(&claude).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
-        if cfg.pointer_mut("/mcpServers").and_then(|s| s.as_object_mut()).and_then(|s| s.remove("obelisk")).is_some() {
-            if let Ok(text) = serde_json::to_vec_pretty(&cfg) {
-                let _ = std::fs::write(&claude, text);
+    for claude in std::iter::once(home.join(".claude.json")).chain(crate::mcp::claude_desktop_configs()) {
+        if let Some(mut cfg) = std::fs::read(&claude).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+            if cfg.pointer_mut("/mcpServers").and_then(|s| s.as_object_mut()).and_then(|s| s.remove("obelisk")).is_some() {
+                if let Ok(text) = serde_json::to_vec_pretty(&cfg) {
+                    let _ = std::fs::write(&claude, text);
+                }
             }
         }
     }
