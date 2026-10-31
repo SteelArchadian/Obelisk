@@ -156,7 +156,7 @@
     {/if}
 
     <section class="opts">
-      <label class="row"><input type="checkbox" bind:checked={settings.backups.auto} onchange={saveSettings} /> Automatic backups at noon and midnight (only when the pack changed)</label>
+      <label class="check"><input type="checkbox" bind:checked={settings.backups.auto} onchange={saveSettings} /><span>Automatic backups at noon and midnight (only when the pack changed)</span></label>
       <label class="row">Keep the newest <input class="num" type="number" min="1" max="200" bind:value={settings.backups.keepAuto} onchange={saveSettings} /> automatic backups
         and <input class="num" type="number" min="1" max="500" bind:value={settings.backups.keepManual} onchange={saveSettings} /> checkpoints</label>
     </section>
@@ -166,6 +166,9 @@
 <style>
   .backups { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* A checkbox with its text beside it: long text wraps under itself, never under the box. */
+  .check { display: flex; align-items: flex-start; gap: 10px; }
+  .check input { flex: none; margin-top: 2px; }
   .spacer { flex: 1; }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 12.5px; }

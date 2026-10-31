@@ -193,8 +193,8 @@
             </div>
           {/each}
         </div>
-        <label class="row small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /> Apply friends' changes automatically (still backed up first)</label>
-        <label class="row small"><input type="checkbox" checked={st.share.autoSend ?? false} onchange={(e) => setAutoSend(e.currentTarget.checked)} /> Send my changes automatically (once they've settled, never while the game runs; each friend's Obelisk still applies them only if they ticked the box above)</label>
+        <label class="check small"><input type="checkbox" checked={st.share.autoApply} onchange={(e) => setAuto(e.currentTarget.checked)} /><span>Apply friends' changes automatically (still backed up first)</span></label>
+        <label class="check small"><input type="checkbox" checked={st.share.autoSend ?? false} onchange={(e) => setAutoSend(e.currentTarget.checked)} /><span>Send my changes automatically (once they've settled, never while the game runs; each friend's Obelisk still applies them only if they ticked the box above)</span></label>
       </section>
 
       {#if st.held?.length}
@@ -258,6 +258,9 @@
   .small { font-size: 12.5px; }
   section { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* A checkbox with its text beside it: long text wraps under itself, never under the box. */
+  .check { display: flex; align-items: flex-start; gap: 10px; }
+  .check input { flex: none; margin-top: 2px; }
   .spacer { flex: 1; }
   .code { width: 100%; height: 64px; resize: none; font: 11.5px ui-monospace, Consolas, monospace; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; word-break: break-all; }
   .short { font: 700 22px Consolas, ui-monospace, monospace; letter-spacing: 3px; background: none; border: 0; padding: 0; color: inherit; cursor: copy; }
