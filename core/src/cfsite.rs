@@ -229,9 +229,14 @@ fn note(n: &Value) -> Value {
 pub fn legacy_item(i: &Value, read: &[String]) -> Option<Value> {
     let lines: Vec<&str> = i["lines"].as_array()?.iter().filter_map(Value::as_str).collect();
     let title = lines.first()?.to_string();
-    let text = lines[1..].join(" ");
+    let text = lines[1..].iter().filter(|l| !l.is_empty()).copied().collect::<Vec<_>>().join("\n");
     let epoch = i["epoch"].as_u64().unwrap_or(0);
-    let id = format!("legacy-{epoch}-{:x}", title.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)));
+    // The page's own id is the new site's notification id, so the same event is known on both.
+    let site_id = i["siteId"].as_u64();
+    let id = match site_id {
+        Some(s) => format!("legacy-site-{s}"),
+        None => format!("legacy-{epoch}-{:x}", title.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32))),
+    };
     let links: Vec<&str> = i["links"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     // The project it's about: a /projects/<id> link, or a /<game>/<class>/<slug> one (not a member's page).
     let project_id = links.iter().find_map(|l| l.split("/projects/").nth(1)?.split(['/', '?', '#']).next()?.parse::<u64>().ok());
@@ -251,6 +256,7 @@ pub fn legacy_item(i: &Value, read: &[String]) -> Option<Value> {
         "id": id, "kind": kind, "title": title, "text": text, "label": label, "projectId": project_id, "slug": slug, "tab": tab,
         "url": links.first().map(|l| l.to_string()).unwrap_or_else(|| "https://legacy.curseforge.com/my-notifications".to_string()),
         "read": !i["unread"].as_bool().unwrap_or(false) || read.contains(&id), "created": epoch * 1000, "legacy": true,
+        "siteId": site_id,
     }))
 }
 

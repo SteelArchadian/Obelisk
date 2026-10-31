@@ -204,7 +204,9 @@ pub async fn cf_notifications(app: tauri::AppHandle) -> Result<Value, String> {
     let fresh: Vec<Value> = legacy.into_iter().filter(|l| {
         let text = format!("{} {}", l["title"].as_str().unwrap_or_default(), l["text"].as_str().unwrap_or_default()).to_lowercase();
         let at = l["created"].as_u64().unwrap_or(0);
+        let sid = l["siteId"].as_u64();
         !list.iter().any(|n| {
+            if sid.is_some() && n["siteId"].as_u64() == sid { return true; }
             let key = n["key"].as_str().unwrap_or_default().to_lowercase();
             !key.is_empty() && text.contains(&key) && n["created"].as_u64().is_some_and(|t| t.abs_diff(at) < 300_000)
         })

@@ -50,20 +50,41 @@ const SCRIPT: &str = r#"
     // The page draws its list with a script after it loads: wait for rows (or give up on an empty list after ~30 s).
     const view = document.querySelector(".j-notification-view") || document.querySelector("main, #content, body");
     if (!view.querySelector("*") && tries < 100) { setTimeout(read, 300); return; }
-    // The rows: the children of whichever element in the list has the most of them.
-    let list = view;
-    for (const el of view.querySelectorAll("*")) if (el.children.length > list.children.length) list = el;
-    const rows = list.children.length > 1 ? [...list.children] : [...view.children];
+    // The rows: the page's notification items (each once: a row can be drawn twice), else the children of whichever
+    // element in the list has the most of them.
+    let rows = [];
+    const seen = new Set();
+    for (const r of view.querySelectorAll("[data-target='notification-item']")) {
+      const sid = r.getAttribute("data-id") || "";
+      if (sid && seen.has(sid)) continue;
+      seen.add(sid);
+      rows.push(r);
+    }
+    if (!rows.length) {
+      let list = view;
+      for (const el of view.querySelectorAll("*")) if (el.children.length > list.children.length) list = el;
+      rows = list.children.length > 1 ? [...list.children] : [...view.children];
+    }
     const items = [];
     for (const row of rows) {
       const { at, el } = when(row);
       const copy = row.cloneNode(true);
       copy.querySelectorAll("script, style, button, svg, time, [data-epoch]").forEach((e) => e.remove());
       if (el && el.getAttribute("title")) copy.querySelectorAll("[title]").forEach((e) => { if (e.getAttribute("title") === el.getAttribute("title")) e.remove(); });
-      const lines = (copy.innerText || copy.textContent || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim())
-        .filter((l) => l && !/^(\d+|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.test(l));
-      if (!lines.length) continue;
+      // A row's subject is its title; its other paragraphs (moderation's notes) one text, not a line each.
+      const flat = (el) => (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+      const subject = copy.querySelector(".subject");
+      let lines;
+      if (subject) {
+        const rest = [...copy.querySelectorAll("p")].filter((p) => p !== subject && !subject.contains(p)).map(flat).filter(Boolean);
+        lines = [flat(subject), rest.join("\n")];
+      } else {
+        lines = (copy.innerText || copy.textContent || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim());
+      }
+      lines = lines.filter((l, i) => (l || i > 0) && !/^(\d+|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.test(l));
+      if (!lines[0]) continue;
       items.push({
+        siteId: Number(row.getAttribute("data-id")) || null,
         epoch: at,
         lines,
         unread: /(unread|new|is-new|not-read|is-unread)/i.test(row.className + " " + [...row.querySelectorAll("[class]")].map((e) => e.className).join(" ")),
