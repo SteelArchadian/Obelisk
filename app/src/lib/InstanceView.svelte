@@ -451,6 +451,25 @@
    * Re-read the content lists only (keeps search and selection). Files change behind Obelisk's back,
    * e.g. a newer jar dropped in by hand, so this runs when the window comes back into focus too.
    */
+  /** Ctrl+R: the rest of what load() reads, without clearing the search or the selection. */
+  async function refreshRest(id: string) {
+    invoke<string[]>("get_pins", { instanceId: id }).then((p) => { if (current.id === id) pins = new Set(p); }).catch(() => {});
+    try {
+      const [w, l, t] = await Promise.all([
+        invoke<World[]>("list_worlds", { instanceId: id }),
+        invoke<string[]>("list_logs", { instanceId: id }),
+        invoke<TrashEntry[]>("list_trash", { instanceId: id }),
+      ]);
+      if (current.id !== id) return;
+      [worlds, logs, trash] = [w, l, t];
+      const maps = await Promise.all(KINDS.map(({ kind }) =>
+        invoke<Record<string, string>>("content_icons", { instanceId: id, kind })));
+      const next: Record<string, string> = {};
+      for (const m of maps) for (const [f, p] of Object.entries(m)) next[f] = convertFileSrc(p);
+      if (current.id === id) icons = next;
+    } catch { /* keep what is shown */ }
+  }
+
   async function refreshContent(id: string) {
     try {
       const results = await Promise.all(KINDS.map(({ kind }) => invoke<Item[]>("list_content", { instanceId: id, kind })));
@@ -464,8 +483,8 @@
   $effect(() => {
     const id = current.id;
     const onFocus = () => refreshContent(id);
-    // Ctrl+R: everything on this page is read again (worlds, blocked files, the lists).
-    const onRefresh = () => { refreshContent(id); loadHeld(); };
+    // Ctrl+R: everything on this page is read again (the lists, worlds, Trash, logs, pins, icons, wish lists, blocked files).
+    const onRefresh = () => { refreshContent(id); loadHeld(); refreshRest(id); loadCollab(id); };
     window.addEventListener("focus", onFocus);
     window.addEventListener("obelisk-refresh", onRefresh);
     // Files added or removed while the window stays open (by hand, or by another program) show up by themselves.

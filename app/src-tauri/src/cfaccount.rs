@@ -187,7 +187,7 @@ pub async fn cf_favorite(app: tauri::AppHandle, project_id: u64, on: bool) -> Re
 /// changes with moderation's notes, comments; see cflegacy), each shown once. When the site can't be asked, the
 /// replies Obelisk found in watched threads. The legacy page is read again in the background when its copy is old.
 #[tauri::command]
-pub async fn cf_notifications(app: tauri::AppHandle) -> Result<Value, String> {
+pub async fn cf_notifications(app: tauri::AppHandle, fresh: Option<bool>) -> Result<Value, String> {
     let a = app.clone();
     let site = blocking(move || signed_in(&a).and_then(|(c, _)| cfsite::notifications(&c, 50))).await;
     let Ok(mut list) = site else {
@@ -196,7 +196,7 @@ pub async fn cf_notifications(app: tauri::AppHandle) -> Result<Value, String> {
         return Ok(notes.into());
     };
     let (legacy, stale) = cflegacy::cached();
-    if stale {
+    if stale || fresh.unwrap_or(false) {
         let read = load()["legacyRead"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
         cflegacy::refresh(&app, read);
     }

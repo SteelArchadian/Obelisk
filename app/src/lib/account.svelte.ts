@@ -55,8 +55,9 @@ export async function loadCf() {
   await loadCfNotes();
 }
 
-export async function loadCfNotes() {
-  try { cf.notes = await invoke<CfNotification[]>("cf_notifications"); } catch { /* keep what we had */ }
+/** `fresh` (Ctrl+R) also reads legacy.curseforge.com's page again instead of its copy from the last few minutes. */
+export async function loadCfNotes(fresh = false) {
+  try { cf.notes = await invoke<CfNotification[]>("cf_notifications", { fresh }); } catch { /* keep what we had */ }
 }
 
 /** Opens curseforge.com's sign-in page in a small window; it closes by itself once signed in. */

@@ -46,6 +46,7 @@
   import WorkBar from "$lib/WorkBar.svelte";
   import { loadSettings, settings } from "$lib/settings.svelte";
   import { loadFavorites } from "$lib/favstore.svelte";
+  import { loadAccount, loadCfNotes } from "$lib/account.svelte";
   import { refreshRunning } from "$lib/play.svelte";
 
   // One-click updates of Obelisk itself, from its GitHub releases (Obelisk also checks every 30 minutes by itself).
@@ -317,8 +318,12 @@
     // Ctrl+R / F5: refresh Obelisk's data instead of reloading the window.
     if ((e.ctrlKey && e.key.toLowerCase() === "r") || e.key === "F5") {
       e.preventDefault();
-      // Everything is read again: packs, installed mods, accounts, running games, shares, and both kinds of updates.
+      // Everything is read again: packs, installed mods, accounts, running games, shares, favorites, both
+      // notification feeds, the open page's lists (InstanceView/Diagnosis listen for obelisk-refresh), and both kinds of updates.
       syncInstances();
+      loadFavorites();
+      loadAccount();
+      loadCfNotes(true);
       refreshInstalled();
       loadAccounts().catch(() => {});
       refreshRunning();
