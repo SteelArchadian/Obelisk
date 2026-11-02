@@ -581,7 +581,9 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
                 let project_type = match info.kind.as_str() { "resourcepacks" => "resourcepack", "shaderpacks" => "shader", _ => "mod" };
                 let req = prism::modrinth::InstallRequest { project_id: project.clone(), project_type: project_type.into(),
                     version_id: Some(version), loader_override: None, force: false };
-                let existing = vec![prism::modrinth::Installed { project_id: project, version_id: String::new(), kind: info.kind.clone(), file_name: file.into() }];
+                let mut existing = mr.installed(&dir, &super::datadir::root().join("hashes"))?;
+                existing.retain(|i| i.file_name != file && i.project_id != project);
+                existing.push(prism::modrinth::Installed { project_id: project, version_id: String::new(), kind: info.kind.clone(), file_name: file.into() });
                 mr.install(&dir, &req, &loader, &mc, &existing)?;
             } else {
                 let cf = cf.ok_or("no CurseForge API key in Obelisk's Settings")?;

@@ -1068,7 +1068,10 @@ async fn apply_update(mr: tauri::State<'_, Mr>, instance_id: String, info: serde
         if let Some((project_id, update_id)) = on_mr {
             let project_type = match kind.as_str() { "resourcepacks" => "resourcepack", "shaderpacks" => "shader", _ => "mod" };
             let req = prism::modrinth::InstallRequest { project_id, project_type: project_type.into(), version_id: Some(update_id), loader_override: None, force: false };
-            let existing = vec![prism::modrinth::Installed { project_id: req.project_id.clone(), version_id: String::new(), kind: kind.clone(), file_name }];
+            // Everything else in the pack too, so libraries it already has (Iris for Colorwheel) aren't added again.
+            let mut existing = mr.installed(&game, &datadir::root().join("hashes"))?;
+            existing.retain(|i| i.file_name != file_name && i.project_id != req.project_id);
+            existing.push(prism::modrinth::Installed { project_id: req.project_id.clone(), version_id: String::new(), kind: kind.clone(), file_name });
             mr.install(&game, &req, &inst.loader, &inst.minecraft, &existing)?;
             return Ok(None);
         }

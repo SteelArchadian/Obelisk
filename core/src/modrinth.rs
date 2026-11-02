@@ -382,12 +382,12 @@ impl Client {
         let pack = crate::fit::pack(&game.join("mods"), loader, &crate::loader_version_of(game), mc);
         let by_project: HashMap<&str, &Installed> = existing.iter().map(|i| (i.project_id.as_str(), i)).collect();
         let ids_of = |i: Option<&Installed>| i.map(|i| crate::dupes::own_ids(&game.join(&i.kind).join(&i.file_name))).unwrap_or_default();
-        let ctx = Ctx { project_type: &req.project_type, loader: &use_loader, mc, pack: &pack, checking };
+        let ctx = Ctx { project_type: &req.project_type, loader: &use_loader, mc, pack: &pack, checking, game };
         // A dependency is looked up as its own kind: a resource pack can need a mod (Hyper Punchy needs Punchy!).
         let mod_ctx = Ctx { project_type: "mod", checking: true, ..ctx };
 
         let old_root = by_project.get(req.project_id.as_str()).copied();
-        let mut root = self.choose(&ctx, &req.project_id, req.version_id.as_deref(), None, &ids_of(old_root))?
+        let mut root = self.choose(&ctx, &req.project_id, req.version_id.as_deref(), None, old_root)?
             .ok_or("nothing to install")?;
         // A slug in the request still finds the installed copy by its project id.
         root.replaces = old_root.or_else(|| by_project.get(root.v.project_id.as_str()).copied()).cloned();
@@ -418,7 +418,7 @@ impl Client {
                         k if k == req.project_type => &ctx,
                         _ => &other,
                     };
-                    let pick = match self.choose(dep_ctx, &dep, None, have.map(|i| i.version_id.as_str()), &ids_of(have)) {
+                    let pick = match self.choose(dep_ctx, &dep, None, have.map(|i| i.version_id.as_str()), have) {
                         // One file for several loaders lists every loader's needs (Little Structures: Fabric API, for
                         // Fabric only). Nothing for this loader means it's another loader's; a mod jar's own list is
                         // still checked below, so a real gap is caught there.
@@ -452,7 +452,7 @@ impl Client {
                             let pick = match found {
                                 Some(project) if !planned.contains(&project) => {
                                     let have = by_project.get(project.as_str()).copied();
-                                    let p = self.choose(&mod_ctx, &project, None, have.map(|i| i.version_id.as_str()), &ids_of(have))?;
+                                    let p = self.choose(&mod_ctx, &project, None, have.map(|i| i.version_id.as_str()), have)?;
                                     planned.insert(project);
                                     p.map(|mut p| { p.replaces = have.cloned(); p.dep = true; p })
                                 }
@@ -510,7 +510,15 @@ impl Client {
 
     /// The newest version of a project that loads in this pack (releases first), downloaded. `Ok(None)` when the
     /// best one is `current` already. An exact `version` is checked too, and refused with the reason.
-    fn choose(&self, ctx: &Ctx, project: &str, version: Option<&str>, current: Option<&str>, replacing: &[String]) -> Result<Option<Pick>, String> {
+    fn choose(&self, ctx: &Ctx, project: &str, version: Option<&str>, current: Option<&str>, old: Option<&Installed>) -> Result<Option<Pick>, String> {
+        use crate::fit::Problem;
+        let old_path = old.map(|i| ctx.game.join(&i.kind).join(&i.file_name));
+        let replacing = old_path.as_ref().map(|p| crate::dupes::own_ids(p)).unwrap_or_default();
+        let is_mc = |p: &Problem| matches!(p, Problem::Unloadable(w) if w.starts_with("it needs Minecraft"));
+        // The jar being replaced already loads in this pack: a Minecraft range it fails just the same (JEI, More
+        // Culling and Iris list "[1.21, 1.21.1)" in their 1.21.1 builds) is no reason to refuse the new one.
+        let mc_waived = ctx.checking && old_path.and_then(|p| fs::read(p).ok()).and_then(|b| crate::fit::read_bundle(&b))
+            .is_some_and(|m| crate::fit::check(&m, ctx.pack, &replacing).iter().any(is_mc));
         let candidates = match version {
             Some(id) => vec![self.version(id)?],
             None => {
@@ -539,7 +547,8 @@ impl Client {
             }
             let bytes = self.fetch_verified(&file)?;
             let meta = if ctx.checking { crate::fit::read_bundle(&bytes) } else { None };
-            let refused = meta.as_ref().and_then(|m| crate::fit::check(m, ctx.pack, replacing).into_iter().find(|p| matches!(p, crate::fit::Problem::Unloadable(_))));
+            let refused = meta.as_ref().and_then(|m| crate::fit::check(m, ctx.pack, &replacing).into_iter()
+                .find(|p| matches!(p, Problem::Unloadable(_)) && !(mc_waived && is_mc(p))));
             match refused {
                 Some(p) => why.push(p.describe(&format!("{name} {}", v.version_number))),
                 None => return Ok(Some(Pick { v, file, bytes, name, slug, meta, replaces: None, dep: false, folder })),
@@ -598,6 +607,7 @@ struct Ctx<'a> {
     mc: &'a str,
     pack: &'a crate::fit::Pack,
     checking: bool,
+    game: &'a Path,
 }
 
 struct Pick {
