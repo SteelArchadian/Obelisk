@@ -506,7 +506,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-optout", "errors"],
+            "release-rollback", "release-retry", "release-optout", "errors"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -515,7 +515,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "launch" => launch(args, jobs),
         "gate" => gate(args, jobs),
         "errors" => Ok(super::errlog::recent(num(args, "limit", 30, 1, 200)? as usize, args.get("since").and_then(|v| v.as_u64()).unwrap_or(0))),
-        "release-submit" | "release-status" | "release-promote" | "release-rollback" | "release-optout" => super::releases::command(cmd, args),
+        "release-submit" | "release-status" | "release-promote" | "release-rollback" | "release-retry" | "release-optout" => super::releases::command(cmd, args),
         "status" => {
             let (m, _) = &**jobs;
             let l = m.lock().unwrap();
@@ -1372,7 +1372,8 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     };
     if let Some(w) = world {
         plain_name(w, "world").map_err(|_| "world must be a plain save folder name".to_string())?;
-        if !dir.join("saves").join(w).is_dir() {
+        // A test world is built later, once the run holds the lock.
+        if build_world.is_none() && !dir.join("saves").join(w).is_dir() {
             return Err(format!("no save called {w} in {name}"));
         }
         extra.push(format!("-Dspeedloader.autobench={w}"));

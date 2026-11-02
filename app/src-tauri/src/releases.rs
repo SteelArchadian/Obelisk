@@ -167,6 +167,23 @@ pub fn command(cmd: &str, args: &Value) -> Result<Value, String> {
                 .map(|o| o.id).ok_or_else(|| format!("no installed release of {m} in {p}")))?;
             rollback(id, &format!("rolled back on request: {}", c::opt(args, "reason").unwrap_or("no reason given")))
         }
+        "release-retry" => {
+            // A rollout that failed (e.g. its gate hung on something since fixed in the pack): queued again, fresh tries.
+            let m = c::arg(args, "mod")?;
+            let p = c::arg(args, "pack")?;
+            let why = c::opt(args, "reason").unwrap_or("retry on request").to_string();
+            with(|r| {
+                let o = r.rollouts.iter_mut().rev().find(|o| o.mod_id == m && o.pack == p)
+                    .ok_or_else(|| format!("no release of {m} for {p}"))?;
+                if o.state != "failed" { return Err(format!("rollout {} of {m} {} in {p} is {}, not failed", o.id, o.version, o.state)) }
+                o.state = "queued".into();
+                o.detail = why;
+                o.retry_at = 0;
+                o.attempts = 0;
+                o.updated = now();
+                Ok(json!({ "rollout": o.id, "version": o.version, "state": "queued" }))
+            })
+        }
         "release-optout" => {
             let p = pack(c::arg(args, "pack")?)?;
             let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(true);

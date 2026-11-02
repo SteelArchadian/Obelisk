@@ -117,6 +117,8 @@ pub(crate) fn tools() -> Value {
             obj(json!({ "mod": { "type": "string" }, "version": { "type": "string" }, "reason": { "type": "string", "enum": ["user-played", "proven-in-td"] } }), &["mod", "version", "reason"])),
         t("release_rollback", "Put back the jar a release replaced in one pack (safety backup first). The pack must be closed.",
             obj(json!({ "mod": { "type": "string" }, "pack": { "type": "string", "description": "The pack's folder name, e.g. Foundation" }, "reason": { "type": "string" } }), &["mod", "pack"])),
+        t("release_retry", "Queue a failed rollout again (its newest one for this mod and pack), with fresh tries: for a gate that failed on something since fixed in the pack.",
+            obj(json!({ "mod": { "type": "string" }, "pack": { "type": "string", "description": "The pack's folder name, e.g. Odyssey" }, "reason": { "type": "string" } }), &["mod", "pack"])),
         t("release_optout", "Stop (on=true) or resume (on=false) automatic releases into one pack.",
             obj(json!({ "pack": { "type": "string" }, "on": { "type": "boolean" } }), &["pack"])),
         t("copy_pack", "Make a new test copy in the test bench from another copy or \"play\" (skips saves unless saves=true). Test rules are set in the copy: Absolute AFK Cinema off, pauseOnLostFocus false, windowed.",
