@@ -37,6 +37,9 @@ pub struct Update {
     pub file_name: String,
     /// CurseForge author disabled third-party downloads for this file.
     pub blocked: bool,
+    /// A CurseForge update that's blocked there but on Modrinth too: (project id, version id) to install from Modrinth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modrinth: Option<(String, String)>,
 }
 
 fn loaders_for(kind: &str, loader: &str) -> Vec<String> {
@@ -178,7 +181,7 @@ pub fn check(game: &Path, hash_cache: &Path, mr: &modrinth::Client, cf: Option<&
             if v.id != i.current && v.project_id == i.project_id {
                 let f = modrinth::primary_file(v);
                 i.update = Some(Update { id: v.id.clone(), name: v.version_number.clone(),
-                    file_name: f.map(|f| f.filename.clone()).unwrap_or_default(), blocked: false });
+                    file_name: f.map(|f| f.filename.clone()).unwrap_or_default(), blocked: false, modrinth: None });
             }
         }
     }
@@ -236,6 +239,32 @@ pub fn check(game: &Path, hash_cache: &Path, mr: &modrinth::Client, cf: Option<&
                     u.file_name = f["fileName"].as_str().unwrap_or_default().to_string();
                     u.blocked = f["downloadUrl"].as_str().is_none_or(|s| s.is_empty());
                 }
+            }
+        }
+
+        // Modrinth first: a CurseForge update whose exact file is also on Modrinth installs from there. Files that are
+        // blocked on CurseForge (author allows its website only) then try the installed file's newest Modrinth build.
+        let new_sha = |i: &FileInfo| i.update.as_ref().and_then(|u| files.get(&u.id)).map(curseforge::sha1_of).filter(|s| !s.is_empty());
+        let hashes: Vec<String> = infos.iter().filter(|i| i.provider == "curseforge").filter_map(new_sha).collect();
+        let found = mr.lookup_hashes(&hashes).unwrap_or_default();
+        for i in infos.iter_mut().filter(|i| i.provider == "curseforge") {
+            let Some(v) = new_sha(i).and_then(|s| found.get(&s)) else { continue };
+            let u = i.update.as_mut().unwrap();
+            u.blocked = false;
+            u.modrinth = Some((v.project_id.clone(), v.id.clone()));
+        }
+        let is_blocked = |i: &FileInfo| i.update.as_ref().is_some_and(|u| u.blocked);
+        for kind in crate::KINDS {
+            let hashes: Vec<String> = infos.iter().filter(|i| i.kind == kind && is_blocked(i))
+                .map(|i| sha_of[&(i.kind.clone(), i.file_name.clone())].clone()).collect();
+            let latest = mr.latest_for_hashes(&hashes, &loaders_for(kind, loader), &[mc.to_string()]).unwrap_or_default();
+            for i in infos.iter_mut().filter(|i| i.kind == kind && is_blocked(i)) {
+                let sha = &sha_of[&(i.kind.clone(), i.file_name.clone())];
+                let Some(v) = latest.get(sha) else { continue };
+                let Some(f) = modrinth::primary_file(v) else { continue };
+                if f.hashes.get("sha1") == Some(sha) { continue } // nothing newer on Modrinth
+                i.update = Some(Update { id: v.id.clone(), name: v.version_number.clone(), file_name: f.filename.clone(),
+                    blocked: false, modrinth: Some((v.project_id.clone(), v.id.clone())) });
             }
         }
     }

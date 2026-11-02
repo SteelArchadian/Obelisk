@@ -4,7 +4,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { ago, api, initials, type FileInfo, type Item, type Kind, type World } from "./api";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { cached, recheck, updateState, updatesFor } from "./updates.svelte";
+  import { cached, markUpdated, recheck, setUpdating, updateState, updatesFor, updating as updatingNow } from "./updates.svelte";
   import { settings } from "./settings.svelte";
   import { cancel, kill, play as startGame, running, starting } from "./play.svelte";
   import ConfigEditor from "./ConfigEditor.svelte";
@@ -142,7 +142,7 @@
   /** Per-file source, popularity, sides and available update ("kind/fileName" -> info). */
   let infos = $state<Map<string, FileInfo>>(new Map());
   let checking = $state(false);
-  let updating = $state<Set<string>>(new Set());
+  let updating = $derived(new Set(updatingNow[app.current!.id] ?? []));
   const plain = (f: string) => f.replace(/\.disabled$/, "");
   const infoOf = (i: Item) => infos.get(`${kind}/${plain(i.fileName)}`);
   const ENV_LABEL: Record<string, string> = { client: "Client", server: "Server", both: "Client & server", "": "Unknown" };
@@ -270,19 +270,17 @@
   /** Replace one file with its newest compatible build. Blocked CurseForge files go via the browser. */
   async function update(f: FileInfo, reload = true) {
     const key = `${f.kind}/${f.fileName}`;
-    updating = new Set(updating).add(key);
     const id = current.id;
+    setUpdating(id, key, true);
     try {
       const job = await api.applyUpdate(id, f);
       if (job) await manualDownload(id, job, () => { if (current.id === id) load(id); quietRecheck(id); });
-      // Done: drop the button straight away; the background re-check fills in the rest.
-      else infos = new Map([...infos].map(([k, v]) => [k, k === key ? { ...v, update: null } : v]));
+      // Done: drop the button straight away (kept with the profile, so it counts down even after leaving it).
+      else markUpdated(id, key);
     } catch (e) {
       toast(`${f.fileName}: ${e}`);
     }
-    const next = new Set(updating);
-    next.delete(key);
-    updating = next;
+    setUpdating(id, key, false);
     if (reload) {
       if (current.id === id) await load(id);
       quietRecheck(id);
@@ -290,7 +288,13 @@
   }
 
   async function updateAll(list: FileInfo[]) {
-    const id = current.id;
+    const id = current.id, name = current.name;
+    // The whole run counts as updating (checkpoint, gaps between files), so the spinner holds throughout.
+    setUpdating(id, "*all", true);
+    try { await runUpdateAll(id, name, list); } finally { setUpdating(id, "*all", false); }
+  }
+
+  async function runUpdateAll(id: string, name: string, list: FileInfo[]) {
     // Updating many mods at once is easy to regret: a checkpoint first (kept like the ones you make yourself, not
     // pruned with the automatic backups), and no update at all if it can't be taken.
     try {
@@ -308,12 +312,12 @@
       toast(`${blocked.length} update${blocked.length > 1 ? "s" : ""} must be downloaded from curseforge.com. Opening the first one.`);
       await update(blocked[0], false);
     }
+    quietRecheck(id);
     if (current.id === id) {
       await load(id);
       refreshInstalled();
-      quietRecheck(id);
-      if (direct.length) toast(`Updated ${direct.length} file${direct.length === 1 ? "" : "s"}.`);
     }
+    if (direct.length) toast(`Updated ${direct.length} file${direct.length === 1 ? "" : "s"}${current.id === id ? "" : ` in ${name}`}.`);
   }
 
   function setSub(s: Sub) {

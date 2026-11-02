@@ -9,7 +9,28 @@ const inflight = new Map<string, Promise<FileInfo[]>>();
 /** Bumped whenever new results land, so open pages pick them up. */
 export const updateState = $state({ tick: 0, running: 0 });
 
-const keyOf = (id: string) => `obelisk.updates.v3.${id}`;
+const keyOf = (id: string) => `obelisk.updates.v4.${id}`;
+
+/**
+ * Files being updated right now, per profile ("kind/fileName"). Kept here, not in the page, so leaving a
+ * profile mid-Update all doesn't lose the spinner or the countdown.
+ */
+export const updating = $state<Record<string, string[]>>({});
+
+export function setUpdating(id: string, key: string, on: boolean) {
+  const rest = (updating[id] ?? []).filter((k) => k !== key);
+  updating[id] = on ? [...rest, key] : rest;
+}
+
+/** One file is up to date: drop its update from the stored results straight away (the re-check fills in the rest). */
+export function markUpdated(id: string, key: string) {
+  const c = cached(id);
+  if (!c) return;
+  const entry = { at: c.at, infos: c.infos.map((f) => `${f.kind}/${f.fileName}` === key ? { ...f, update: null } : f) };
+  memory.set(id, entry);
+  try { localStorage.setItem(keyOf(id), JSON.stringify(entry)); } catch { /* ignore */ }
+  updateState.tick++;
+}
 
 /** Last results for a profile (any age), without touching the network. */
 export function cached(id: string): Cached | null {

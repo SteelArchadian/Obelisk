@@ -1058,8 +1058,14 @@ async fn apply_update(mr: tauri::State<'_, Mr>, instance_id: String, info: serde
     let s = |k: &str| info[k].as_str().unwrap_or_default().to_string();
     let (kind, file_name, provider, project_id) = (s("kind"), s("fileName"), s("provider"), s("projectId"));
     let update_id = info["update"]["id"].as_str().ok_or("no update")?.to_string();
+    // A CurseForge file that's blocked there comes from Modrinth when it's on both.
+    let on_mr = match &info["update"]["modrinth"] {
+        serde_json::Value::Array(a) if a.len() == 2 => a[0].as_str().zip(a[1].as_str()).map(|(p, v)| (p.to_string(), v.to_string())),
+        _ => None,
+    };
     blocking(move || {
-        if provider == "modrinth" {
+        let on_mr = if provider == "modrinth" { Some((project_id.clone(), update_id.clone())) } else { on_mr };
+        if let Some((project_id, update_id)) = on_mr {
             let project_type = match kind.as_str() { "resourcepacks" => "resourcepack", "shaderpacks" => "shader", _ => "mod" };
             let req = prism::modrinth::InstallRequest { project_id, project_type: project_type.into(), version_id: Some(update_id), loader_override: None, force: false };
             let existing = vec![prism::modrinth::Installed { project_id: req.project_id.clone(), version_id: String::new(), kind: kind.clone(), file_name }];

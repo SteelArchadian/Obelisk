@@ -30,7 +30,7 @@ export type Hit = {
 export type FileInfo = {
   kind: Kind; fileName: string; provider: "modrinth" | "curseforge" | ""; projectId: string; current: string;
   downloads: number; env: "client" | "server" | "both" | ""; iconUrl: string; library?: boolean;
-  update: { id: string; name: string; fileName: string; blocked: boolean } | null;
+  update: { id: string; name: string; fileName: string; blocked: boolean; modrinth?: [string, string] } | null;
 };
 export type ManualDownload = {
   world?: string; name: string; page: string; fileName: string; sha1: string; size: number; folder: string; indexToml: string; replaces: string | null;

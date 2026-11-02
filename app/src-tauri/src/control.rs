@@ -575,11 +575,13 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             if up.blocked {
                 return Err(format!("CurseForge only allows {} to be downloaded on its website; ask the user", up.file_name));
             }
-            if info.provider == "modrinth" {
+            // A CurseForge file that's blocked there comes from Modrinth when it's on both.
+            let on_mr = if info.provider == "modrinth" { Some((info.project_id.clone(), up.id.clone())) } else { up.modrinth.clone() };
+            if let Some((project, version)) = on_mr {
                 let project_type = match info.kind.as_str() { "resourcepacks" => "resourcepack", "shaderpacks" => "shader", _ => "mod" };
-                let req = prism::modrinth::InstallRequest { project_id: info.project_id.clone(), project_type: project_type.into(),
-                    version_id: Some(up.id.clone()), loader_override: None, force: false };
-                let existing = vec![prism::modrinth::Installed { project_id: info.project_id.clone(), version_id: String::new(), kind: info.kind.clone(), file_name: file.into() }];
+                let req = prism::modrinth::InstallRequest { project_id: project.clone(), project_type: project_type.into(),
+                    version_id: Some(version), loader_override: None, force: false };
+                let existing = vec![prism::modrinth::Installed { project_id: project, version_id: String::new(), kind: info.kind.clone(), file_name: file.into() }];
                 mr.install(&dir, &req, &loader, &mc, &existing)?;
             } else {
                 let cf = cf.ok_or("no CurseForge API key in Obelisk's Settings")?;
