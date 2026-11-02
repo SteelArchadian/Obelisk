@@ -131,6 +131,22 @@ pub fn read_bundle(bytes: &[u8]) -> Option<Meta> {
     for (id, v) in all {
         if !meta.mods.iter().any(|(i, _)| *i == id) { meta.mods.push((id, v)) }
     }
+    // A bundled jar's own NeoForge or Minecraft requirement stops the game just the same (Forgified Fabric API 2.3.6
+    // needs NeoForge 21.1.262 only in its inner jars).
+    if let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+        let nested: Vec<String> = zip.file_names()
+            .filter(|n| (n.starts_with("META-INF/jarjar/") || n.starts_with("META-INF/jars/")) && n.ends_with(".jar"))
+            .map(str::to_string).collect();
+        for n in nested {
+            let mut b = Vec::new();
+            if zip.by_name(&n).ok().and_then(|mut f| f.read_to_end(&mut b).ok()).is_none() { continue }
+            let Some(inner) = read(std::io::Cursor::new(b)) else { continue };
+            if inner.kind != meta.kind { continue }
+            for d in inner.deps.into_iter().filter(|d| d.rule == Rule::Required && matches!(d.id.as_str(), "neoforge" | "forge" | "minecraft")) {
+                if !meta.deps.iter().any(|m| m.id == d.id && m.range == d.range) { meta.deps.push(d) }
+            }
+        }
+    }
     Some(meta)
 }
 
@@ -406,6 +422,27 @@ versionRange=\"{r}\"
 "))]))).unwrap();
         assert!(check(&mc("[1.21, 1.21.1)"), &pack, &[]).is_empty());
         assert!(matches!(check(&mc("[1.21.2,)"), &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
+        // 2c. A bundled jar's NeoForge requirement counts (Forgified Fabric API 2.3.6 has it only inside).
+        let inner = jar(&[("META-INF/neoforge.mods.toml", "modLoader=\"javafml\"
+[[mods]]
+modId=\"fabric_loot_api_v3\"
+version=\"1.0.3\"
+[[dependencies.fabric_loot_api_v3]]
+modId=\"neoforge\"
+type=\"required\"
+versionRange=\"[21.1.262,)\"
+")]);
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        z.start_file("META-INF/neoforge.mods.toml", zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(b"modLoader=\"javafml\"
+[[mods]]
+modId=\"fabric_api\"
+version=\"0.116.15\"
+").unwrap();
+        z.start_file("META-INF/jarjar/fabric-loot-api-v3.jar", zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(&inner).unwrap();
+        let ffapi = read_bundle(&z.finish().unwrap().into_inner()).unwrap();
+        assert!(matches!(check(&ffapi, &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
         // 3. No modLoader line.
         let towers = read(std::io::Cursor::new(jar(&[("META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"structory_towers\"\nversion=\"1.0.17\"\n")]))).unwrap();
         assert!(matches!(check(&towers, &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
