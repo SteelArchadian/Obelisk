@@ -103,6 +103,6 @@ through your browser. `python -m unittest -v` runs its offline tests.
 Obelisk is free software under the GNU General Public License, version 3 only (GPL-3.0-only).
 See `COPYING`.
 
-Made by SteelArchadian, with AI assistance.
+Made with AI assistance.
 
 Obelisk isn't affiliated with Mojang, Microsoft, Prism Launcher, Modrinth or CurseForge.
