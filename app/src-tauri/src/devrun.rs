@@ -23,6 +23,7 @@ pub struct Sampler {
     out: Option<std::fs::File>,
     sys: sysinfo::System,
     gpu: Option<gpu::Query>,
+    machine: Option<gpu::Machine>,
     heap: Arc<Mutex<Option<(f64, f64)>>>,
     alive: Arc<std::sync::atomic::AtomicBool>,
     last_sample: Instant,
@@ -51,7 +52,7 @@ impl Sampler {
             });
         }
         let past = Instant::now() - Duration::from_secs(60);
-        Sampler { pid, dir: dir.to_path_buf(), launched_ms, out, sys: sysinfo::System::new(), gpu: gpu::Query::new(),
+        Sampler { pid, dir: dir.to_path_buf(), launched_ms, out, sys: sysinfo::System::new(), gpu: gpu::Query::new(), machine: gpu::Machine::new(),
             heap, alive, last_sample: past, last_events: past, seen: Default::default(), events: vec![], latest: Value::Null }
     }
 
@@ -66,12 +67,17 @@ impl Sampler {
             let (cpu, mem) = self.sys.process(pid).map(|p| (p.cpu_usage() as f64, p.memory() as f64 / 1_048_576.0)).unwrap_or((0.0, 0.0));
             let (gpu, vram) = self.gpu.as_mut().map(|q| q.read(self.pid)).unwrap_or((None, None));
             let heap = *self.heap.lock().unwrap();
+            let m = self.machine.as_mut().map(|m| m.read()).unwrap_or_default();
             let r1 = |x: f64| (x * 10.0).round() / 10.0;
             self.latest = json!({
                 "t": r1((prism::timeline::now_ms() - self.launched_ms) as f64 / 1000.0),
                 // CPU in cores (100 = one core busy), memory = working set.
                 "cpu": r1(cpu), "memMB": mem.round(), "gpu3d": gpu.map(r1), "vramMB": vram.map(f64::round),
                 "heapUsedMB": heap.map(|h| h.0.round()), "heapCommittedMB": heap.map(|h| h.1.round()),
+                // The whole PC: free RAM, commit charge against its limit (RAM + page file) and disk activity, so stalls
+                // from memory pressure or paging show up next to the game's own numbers.
+                "freeMB": m.free_mb.map(f64::round), "commitMB": m.commit_mb.map(f64::round), "commitLimitMB": m.limit_mb.map(f64::round),
+                "diskBusyPct": m.disk_busy.map(r1), "diskMBps": m.disk_mbps.map(r1),
             });
             self.write(&self.latest.clone());
         }
@@ -149,11 +155,74 @@ mod gpu {
         fn PdhCollectQueryData(q: isize) -> u32;
         fn PdhGetFormattedCounterArrayW(c: isize, fmt: u32, size: *mut u32, count: *mut u32, items: *mut u8) -> u32;
         fn PdhCloseQuery(q: isize) -> u32;
+        fn PdhGetFormattedCounterValue(c: isize, fmt: u32, kind: *mut u32, value: *mut u8) -> u32;
     }
     const PDH_FMT_DOUBLE: u32 = 0x200;
     const PDH_MORE_DATA: u32 = 0x800007D2;
 
     pub struct Query { q: isize, engine: isize, memory: isize }
+
+    /// Whole-PC memory and disk counters.
+    pub struct Machine { q: isize, c: [isize; 5] }
+    unsafe impl Send for Machine {}
+
+    #[derive(Default)]
+    pub struct MachineSample {
+        pub free_mb: Option<f64>,
+        pub commit_mb: Option<f64>,
+        pub limit_mb: Option<f64>,
+        pub disk_busy: Option<f64>,
+        pub disk_mbps: Option<f64>,
+    }
+
+    impl Machine {
+        pub fn new() -> Option<Self> {
+            let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+            let paths = [r"\Memory\Available MBytes", r"\Memory\Committed Bytes", r"\Memory\Commit Limit",
+                r"\PhysicalDisk(_Total)\% Idle Time", r"\PhysicalDisk(_Total)\Disk Bytes/sec"];
+            let mut q = 0;
+            let mut c = [0isize; 5];
+            unsafe {
+                if PdhOpenQueryW(std::ptr::null(), 0, &mut q) != 0 { return None; }
+                for (i, path) in paths.iter().enumerate() {
+                    // A counter that won't open stays 0 and reads as missing.
+                    if PdhAddEnglishCounterW(q, w(path).as_ptr(), 0, &mut c[i]) != 0 { c[i] = 0; }
+                }
+                PdhCollectQueryData(q);
+            }
+            Some(Machine { q, c })
+        }
+
+        pub fn read(&mut self) -> MachineSample {
+            unsafe { PdhCollectQueryData(self.q) };
+            let v = |i: usize| one(self.c[i]);
+            MachineSample {
+                free_mb: v(0),
+                commit_mb: v(1).map(|b| b / 1_048_576.0),
+                limit_mb: v(2).map(|b| b / 1_048_576.0),
+                disk_busy: v(3).map(|idle| (100.0 - idle).clamp(0.0, 100.0)),
+                disk_mbps: v(4).map(|b| b / 1_048_576.0),
+            }
+        }
+    }
+
+    impl Drop for Machine {
+        fn drop(&mut self) {
+            unsafe { PdhCloseQuery(self.q) };
+        }
+    }
+
+    /// PDH_FMT_COUNTERVALUE: {status u32, pad, double}.
+    fn one(c: isize) -> Option<f64> {
+        if c == 0 { return None; }
+        let mut kind = 0u32;
+        let mut buf = [0u64; 2];
+        unsafe {
+            if PdhGetFormattedCounterValue(c, PDH_FMT_DOUBLE, &mut kind, buf.as_mut_ptr() as *mut u8) != 0 { return None; }
+            let status = buf[0] as u32;
+            (status <= 1).then(|| f64::from_bits(buf[1]))
+        }
+    }
     unsafe impl Send for Query {}
 
     impl Query {
@@ -221,6 +290,15 @@ mod tests {
         assert_eq!(super::parse_heap_info(z), Some((1234.0, 2048.0)));
         let g = " garbage-first heap   total 524288K, used 131072K [0x0000000600000000, 0x0000000800000000)";
         assert_eq!(super::parse_heap_info(g), Some((128.0, 512.0)));
+    }
+
+    #[test]
+    fn machine_counters_read() {
+        let mut m = super::gpu::Machine::new().expect("PDH memory and disk counters");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let s = m.read();
+        assert!(s.free_mb.unwrap() > 0.0 && s.commit_mb.unwrap() > 0.0 && s.limit_mb.unwrap() >= s.commit_mb.unwrap());
+        assert!(s.disk_busy.is_some() && s.disk_mbps.is_some());
     }
 
     #[test]
