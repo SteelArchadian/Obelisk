@@ -66,6 +66,23 @@ impl Sampler {
                 sysinfo::ProcessRefreshKind::new().with_cpu().with_memory());
             let (cpu, mem) = self.sys.process(pid).map(|p| (p.cpu_usage() as f64, p.memory() as f64 / 1_048_576.0)).unwrap_or((0.0, 0.0));
             let (gpu, vram) = self.gpu.as_mut().map(|q| q.read(self.pid)).unwrap_or((None, None));
+            // Another program on the GPU (a local LLM server, say) skews FPS: named in the samples, and an event the
+            // first time each one shows up.
+            let others: Vec<Value> = self.gpu.as_ref().map(|q| q.others(self.pid, 10.0)).unwrap_or_default().into_iter().map(|(p, v)| {
+                let sp = sysinfo::Pid::from_u32(p);
+                self.sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::Some(&[sp]), true, sysinfo::ProcessRefreshKind::new());
+                let name = self.sys.process(sp).map(|x| x.name().to_string_lossy().into_owned()).unwrap_or_else(|| format!("pid {p}"));
+                json!({ "process": name, "gpuPct": (v * 10.0).round() / 10.0 })
+            }).collect();
+            for o in &others {
+                let name = o["process"].as_str().unwrap_or_default().to_string();
+                if self.seen.insert((format!("otherGpu:{name}"), 0)) {
+                    let e = json!({ "event": "otherGpu", "t": ((prism::timeline::now_ms() - self.launched_ms) as f64 / 100.0).round() / 10.0,
+                        "src": "obelisk", "process": name, "gpuPct": o["gpuPct"] });
+                    self.write(&e);
+                    self.events.push(e);
+                }
+            }
             let heap = *self.heap.lock().unwrap();
             let m = self.machine.as_mut().map(|m| m.read()).unwrap_or_default();
             let r1 = |x: f64| (x * 10.0).round() / 10.0;
@@ -78,6 +95,7 @@ impl Sampler {
                 // from memory pressure or paging show up next to the game's own numbers.
                 "freeMB": m.free_mb.map(f64::round), "commitMB": m.commit_mb.map(f64::round), "commitLimitMB": m.limit_mb.map(f64::round),
                 "diskBusyPct": m.disk_busy.map(r1), "diskMBps": m.disk_mbps.map(r1),
+                "otherGpu": others,
             });
             self.write(&self.latest.clone());
         }
@@ -248,6 +266,22 @@ mod gpu {
             let load = items(self.engine).filter(|(n, _)| n.starts_with(&tag) && n.ends_with("engtype_3D")).map(|(_, v)| v).reduce(|a, b| a + b);
             let mem = items(self.memory).filter(|(n, _)| n.starts_with(&tag)).map(|(_, v)| v / 1_048_576.0).reduce(|a, b| a + b);
             (load.map(|l| l.min(100.0)), mem)
+        }
+
+        /// Other processes busy on the GPU (3D, compute or CUDA engines) above `over` percent: (pid, busiest engine
+        /// type's load). Read after `read`, from the same collection.
+        pub fn others(&self, pid: u32, over: f64) -> Vec<(u32, f64)> {
+            let mut by: std::collections::HashMap<(u32, String), f64> = Default::default();
+            for (n, v) in items(self.engine) {
+                let Some(rest) = n.strip_prefix("pid_") else { continue };
+                let Some(p) = rest.split('_').next().and_then(|p| p.parse::<u32>().ok()) else { continue };
+                if p == pid || p == 0 { continue }
+                let eng = n.rsplit("engtype_").next().unwrap_or_default().to_string();
+                *by.entry((p, eng)).or_default() += v;
+            }
+            let mut out: std::collections::HashMap<u32, f64> = Default::default();
+            for ((p, _), v) in by { let e = out.entry(p).or_default(); if v > *e { *e = v } }
+            out.into_iter().filter(|(_, v)| *v > over).map(|(p, v)| (p, v.min(100.0))).collect()
         }
     }
 
