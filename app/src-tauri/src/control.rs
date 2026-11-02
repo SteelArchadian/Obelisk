@@ -852,6 +852,17 @@ fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
 
 const KILLED: &str = "kill requested";
 
+/// Remove this Obelisk's waiting tickets for `owner` from the bench queue.
+fn drop_tickets(owner: &str) {
+    let me = std::process::id() as u64;
+    for e in std::fs::read_dir(bench_root().join("BENCH.queue")).into_iter().flatten().flatten() {
+        let t = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        if t.is_some_and(|t| t["owner"].as_str() == Some(owner) && t["pid"].as_u64() == Some(me)) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// A running game's heap through jcmd: "histogram" (live objects per class: count and shallow bytes; forces a
 /// full GC, takes a few seconds, fine to repeat over time) or "dump" (an .hprof of live objects for MAT or
 /// VisualVM; pauses the game for the whole write and is about as big as the used heap). Files go to <copy>/jfr/.
@@ -1486,6 +1497,9 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     update(&jobs, id, |j| if j.detail.starts_with("waiting for the bench lock") { j.detail.clear() });
     update(&jobs, id, |j| j.helper_pid = None);
     if !got {
+        // The ticket names Obelisk's own pid, which stays alive, so benchlock.py never reaps it: a killed or failed
+        // wait would hold its place in the queue for good (and a perf ticket keeps every shared run waiting).
+        drop_tickets(&lock);
         finish(&jobs, id, "failed", "didn't get the bench lock".into());
         return;
     }
