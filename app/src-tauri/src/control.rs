@@ -1224,7 +1224,43 @@ fn game_command(dir: &Path, extra: &[String]) -> Result<(String, Vec<String>), S
     Ok((format!("{install}/java/java-runtime-delta/bin/java.exe"), a))
 }
 
+/// The cross-PC scenario (same on every PC, so two runs compare mod by mod): a fixed-seed normal world flown
+/// through in spectator on a fixed route, the same options and Lightning capture, and no per-PC overrides.
+/// Anything the call gives itself wins over the preset (e.g. config for a shader pass).
+pub(crate) const CROSSPC: &str = "crosspc-1";
+fn crosspc_args(args: &Value) -> Value {
+    let preset = json!({
+        "perf": true, "eta": 8, "timeout": 900,
+        "test_world": {
+            "terrain": "normal", "seed": "obelisk-crosspc", "game_mode": "spectator", "hold": 210,
+            "spawn": { "x": 0, "y": 140, "z": 0 },
+            "setup": ["gamerule doDaylightCycle false", "time set 6000", "weather clear", "gamerule doWeatherCycle false"],
+            "events": [
+                { "at": 40, "command": "tp @a 512 140 0 90 20" },
+                { "at": 80, "command": "tp @a 512 140 512 0 20" },
+                { "at": 120, "command": "tp @a 0 140 512 -90 20" },
+                { "at": 160, "command": "tp @a -512 140 -512 135 20" }
+            ]
+        },
+        "options": { "enableVsync": false, "maxFps": 260, "renderDistance": 6, "simulationDistance": 6 },
+        // Lightning records from 35 s in the world for 150 s (all four legs of the route), then quits the game.
+        "jvm": ["-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads", "-Dlightning.crosspc=true", "-Dlightning.autoStart=35,150,quit"],
+    });
+    let mut out = preset;
+    for (k, v) in args.as_object().into_iter().flatten() {
+        if k != "preset" { out[k] = v.clone(); }
+    }
+    out
+}
+
 fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
+    let crosspc = match args.get("preset").and_then(Value::as_str) {
+        None => false,
+        Some("crosspc") => true,
+        Some(p) => return Err(format!("unknown preset {p:?} (there is: crosspc)")),
+    };
+    let expanded;
+    let args = if crosspc { expanded = crosspc_args(args); &expanded } else { args };
     let name = need(args, "copy")?.to_string();
     let dir = test_copy(&name)?;
     prism::dupes::check_before_launch(&dir)?;
@@ -1346,13 +1382,14 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used, set));
-    Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc }))
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc));
+    Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc,
+        "preset": crosspc.then_some(CROSSPC) }))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, java: String, cmd: Vec<String>,
-    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>) {
+    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool) {
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
@@ -1413,7 +1450,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let copy = if copy.eq_ignore_ascii_case("minecraft") || copy.eq_ignore_ascii_case(".minecraft") {
             dir.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or(copy)
         } else { copy };
-        for p in super::apply_pc_overrides(&dir, &[&copy]) { eprintln!("pc override: {p}") }
+        if pc_overrides { for p in super::apply_pc_overrides(&dir, &[&copy]) { eprintln!("pc override: {p}") } }
         if fps_run { *caps.lock().expect("caps") = Some(uncap(&dir.join("options.txt"))); }
         if !set.is_empty() { *run_set.lock().expect("run options") = Some(set_for_run(&dir.join("options.txt"), &set)); }
         // Run logs live beside the copies, never inside one: a copy's folder must match the pack it came from.
