@@ -201,7 +201,10 @@ fn read_instance(dir: &Path) -> Instance {
 
 /// The loader version of the instance a game folder belongs to (empty when it can't be read).
 pub fn loader_version_of(game: &Path) -> String {
-    game.parent().map(|d| read_instance(d).loader_version).unwrap_or_default()
+    let v = game.parent().map(|d| read_instance(d).loader_version).unwrap_or_default();
+    if !v.is_empty() { return v }
+    // A test bench copy has no Prism instance around it: the version its pack runs is noted in .obelisk.
+    fs::read_to_string(game.join(".obelisk").join("loader-version")).map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
 /// The `.minecraft` folder of an instance (Prism uses `minecraft` or `.minecraft`).

@@ -567,6 +567,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
                 return Err("a game is running in that copy; stop it first".into());
             }
             let (loader, mc) = pack_of(args)?;
+            note_loader_version(&dir);
             let mr = prism::modrinth::Client::new()?;
             let cf = super::cf_client();
             let infos = prism::updates::check(&dir, &super::datadir::root().join("hashes"), &mr, cf.as_ref(), &loader, &mc)?;
@@ -603,6 +604,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
                 return Err("a game is running in that copy; stop it first".into());
             }
             let (loader, mc) = pack_of(args)?;
+            note_loader_version(&dir);
             let version = s(args, "version").map(str::to_string);
             let mr = prism::modrinth::Client::new()?;
             let cache = super::datadir::root().join("hashes");
@@ -722,6 +724,16 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
 
 /// Loader and Minecraft version for installs and update checks: given, or the play instance's
 /// (every test copy is a copy of Foundation unless said otherwise).
+/// A copy has no Prism instance around it, so the pack check wouldn't know its NeoForge version: note the play
+/// pack's (the version copies run) where the check reads it.
+fn note_loader_version(dir: &Path) {
+    if !prism::loader_version_of(dir).is_empty() { return }
+    if let Some(play) = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation") {
+        let _ = std::fs::create_dir_all(dir.join(".obelisk"));
+        let _ = std::fs::write(dir.join(".obelisk").join("loader-version"), play.loader_version);
+    }
+}
+
 fn pack_of(args: &Value) -> Result<(String, String), String> {
     let play = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation");
     let loader = s(args, "loader").map(str::to_string).or_else(|| play.as_ref().map(|p| p.loader.clone()));
