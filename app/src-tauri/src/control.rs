@@ -527,6 +527,8 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             Ok(json!({ "jobs": v }))
         }
         "wait" => wait(args, jobs),
+        "play-status" => Ok(play_status()),
+        "play-wait" => play_wait(args),
         "kill" => kill(args, jobs),
         "heap" => heap(args, jobs),
         // What the running Obelisk sees (a chat's own view of AppData is a redirected copy).
@@ -766,6 +768,49 @@ fn log(args: &Value) -> Result<Value, String> {
     let total = lines.len();
     let shown: Vec<&str> = lines[total.saturating_sub(tail)..].to_vec();
     Ok(json!({ "file": file, "matched": total, "lines": shown }))
+}
+
+/// The user's own games: Java started by Prism for a pack in Prism's instances folder (test copies under the
+/// bench run from their own folders, so they never count). Read-only: nothing here touches the game.
+fn play_games() -> Vec<Value> {
+    let data = prism::data_dir();
+    let packs: std::collections::HashMap<String, String> = prism::list_instances(&data).into_iter().map(|i| (i.id, i.name)).collect();
+    let dir = prism::instances_dir(&data).to_string_lossy().replace('\\', "/").to_lowercase();
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always));
+    let mut out = vec![];
+    for (pid, p) in sys.processes() {
+        if !p.name().to_string_lossy().to_ascii_lowercase().starts_with("java") { continue }
+        let Some(arg) = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).find(|a| a.starts_with("-Djava.library.path=")) else { continue };
+        if !arg.replace('\\', "/").to_lowercase().contains(&dir) { continue }
+        let Some(id) = prism::natives_instance(&arg) else { continue };
+        let Some(name) = packs.get(&id) else { continue };
+        out.push(json!({ "pack": id, "name": name, "pid": pid.as_u32(), "since": p.start_time(),
+            "minutes": now().saturating_sub(p.start_time()) / 60 }));
+    }
+    out
+}
+
+fn play_status() -> Value {
+    let games = play_games();
+    json!({ "running": !games.is_empty(), "games": games })
+}
+
+/// Block until no play game runs (or the timeout passes), then say which. Checks every 2 s inside Obelisk.
+fn play_wait(args: &Value) -> Result<Value, String> {
+    let secs = num(args, "timeout", 50, 1, 600)?;
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let started = Instant::now();
+    loop {
+        let games = play_games();
+        if games.is_empty() {
+            return Ok(json!({ "running": false, "closed": true, "waitedSecs": started.elapsed().as_secs() }));
+        }
+        if Instant::now() >= deadline {
+            return Ok(json!({ "running": true, "closed": false, "games": games, "waitedSecs": started.elapsed().as_secs() }));
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
 }
 
 fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {

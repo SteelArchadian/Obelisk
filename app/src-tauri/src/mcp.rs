@@ -67,6 +67,9 @@ pub(crate) fn tools() -> Value {
                 "replace": { "type": "string", "description": "Glob in mods/ of the jar(s) it replaces" }, "mods": { "type": "string" },
                 "cycles": { "type": "integer" }, "hold": { "type": "integer" }, "sync": { "type": "boolean" }, "tag": { "type": "string" },
                 "loader_version": { "type": "string", "description": "A loader version folder in the install to run instead of the default (e.g. a library-override test version like neoforge-21.1.252-mixin017)" } }), &["owner"])),
+        t("play_status", "Is the user playing? The user's own games (packs in Prism's instances folder, e.g. Foundation, Odyssey; never test copies) running now: pack, name, pid, since (unix seconds), minutes. Read-only; never touches the game.", obj(json!({}), &[])),
+        t("play_wait", "Block until the user's own game is closed (or the timeout passes, default 50 s, max 600; keep it under your client's tool timeout and call again while closed is false), then return closed true/false. Use it instead of polling before installing into a play pack. Read-only; never touches the game.",
+            obj(json!({ "timeout": { "type": "integer", "description": "Seconds to wait (1-600, default 50)" } }), &[])),
         t("status", "Jobs started through Obelisk (launches, gates, copies) and their state.", obj(json!({ "job": { "type": "integer" } }), &[])),
         t("wait", "Block until a job finishes, reaches a stage (until), or the timeout passes (default 50 s, max 600; keep it under your client's tool timeout), then return the job. Call again while it is still queued or running. A launch's job carries events (stages with seconds since Java started) and now (latest CPU/memory/GPU/heap sample); every sample is in C:/mcw/obelisk-runs/<copy>/<job>.samples.jsonl.",
             obj(json!({ "job": { "type": "integer" }, "timeout": { "type": "integer" },
@@ -178,7 +181,7 @@ pub fn serve() {
             "tools/call" => {
                 let name = msg.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("").replace('_', "-");
                 let mut args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
-                if name == "wait" && args.get("timeout").is_none() {
+                if (name == "wait" || name == "play-wait") && args.get("timeout").is_none() {
                     args["timeout"] = json!(50);
                 }
                 Ok(match call(&name, &args) {
