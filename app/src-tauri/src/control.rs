@@ -2086,9 +2086,18 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, size: O
         fn GetForegroundWindow() -> isize;
         fn SetForegroundWindow(h: isize) -> i32;
         fn IsWindow(h: isize) -> i32;
+        fn GetWindowRect(h: isize, r: *mut super::shot::Rect) -> i32;
     }
+    // Checked every time, not once: the game moves its own window back (centred on the monitor) when it sets its
+    // display mode after start-up, which would leave a full-size window over the user's desktop.
     for (h, p, vis, _, _) in super::top_windows() {
-        if p == pid && vis && parked.insert(h) {
+        if p != pid || !vis { continue }
+        parked.insert(h);
+        let mut r = super::shot::Rect::default();
+        if unsafe { GetWindowRect(h, &mut r) } == 0 { continue }
+        let at = r.l == -20000 && r.t == -20000;
+        let sized = size.is_none_or(|(w, ht)| r.r - r.l == w as i32 && r.b - r.t == ht as i32);
+        if !(at && sized) {
             unsafe {
                 match size {
                     Some((w, ht)) => {

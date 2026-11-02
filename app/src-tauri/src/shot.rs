@@ -4,7 +4,7 @@
 
 #[repr(C)]
 #[derive(Default)]
-struct Rect { l: i32, t: i32, r: i32, b: i32 }
+pub(crate) struct Rect { pub l: i32, pub t: i32, pub r: i32, pub b: i32 }
 
 #[repr(C)]
 struct BitmapInfo {
