@@ -323,8 +323,27 @@ fn log(line: &str) {
     }
 }
 
+/// Is a gate for this rollout still running (its gate.py, tagged rel<id>-)?
+fn gate_alive(id: u64) -> bool {
+    let tag = format!("rel{id}-");
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always));
+    sys.processes().values().any(|p| {
+        let cmd: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        cmd.iter().any(|a| a.ends_with("gate.py")) && cmd.iter().any(|a| a.starts_with(&tag))
+    })
+}
+
 fn tick() -> Result<(), String> {
     watch_crashes();
+    // The worker runs one rollout at a time inside tick, so a rollout still marked gating here was left by an
+    // Obelisk that closed (or updated) mid-gate: nobody will read its result. Once its gate.py is gone, queue it again.
+    let orphans: Vec<u64> = load().rollouts.iter().filter(|o| o.state == "gating").map(|o| o.id).collect();
+    for id in orphans {
+        if gate_alive(id) { continue }
+        set(id, "queued", "Obelisk restarted during the gate; gating again", |o| { o.retry_at = 0; o.attempts = o.attempts.saturating_sub(1) })?;
+        log(&format!("rollout {id}: requeued (left gating when Obelisk restarted)"));
+    }
     let next = with(|r| {
         let t = now();
         let kind = |o: &Rollout| r.builds.iter().find(|b| b.mod_id == o.mod_id && b.version == o.version).map(|b| b.kind.clone()).unwrap_or_default();
@@ -379,6 +398,11 @@ fn run(o: Rollout) -> Result<(), String> {
         let lf = log_file.to_string_lossy().into_owned();
         if !ran {
             let why = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("the gate didn't start").to_string();
+            // Someone else's game in the gate copy isn't this build's fault: wait and try again without using up a try.
+            if why.contains("a game is running in the gate copy") {
+                return set(o.id, "queued", "waiting to gate: a game is running in the gate copy", |o| {
+                    o.retry_at = now() + 300; o.attempts = o.attempts.saturating_sub(1); o.log = lf });
+            }
             if o.attempts + 1 >= MAX_ATTEMPTS {
                 notice(&b, &p, &format!("gate couldn't start after {MAX_ATTEMPTS} tries: {why}"));
                 return set(o.id, "failed", &format!("the gate couldn't start: {why}"), |o| o.log = lf);
