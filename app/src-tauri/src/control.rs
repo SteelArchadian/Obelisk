@@ -1848,7 +1848,24 @@ fn source_file(copy: &str) -> PathBuf {
 /// from the bench's play profile, which is where copies are made from.
 fn copy_source(copy: &str) -> Profile {
     std::fs::read(source_file(copy)).ok().and_then(|b| serde_json::from_slice(&b).ok())
+        .or_else(|| gate_source(copy))
         .unwrap_or_else(|| play_dir().parent().map(Profile::of_instance).unwrap_or_default())
+}
+
+/// gate.py's copies (gate-<slug>) keep no source file: the pack is the instance whose folder name gives that slug
+/// (lowercase, every run of other characters one '-'), so its Java and JVM args are used, not the play pack's.
+fn gate_source(copy: &str) -> Option<Profile> {
+    let slug_of = |name: &str| {
+        let mut out = String::new();
+        for c in name.to_lowercase().chars() {
+            if c.is_ascii_alphanumeric() { out.push(c) } else if !out.ends_with('-') { out.push('-') }
+        }
+        out.trim_matches('-').to_string()
+    };
+    let want = copy.strip_prefix("gate-")?;
+    let data = prism::data_dir();
+    let dir = prism::instances_dir(&data);
+    prism::list_instances(&data).into_iter().find(|i| slug_of(&i.id) == want).map(|i| Profile::of_instance(&dir.join(&i.id)))
 }
 
 /// Java 25 for A/B runs: the newest <bench>\java\jdk-25* folder.
