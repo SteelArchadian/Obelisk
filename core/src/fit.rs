@@ -203,7 +203,10 @@ pub fn check(meta: &Meta, pack: &Pack, replacing: &[String]) -> Vec<Problem> {
         match (d.rule, have) {
             (Rule::Required, None) => out.push(Problem::Missing { id: d.id.clone(), range: d.range.clone() }),
             (Rule::Required, Some(v)) => {
-                if !v.is_empty() && !satisfies(&v, &d.range, &meta.kind) {
+                // NeoForge loads a 1.21.1 jar that says "[1.21, 1.21.1)" (JEI, Iris, More Culling, Seamless Sleep do; the
+                // Test Dummy gate passes with JEI's), so a Minecraft upper bound counts as inclusive there.
+                let neo_mc = d.id == "minecraft" && loader == "neoforge" && satisfies(&v, &d.range.replace(')', "]"), &meta.kind);
+                if !v.is_empty() && !satisfies(&v, &d.range, &meta.kind) && !neo_mc {
                     if builtin.is_some() && matches!(d.id.as_str(), "minecraft" | "neoforge" | "forge" | "fabricloader") {
                         let what = if d.id == "minecraft" { "Minecraft" } else { "the loader" };
                         out.push(Problem::Unloadable(format!("it needs {what} {}, and the pack has {v}", d.range)));
@@ -389,6 +392,20 @@ mod tests {
         let yung = read(std::io::Cursor::new(jar(&[("META-INF/neoforge.mods.toml",
             "modLoader=\"javafml\"\n[[mods]]\nmodId=\"yungscavebiomes\"\nversion=\"3.1.1\"\n[[dependencies.yungscavebiomes]]\nmodId=\"yungsapi\"\ntype=\"required\"\nversionRange=\"[5.1,)\"\n")]))).unwrap();
         assert_eq!(check(&yung, &pack, &[]), vec![Problem::Missing { id: "yungsapi".into(), range: "[5.1,)".into() }]);
+        // 2b. NeoForge doesn't hold a 1.21.1 jar to an exclusive "[1.21, 1.21.1)" (JEI 19.51 loads like that); a range
+        // that starts above the pack still refuses.
+        let mc = |r: &str| read(std::io::Cursor::new(jar(&[("META-INF/neoforge.mods.toml", &*format!(
+            "modLoader=\"javafml\"
+[[mods]]
+modId=\"jei\"
+version=\"19.64\"
+[[dependencies.jei]]
+modId=\"minecraft\"
+type=\"required\"
+versionRange=\"{r}\"
+"))]))).unwrap();
+        assert!(check(&mc("[1.21, 1.21.1)"), &pack, &[]).is_empty());
+        assert!(matches!(check(&mc("[1.21.2,)"), &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
         // 3. No modLoader line.
         let towers = read(std::io::Cursor::new(jar(&[("META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"structory_towers\"\nversion=\"1.0.17\"\n")]))).unwrap();
         assert!(matches!(check(&towers, &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
