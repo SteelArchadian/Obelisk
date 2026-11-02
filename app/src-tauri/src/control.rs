@@ -1330,6 +1330,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     // test_world: a custom world built for this run (flat layers, border, platform, scripted events), then opened.
     let built;
+    let mut build_world: Option<(Value, u64)> = None;
     let args_world = match args.get("test_world").filter(|v| !v.is_null()) {
         Some(spec) => {
             if s(args, "world").is_some() || s(args, "new_world").is_some() {
@@ -1338,7 +1339,11 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
             if game_running_in(&dir) {
                 return Err(format!("a game is already running in {name}"));
             }
-            let (save, hold) = prism::testworld::build(&dir, "1.21.1", spec, now())?;
+            // Only planned here: the world is built once the run holds the bench lock, since building one clears
+            // the copy's earlier test worlds and a queued run must not pull the world from under a running one.
+            let stamp = now();
+            let (save, hold) = prism::testworld::plan(spec, stamp)?;
+            build_world = Some((spec.clone(), stamp));
             built = save;
             // The autobench stays in the world this long, so the events get to run.
             if !extra.iter().any(|a| a.starts_with("-Dspeedloader.hold=") || a.starts_with("-Doptimal.hold=")) {
@@ -1443,14 +1448,15 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc));
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
     Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc,
         "preset": crosspc.then_some(CROSSPC) }))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, java: String, cmd: Vec<String>,
-    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool) {
+    mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
+    build_world: Option<(Value, u64)>) {
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
@@ -1488,6 +1494,9 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let caps = std::sync::Mutex::new(None);
     let run_set = std::sync::Mutex::new(None);
     let result = (|| -> Result<String, String> {
+        if let Some((spec, stamp)) = &build_world {
+            prism::testworld::build(&dir, "1.21.1", spec, *stamp)?;
+        }
         swap.apply()?;
         // Test rules: harness jar (no mouse grab, no focus), muted, keeps running unfocused.
         let has_harness = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()

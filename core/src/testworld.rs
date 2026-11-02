@@ -192,6 +192,12 @@ fn hold_of(s: &Spec) -> u32 {
     })
 }
 
+/// Check a spec without writing anything; returns its save folder name and hold (what `build` will return).
+pub fn plan(v: &Value, stamp: u64) -> Result<(String, u32), String> {
+    let spec = parse(v)?;
+    Ok((format!("{PREFIX}{stamp}"), hold_of(&spec)))
+}
+
 /// Build the save in `<copy>/saves/<PREFIX><stamp>`; returns its folder name and how many seconds the game
 /// should stay in it. Earlier test worlds go first.
 pub fn build(copy: &Path, minecraft: &str, v: &Value, stamp: u64) -> Result<(String, u32), String> {
