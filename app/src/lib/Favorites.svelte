@@ -3,6 +3,7 @@
   // install it there). Removed shows what was un-hearted in the last day, newest first, so a slip can be undone.
   import { pushOverlay } from "./state.svelte";
   import { typeName } from "./api";
+  import { projectUrl, authorUrl } from "./links";
   import InstallButton from "./InstallButton.svelte";
   import { favorites, removedNewestFirst, toggleFavorite, type Fav } from "./favstore.svelte";
 
@@ -40,7 +41,7 @@
       <div class="item">
         <button class="open" onclick={() => pushOverlay({ kind: "project", hit: f.hit })} title="Open its page">
           <span class="ic">{#if f.hit.icon_url}<img src={f.hit.icon_url} alt="" loading="lazy" />{/if}</span>
-          <span class="txt"><strong>{f.hit.title}</strong><small>{f.hit.author ? `by ${f.hit.author} · ` : ""}{showRemoved ? `removed ${since(f.removedMs ?? 0)}` : `saved ${since(f.addedMs)}`}</small></span>
+          <span class="txt"><strong data-link={projectUrl(f.hit)} data-link-label="link">{f.hit.title}</strong><small>{#if f.hit.author}<span data-link={authorUrl(f.hit)} data-link-label="author link">by {f.hit.author}</span> · {/if}{showRemoved ? `removed ${since(f.removedMs ?? 0)}` : `saved ${since(f.addedMs)}`}</small></span>
         </button>
         <span class="chip">{typeName(f.hit.project_type)}</span>
         {#if !showRemoved}<InstallButton hit={f.hit} />{/if}

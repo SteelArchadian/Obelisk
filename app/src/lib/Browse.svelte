@@ -2,6 +2,7 @@
   import { settings } from "./settings.svelte";
   import { onMount, tick } from "svelte";
   import { api, compact, ago, envLabel, initials, versionsLabel, TYPES, type Hit, type Tags, type ProjectType } from "./api";
+  import { projectUrl, authorUrl } from "./links";
   import { app, pushOverlay } from "./state.svelte";
   import { tagsOnce, loadersOf as loaderOf, cap, isInstalled } from "./install";
   import { cfSearchAvailable, cfToHit, mergeHits } from "./cf";
@@ -238,7 +239,7 @@
           <button class="tilecard" onclick={() => open(h)}>
             <div class="art">{#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" decoding="async" />{:else}<span class="ini">{initials(h.title)}</span>{/if}</div>
             <span class="tile-src"><SourceBadges hit={h} /></span>
-            <strong>{h.title}</strong><small>By {h.author}</small>
+            <strong data-link={projectUrl(h)} data-link-label="link">{h.title}</strong><small data-link={authorUrl(h)} data-link-label="author link">By {h.author}</small>
           </button>
         {/each}
       </div>
@@ -250,8 +251,8 @@
           </button>
           <div class="body">
             <div class="title-row">
-              <button class="title" onclick={() => open(h)}>{h.title}</button>
-              <span class="by">by {h.author}</span>
+              <button class="title" onclick={() => open(h)} data-link={projectUrl(h)} data-link-label="link">{h.title}</button>
+              <span class="by" data-link={authorUrl(h)} data-link-label="author link">by {h.author}</span>
               <SourceBadges hit={h} />
             </div>
             {#if view === "list"}<p class="desc">{h.description}</p>{/if}

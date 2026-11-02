@@ -379,15 +379,18 @@ impl Client {
         let folder = folder_for(&req.project_type).ok_or_else(|| format!("can't install {} into an instance yet", req.project_type))?;
         // Only jars in mods/ answer to the loader; resource packs, shaders and data packs aren't checked.
         let checking = folder == "mods";
-        let pack = if checking { crate::fit::pack(&game.join(folder), loader, &crate::loader_version_of(game), mc) } else { Default::default() };
+        let pack = crate::fit::pack(&game.join("mods"), loader, &crate::loader_version_of(game), mc);
         let by_project: HashMap<&str, &Installed> = existing.iter().map(|i| (i.project_id.as_str(), i)).collect();
         let ids_of = |i: Option<&Installed>| i.map(|i| crate::dupes::own_ids(&game.join(&i.kind).join(&i.file_name))).unwrap_or_default();
         let ctx = Ctx { project_type: &req.project_type, loader: &use_loader, mc, pack: &pack, checking };
+        // A dependency is looked up as its own kind: a resource pack can need a mod (Hyper Punchy needs Punchy!).
+        let mod_ctx = Ctx { project_type: "mod", checking: true, ..ctx };
 
         let old_root = by_project.get(req.project_id.as_str()).copied();
         let mut root = self.choose(&ctx, &req.project_id, req.version_id.as_deref(), None, &ids_of(old_root))?
             .ok_or("nothing to install")?;
-        root.replaces = old_root.cloned();
+        // A slug in the request still finds the installed copy by its project id.
+        root.replaces = old_root.or_else(|| by_project.get(root.v.project_id.as_str()).copied()).cloned();
         let mut plan = vec![root];
         let mut planned: HashSet<String> = HashSet::from([req.project_id.clone()]);
         let mut soft = Vec::new();
@@ -407,8 +410,16 @@ impl Client {
                     let have = by_project.get(dep.as_str()).copied();
                     // Already in the pack: brought up to the newest version for this game version and loader,
                     // since a new mod is usually built against the newest of its libraries.
-                    let pick = self.choose(&ctx, &dep, None, have.map(|i| i.version_id.as_str()), &ids_of(have))
-                        .map_err(|e| format!("{} needs another mod: {e}", plan[at].name))?;
+                    let info = self.project(&dep)?;
+                    let kind = info["project_type"].as_str().unwrap_or("mod").to_string();
+                    let other = Ctx { project_type: &kind, checking: false, ..ctx };
+                    let dep_ctx = match kind.as_str() {
+                        "mod" => &mod_ctx,
+                        k if k == req.project_type => &ctx,
+                        _ => &other,
+                    };
+                    let pick = self.choose(dep_ctx, &dep, None, have.map(|i| i.version_id.as_str()), &ids_of(have))
+                        .map_err(|e| format!("{} needs {}: {e}", plan[at].name, info["title"].as_str().unwrap_or("another mod")))?;
                     if let Some(mut p) = pick {
                         p.replaces = have.cloned();
                         p.dep = true;
@@ -430,13 +441,13 @@ impl Client {
                                 continue;
                             }
                             let found = match &problem {
-                                Problem::Missing { .. } => self.find_mod(&ctx, id)?,
+                                Problem::Missing { .. } => self.find_mod(&mod_ctx, id)?,
                                 _ => tracked_owner(game, folder, existing, id),
                             };
                             let pick = match found {
                                 Some(project) if !planned.contains(&project) => {
                                     let have = by_project.get(project.as_str()).copied();
-                                    let p = self.choose(&ctx, &project, None, have.map(|i| i.version_id.as_str()), &ids_of(have))?;
+                                    let p = self.choose(&mod_ctx, &project, None, have.map(|i| i.version_id.as_str()), &ids_of(have))?;
                                     planned.insert(project);
                                     p.map(|mut p| { p.replaces = have.cloned(); p.dep = true; p })
                                 }
@@ -465,11 +476,12 @@ impl Client {
             return Err(format!("{CONFIRM}{}", soft.join("\n")));
         }
 
-        let dir = game.join(folder);
-        fs::create_dir_all(dir.join(".index")).map_err(|e| e.to_string())?;
         let mut have = None;
         let mut done = Vec::new();
         for p in plan {
+            let folder = p.folder;
+            let dir = game.join(folder);
+            fs::create_dir_all(dir.join(".index")).map_err(|e| e.to_string())?;
             if let Some(old) = &p.replaces {
                 crate::delete_content(game, &old.kind, &old.file_name, |f| fs::remove_file(f).map_err(|e| e.to_string()))?;
             }
@@ -503,11 +515,13 @@ impl Client {
                 vs
             }
         };
-        if candidates.is_empty() {
-            return Err(format!("{project} has no version for Minecraft {} / {}", ctx.mc, ctx.loader));
-        }
         let info = self.project(project)?;
         let name = info["title"].as_str().unwrap_or(project).to_string();
+        if candidates.is_empty() {
+            let on = if ctx.project_type == "mod" { format!(" / {}", ctx.loader) } else { String::new() };
+            return Err(format!("{name} has no version for Minecraft {}{on}", ctx.mc));
+        }
+        let folder = folder_for(ctx.project_type).ok_or_else(|| format!("can't install {} ({}) into an instance yet", name, ctx.project_type))?;
         let slug = safe_slug(info["slug"].as_str().unwrap_or(project));
         let mut why = Vec::new();
         for v in candidates {
@@ -523,7 +537,7 @@ impl Client {
             let refused = meta.as_ref().and_then(|m| crate::fit::check(m, ctx.pack, replacing).into_iter().find(|p| matches!(p, crate::fit::Problem::Unloadable(_))));
             match refused {
                 Some(p) => why.push(p.describe(&format!("{name} {}", v.version_number))),
-                None => return Ok(Some(Pick { v, file, bytes, name, slug, meta, replaces: None, dep: false })),
+                None => return Ok(Some(Pick { v, file, bytes, name, slug, meta, replaces: None, dep: false, folder })),
             }
         }
         Err(match why.len() {
@@ -590,6 +604,8 @@ struct Pick {
     meta: Option<crate::fit::Meta>,
     replaces: Option<Installed>,
     dep: bool,
+    /// Where it goes: a dependency can be another kind than what was asked for.
+    folder: &'static str,
 }
 
 /// Does something already planned provide this mod id in a version the range accepts?
@@ -752,6 +768,19 @@ mod tests {
         let now = c.installed(tmp.path(), &cache).unwrap();
         assert_eq!(now.len(), names.len());
         assert!(now.iter().any(|i| i.version_id == older.id));
+    }
+
+    #[test]
+    #[ignore] // live network: a resource pack whose required dependency is a mod
+    fn live_resource_pack_needs_a_mod() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = Client::new().unwrap();
+        // Hyper Punchy (resource pack) requires Punchy! (mod).
+        let req = InstallRequest { project_id: "hyper-punchy".into(), project_type: "resourcepack".into(), ..Default::default() };
+        let names = c.install(tmp.path(), &req, "NeoForge", "1.21.1", &[]).unwrap();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert_eq!(crate::list_content(tmp.path(), "resourcepacks").len(), 1);
+        assert_eq!(crate::list_content(tmp.path(), "mods").len(), 1);
     }
 
     #[test]

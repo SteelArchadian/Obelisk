@@ -4,6 +4,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { installDevMock } from "$lib/devmock";
+  import LinkMenu from "$lib/LinkMenu.svelte";
   import "@fontsource/pixelify-sans/500.css";
   import "@fontsource/pixelify-sans/400.css";
   import "@fontsource/pixelify-sans/600.css";
@@ -438,6 +439,7 @@
     </div>
   </main>
 </div>
+<LinkMenu />
 
 <InstallDialogs />
 <ProfileDialogs />

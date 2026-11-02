@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { untrack } from "svelte";
   import { crisp } from "./crisp";
+  import { projectUrl, authorUrl } from "./links";
   import { api, compact, ago, versionsLabel, type Hit, type Version } from "./api";
   import { app, popOverlay, closeOverlays, openBrowse, pushOverlay, toastError } from "./state.svelte";
   import { cap, install, isInstalled, linkTarget, openProjectById } from "./install";
@@ -224,8 +225,8 @@
     <div class="icon">{#if hit.icon_url}<img src={hit.icon_url} alt="" />{/if}</div>
     <div class="info">
       <div class="row1">
-        <h2>{hit.title}</h2>
-        {#if author}<button class="by" onclick={openAuthor}>by {author}</button>{/if}
+        <h2 data-link={siteLinks.modrinth ?? siteLinks.curseforge ?? projectUrl(hit)} data-link-label="link">{hit.title}</h2>
+        {#if author}<button class="by" onclick={openAuthor} data-link={authorUrl({ project_id: hit.project_id, author })} data-link-label="author link">by {author}</button>{/if}
         <SourceBadges hit={siteHit} big links={siteLinks} />
         <div class="spacer"></div>
         {#if mr.account && mrId}

@@ -130,7 +130,7 @@
   let sortAsc = $state(true);
   let selected = $state<Set<string>>(new Set());
   let confirmDelete = $state<Item[] | null>(null);
-  let menu = $state<{ item: Item; x: number; y: number } | null>(null);
+  let menu = $state<{ item: Item; x: number; y: number; author?: boolean } | null>(null);
   let configsFor = $state<Item | null>(null);
   let trash = $state<TrashEntry[]>([]);
   /** Show this profile's trash in place of the content list. */
@@ -565,6 +565,40 @@
   };
 
   /** The author's page: Modrinth owner inside Obelisk, CurseForge author in the browser. */
+  /** The item's page on its site, if it's known to come from one. */
+  function itemUrl(item: Item): string | null {
+    const f = infoOf(item);
+    let id = item.source === "modrinth" && item.projectId ? item.projectId
+      : f?.provider === "modrinth" ? f.projectId : f?.provider === "curseforge" ? `cf:${f.projectId}` : null;
+    if (!id) for (const [pid, inst] of app.installed) if (inst.kind === kind && inst.fileName === item.fileName) { id = pid; break; }
+    if (!id) return null;
+    return id.startsWith("cf:") ? `https://www.curseforge.com/projects/${id.slice(3)}` : `https://modrinth.com/project/${id}`;
+  }
+
+  /** The author's page on the item's site (Modrinth: the project's owner). */
+  async function authorUrl(item: Item): Promise<string | null> {
+    const f = infoOf(item);
+    if (f?.provider === "modrinth") {
+      const m = await api.members(f.projectId);
+      const owner = m.find((x) => x.role === "Owner") ?? m[0];
+      return owner ? `https://modrinth.com/user/${encodeURIComponent(owner.user.username)}` : null;
+    }
+    if (f?.provider === "curseforge") {
+      const a = (await api.cfProject(Number(f.projectId))).project.authors?.[0];
+      return a ? `https://www.curseforge.com/members/${encodeURIComponent(a.name)}/projects` : null;
+    }
+    return null;
+  }
+
+  async function copyUrl(url: Promise<string | null> | string | null, what: string, name: string) {
+    try {
+      const u = await url;
+      if (!u) return toast(`No ${what} found for ${name}.`);
+      await navigator.clipboard.writeText(u);
+      toast(`Copied the ${what}.`);
+    } catch (e) { toastError(e); }
+  }
+
   async function openAuthor(item: Item) {
     const f = infoOf(item);
     try {
@@ -867,7 +901,7 @@
             {@const f = infoOf(item)}
             {@const src = item.source === "local" && f?.provider ? f.provider : item.source}
             {@const when = viewTrash || dateMode === "installed" ? item.installedMs : item.modifiedMs}
-            <div class="row" data-key={keyOf(item)} class:off={!item.enabled} class:picked={selected.has(keyOf(item))} role="row" tabindex="-1" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); dateMenu = false; menu = { item, x: e.clientX, y: e.clientY }; }}>
+            <div class="row" data-key={keyOf(item)} class:off={!item.enabled} class:picked={selected.has(keyOf(item))} role="row" tabindex="-1" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); dateMenu = false; menu = { item, x: e.clientX, y: e.clientY, author: !!(e.target as HTMLElement).closest(".author") }; }}>
               <span><input type="checkbox" checked={selected.has(item.trashId ?? item.fileName)} onchange={() => toggleRow(item.trashId ?? item.fileName)} aria-label="Select {item.name}" /></span>
               <div class="name">
                 {#if icons[item.fileName] || f?.iconUrl}<img class="thumb" use:crisp src={icons[item.fileName] || f?.iconUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="thumb">{initials(item.name)}</div>{/if}
@@ -952,6 +986,8 @@
   {@const m = menu}
   <div class="ctx" style:left="{Math.min(m.x, innerWidth - 220)}px" style:top="{Math.min(m.y, innerHeight - 220)}px" role="menu" tabindex="-1"
     onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+    {#if m.author}<button onclick={() => { const it = m.item; menu = null; copyUrl(authorUrl(it), "author link", it.name); }}>Copy author link</button>{/if}
+    <button onclick={() => { const it = m.item; menu = null; copyUrl(itemUrl(it), "link", it.name); }}>Copy link</button>
     <button onclick={() => { const it = m.item; menu = null; openItem(it); }}>Open project page</button>
     {#if kind === "mods"}<button onclick={() => { const it = m.item; menu = null; configsFor = it; }}>Edit configs</button>{/if}
     <button onclick={() => { const it = m.item; menu = null; setEnabled(it, !it.enabled); }}>{m.item.enabled ? "Disable" : "Enable"}</button>
