@@ -588,7 +588,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             } else {
                 let cf = cf.ok_or("no CurseForge API key in Obelisk's Settings")?;
                 let (m, f) = (info.project_id.parse().map_err(|_| "bad project id")?, up.id.parse().map_err(|_| "bad file id")?);
-                if cf.replace(&dir, &info.kind, file, m, f)?.is_some() {
+                if cf.replace(&dir, &info.kind, file, m, f, &loader, &mc)?.is_some() {
                     return Err("CurseForge only allows this file on its website; ask the user".into());
                 }
             }

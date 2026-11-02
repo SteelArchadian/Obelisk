@@ -282,15 +282,28 @@ impl Client {
 
     /// Replace an installed file with another file of the same project (an update).
     /// Returns Ok(None) when done, Ok(Some(file)) when the new file must be downloaded by hand.
-    pub fn replace(&self, game: &Path, kind: &str, old_file: &str, mod_id: u64, file_id: u64) -> Result<Option<Value>, String> {
+    pub fn replace(&self, game: &Path, kind: &str, old_file: &str, mod_id: u64, file_id: u64, loader: &str, mc: &str) -> Result<Option<Value>, String> {
+        crate::check_name(kind, old_file)?;
         let project = self.project(mod_id)?;
         let file = self.file(mod_id, file_id)?;
         if file["downloadUrl"].as_str().is_none_or(|u| u.is_empty()) {
             return Ok(Some(file));
         }
-        crate::delete_content(game, kind, old_file, |p| fs::remove_file(p).map_err(|e| e.to_string()))?;
+        // The new file is checked against the pack (a newer NeoForge than it has, say) before the old one goes.
+        let pack = (kind == "mods").then(|| crate::fit::pack(&game.join("mods"), loader, &crate::loader_version_of(game), mc));
+        let same_name = file["fileName"].as_str() == Some(old_file);
+        if same_name {
+            for p in crate::index_files_for(&game.join(kind), old_file) { let _ = fs::remove_file(p); }
+        }
         // An update swaps one file for its own newer one: no duplicate check (an empty index).
-        self.place(game, &project, &file, kind, &mut Some(Default::default()), None)?;
+        match self.place(game, &project, &file, kind, &mut Some(Default::default()), pack.as_ref())? {
+            Placed::Unfit(why) => return Err(why),
+            Placed::Blocked => return Ok(Some(file)),
+            _ => {}
+        }
+        if !same_name {
+            crate::delete_content(game, kind, old_file, |p| fs::remove_file(p).map_err(|e| e.to_string()))?;
+        }
         Ok(None)
     }
 

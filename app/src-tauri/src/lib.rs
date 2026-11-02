@@ -1077,7 +1077,7 @@ async fn apply_update(mr: tauri::State<'_, Mr>, instance_id: String, info: serde
         }
         let cf = cf_required()?;
         let (mod_id, file_id) = (project_id.parse().map_err(|_| "bad project id")?, update_id.parse().map_err(|_| "bad file id")?);
-        match cf.replace(&game, &kind, &file_name, mod_id, file_id)? {
+        match cf.replace(&game, &kind, &file_name, mod_id, file_id, &inst.loader, &inst.minecraft)? {
             None => Ok(None),
             Some(file) => {
                 let project = cf.project(mod_id)?;
