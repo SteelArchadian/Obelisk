@@ -418,8 +418,13 @@ impl Client {
                         k if k == req.project_type => &ctx,
                         _ => &other,
                     };
-                    let pick = self.choose(dep_ctx, &dep, None, have.map(|i| i.version_id.as_str()), &ids_of(have))
-                        .map_err(|e| format!("{} needs {}: {e}", plan[at].name, info["title"].as_str().unwrap_or("another mod")))?;
+                    let pick = match self.choose(dep_ctx, &dep, None, have.map(|i| i.version_id.as_str()), &ids_of(have)) {
+                        // One file for several loaders lists every loader's needs (Little Structures: Fabric API, for
+                        // Fabric only). Nothing for this loader means it's another loader's; a mod jar's own list is
+                        // still checked below, so a real gap is caught there.
+                        Err(e) if plan[at].v.loaders.len() > 1 && e.contains(" has no version for ") => continue,
+                        r => r.map_err(|e| format!("{} needs {}: {e}", plan[at].name, info["title"].as_str().unwrap_or("another mod")))?,
+                    };
                     if let Some(mut p) = pick {
                         p.replaces = have.cloned();
                         p.dep = true;
@@ -781,6 +786,16 @@ mod tests {
         assert_eq!(names.len(), 2, "{names:?}");
         assert_eq!(crate::list_content(tmp.path(), "resourcepacks").len(), 1);
         assert_eq!(crate::list_content(tmp.path(), "mods").len(), 1);
+    }
+
+    #[test]
+    #[ignore] // live network: one jar for every loader that lists Fabric API (needed on Fabric only)
+    fn live_multi_loader_skips_other_loaders_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = Client::new().unwrap();
+        let req = InstallRequest { project_id: "oi0lZhzZ".into(), project_type: "mod".into(), ..Default::default() };
+        let names = c.install(tmp.path(), &req, "NeoForge", "1.21.1", &[]).unwrap();
+        assert_eq!(names, vec!["Little Structures".to_string()]);
     }
 
     #[test]

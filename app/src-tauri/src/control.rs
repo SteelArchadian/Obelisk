@@ -1388,7 +1388,18 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         // capture ends, which cut this one off at the first join.
         extra.push(format!("-XX:StartFlightRecording=name=obelisk,settings=profile,class-loading=true{roots},flush-interval=1s,filename={out}/obelisk-{stamp}.jfr,dumponexit=true"));
     }
-    let swap = ModSwap::plan(&dir, args)?;
+    let mut swap = ModSwap::plan(&dir, args)?;
+    // Benchmark run conditions (user, 2026-11-02): no Dynamic FPS (it throttles an unfocused window) and no Absolute
+    // AFK Cinema, both set aside for the run only; the game runs at the monitor's native resolution.
+    if args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false) {
+        for e in std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten() {
+            let f = e.file_name().to_string_lossy().into_owned();
+            let low = f.to_ascii_lowercase();
+            if low.ends_with(".jar") && PERF_OFF.iter().any(|m| low.starts_with(m)) && !swap.disable.contains(&f) {
+                swap.disable.push(f);
+            }
+        }
+    }
     let hooks = plan_hooks(args)?;
     if game_running_in(&dir) {
         return Err(format!("a game is already running in {name}"));
@@ -1406,6 +1417,11 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         },
     }
     profile.apply(&mut cmd);
+    if args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if let Some((w, h)) = native_resolution() {
+            cmd.extend(["--width".into(), w.to_string(), "--height".into(), h.to_string()]);
+        }
+    }
     if prism::java::at(Path::new(&java)).is_some_and(|j| j.major >= 24) {
         cmd.retain(|a| a != "-XX:+ZGenerational"); // ZGC is generational-only from Java 24
     }
@@ -1512,6 +1528,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         update(&jobs, id, |j| { j.state = "running".into(); j.pid = Some(pid); j.java = Some(java.clone()); });
         let t0 = Instant::now();
         let mut parked = std::collections::HashSet::new();
+        let prev_fg = foreground_window();
         let mut stopping: Option<Instant> = None;
         let mut window_ms = None;
         let mut watch = super::devrun::Sampler::new(pid, &dir, &runs, id, click_ms, super::devrun::jcmd_for(&java).ok());
@@ -1526,7 +1543,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 break format!("exited ({})", status.code().map(|c| c.to_string()).unwrap_or("?".into()));
             }
             if park {
-                park_windows(pid, &mut parked);
+                park_windows(pid, &mut parked, perf.then(native_resolution).flatten(), prev_fg);
             }
             if window_ms.is_none() && super::top_windows().iter().any(|w| w.1 == pid && w.2) {
                 let ms = prism::timeline::now_ms();
@@ -2040,17 +2057,62 @@ fn log_says_stopping(latest: &Path, since: SystemTime) -> bool {
     String::from_utf8_lossy(&buf).contains("Stopping!")
 }
 
-/// Beyond every monitor, at the bottom of the z-order, never activated (as gate.py does).
-fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>) {
+/// Mods set aside for a perf run (file names start with these).
+const PERF_OFF: [&str; 2] = ["dynamic-fps", "absolute-afk-cinema"];
+
+/// The primary monitor's resolution in real pixels (its current display mode, so DPI scaling doesn't shrink it).
+fn native_resolution() -> Option<(u32, u32)> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn EnumDisplaySettingsW(device: *const u16, mode: u32, dm: *mut u8) -> i32;
+    }
+    // DEVMODEW: dmSize (u16) at 68, dmPelsWidth/Height (u32) at 172/176.
+    let mut dm = [0u8; 220];
+    dm[68..70].copy_from_slice(&220u16.to_le_bytes());
+    if unsafe { EnumDisplaySettingsW(std::ptr::null(), u32::MAX /* ENUM_CURRENT_SETTINGS */, dm.as_mut_ptr()) } == 0 { return None }
+    let w = u32::from_le_bytes(dm[172..176].try_into().ok()?);
+    let h = u32::from_le_bytes(dm[176..180].try_into().ok()?);
+    (w >= 640 && h >= 480).then_some((w, h))
+}
+
+/// Beyond every monitor, at the bottom of the z-order, never activated (as gate.py does). With `size` (a perf run)
+/// the window also loses its frame and takes that size, so the game renders full screen's pixels off-screen. A test
+/// window that still ends up in front (the game shows itself focused) hands the foreground back to `prev`.
+fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, size: Option<(u32, u32)>, prev: isize) {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+        fn SetWindowLongPtrW(h: isize, index: i32, value: isize) -> isize;
+        fn GetForegroundWindow() -> isize;
+        fn SetForegroundWindow(h: isize) -> i32;
+        fn IsWindow(h: isize) -> i32;
     }
     for (h, p, vis, _, _) in super::top_windows() {
         if p == pid && vis && parked.insert(h) {
-            unsafe { SetWindowPos(h, 1, -20000, -20000, 0, 0, 0x0001 | 0x0010) };
+            unsafe {
+                match size {
+                    Some((w, ht)) => {
+                        // WS_POPUP | WS_VISIBLE: no caption or border, so the client area is the whole size.
+                        SetWindowLongPtrW(h, -16 /* GWL_STYLE */, (0x8000_0000u32 | 0x1000_0000) as i32 as isize);
+                        SetWindowPos(h, 1, -20000, -20000, w as i32, ht as i32, 0x0010 | 0x0020 /* NOACTIVATE | FRAMECHANGED */);
+                    }
+                    None => { SetWindowPos(h, 1, -20000, -20000, 0, 0, 0x0001 | 0x0010); }
+                }
+            }
         }
     }
+    unsafe {
+        let fg = GetForegroundWindow();
+        if prev != 0 && fg != prev && parked.contains(&fg) && IsWindow(prev) != 0 {
+            SetForegroundWindow(prev);
+        }
+    }
+}
+
+fn foreground_window() -> isize {
+    #[link(name = "user32")]
+    unsafe extern "system" { fn GetForegroundWindow() -> isize; }
+    unsafe { GetForegroundWindow() }
 }
 
 // ---------------------------------------------------------------- gate and copies
