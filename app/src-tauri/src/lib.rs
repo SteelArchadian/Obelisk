@@ -1077,7 +1077,7 @@ async fn apply_update(mr: tauri::State<'_, Mr>, instance_id: String, info: serde
         }
         let cf = cf_required()?;
         let (mod_id, file_id) = (project_id.parse().map_err(|_| "bad project id")?, update_id.parse().map_err(|_| "bad file id")?);
-        match cf.replace(&game, &kind, &file_name, mod_id, file_id, &inst.loader, &inst.minecraft)? {
+        match cf.replace(&game, &kind, &file_name, mod_id, file_id, info["current"].as_str().and_then(|c| c.parse().ok()).unwrap_or(0), &inst.loader, &inst.minecraft)? {
             None => Ok(None),
             Some(file) => {
                 let project = cf.project(mod_id)?;
@@ -1098,6 +1098,50 @@ fn manual(project: &serde_json::Value, file: &serde_json::Value, folder: &str, r
         index_toml: prism::curseforge::index_toml(project, file),
         replaces,
     }
+}
+
+/// A file CurseForge only serves on its own site: its page in an Obelisk window, so the user's Download click saves
+/// straight to Downloads (where `await_download` picks it up) without a trip to the browser. The window closes
+/// once the download is done.
+#[tauri::command]
+async fn cf_download_window(app: tauri::AppHandle, page: String) -> Result<(), String> {
+    use tauri::Manager;
+    const WINDOW: &str = "cf-download";
+    let url: tauri::Url = page.parse().map_err(|e| format!("{e}"))?;
+    if !url.host_str().is_some_and(|h| h == "www.curseforge.com" || h == "curseforge.com") {
+        return Err("not a curseforge.com page".into());
+    }
+    if let Some(w) = app.get_webview_window(WINDOW) {
+        let _ = w.navigate(url);
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let downloads = app.path().download_dir().map_err(|e| e.to_string())?;
+    let mut b = tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::External(url))
+        .title("Download from CurseForge").inner_size(1100.0, 820.0).center()
+        .on_download(move |webview, event| {
+            match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } => {
+                    // Into Downloads under its own name, no Save dialog.
+                    let name = destination.file_name().map(|n| n.to_os_string())
+                        .or_else(|| url.path_segments().and_then(|mut s| s.next_back()).map(Into::into));
+                    if let Some(name) = name { *destination = downloads.join(name); }
+                }
+                tauri::webview::DownloadEvent::Finished { success, .. } => {
+                    if success {
+                        if let Some(w) = webview.app_handle().get_webview_window(WINDOW) { let _ = w.close(); }
+                    }
+                }
+                _ => {}
+            }
+            true
+        });
+    if let Some(main) = app.get_webview_window("main") {
+        b = b.parent(&main).map_err(|e| e.to_string())?;
+    }
+    b.build().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Wait (in the background) for the user's browser download, then move it into the profile.
@@ -2228,7 +2272,7 @@ pub fn run() {
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, pc_overrides_get, pc_overrides_set, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_download_window, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, pc_overrides_get, pc_overrides_set, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

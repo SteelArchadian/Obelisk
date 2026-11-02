@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Hit, type ManualDownload, type ProjectType, type Version } from "./api";
@@ -91,7 +92,13 @@ export async function manualDownload(instanceId: string, job: ManualDownload, on
   }
   if (onDone) doneCallbacks.push(onDone);
   await api.awaitDownload(instanceId, job);
-  await openUrl(job.page);
-  toast(`${job.name}'s author only allows downloads on curseforge.com. Click Download there and Obelisk will finish the install.`);
+  // CurseForge's page in an Obelisk window; the browser only if that window can't open.
+  try {
+    await invoke("cf_download_window", { page: job.page });
+    toast(`${job.name}'s author only allows downloads on curseforge.com. Click Download in the window that opened and Obelisk will finish the install.`);
+  } catch {
+    await openUrl(job.page);
+    toast(`${job.name}'s author only allows downloads on curseforge.com. Click Download there and Obelisk will finish the install.`);
+  }
 }
 const doneCallbacks: (() => void)[] = [];

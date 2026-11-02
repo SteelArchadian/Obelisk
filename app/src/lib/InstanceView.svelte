@@ -180,7 +180,7 @@
   });
   const keyOf = (i: Item) => i.trashId ?? i.fileName;
   let allChecked = $derived(rows.length > 0 && rows.every((r) => selected.has(keyOf(r))));
-  let pending = $derived([...infos.values()].filter((f) => f.update && !pins.has(pinKey(f))));
+  let pending = $derived([...infos.values()].filter((f) => f.update && !pinnedInfo(f)));
   let pendingHere = $derived(pending.filter((f) => f.kind === kind));
   let total = $derived(content.mods.length + content.resourcepacks.length + content.shaderpacks.length);
 
@@ -304,7 +304,7 @@
       return;
     }
     // Direct downloads first; files that need the browser are opened one at a time afterwards.
-    list = list.filter((f) => !pins.has(pinKey(f)));
+    list = list.filter((f) => !pinnedInfo(f));
     const direct = list.filter((f) => !f.update!.blocked);
     const blocked = list.filter((f) => f.update!.blocked);
     for (const f of direct) await update(f, false);
@@ -382,10 +382,15 @@
     if (f?.provider && f.projectId) return `${f.provider}:${f.projectId}`;
     return (item?.fileName ?? f?.fileName ?? "").replace(/\.disabled$/, "");
   }
-  const isPinned = (item: Item) => pins.has(pinKey(infoOf(item), item));
+  /** Pinned by project or by file name (other tools write file names to pins.json). */
+  const pinnedInfo = (f: FileInfo, item?: Item) => pins.has(pinKey(f, item)) || pins.has(plain(item?.fileName ?? f.fileName));
+  const isPinned = (item: Item) => { const f = infoOf(item); return f ? pinnedInfo(f, item) : pins.has(pinKey(undefined, item)); };
   async function setPinned(items: Item[], want: boolean) {
     const next = new Set(pins);
-    for (const it of items) want ? next.add(pinKey(infoOf(it), it)) : next.delete(pinKey(infoOf(it), it));
+    for (const it of items) {
+      if (want) next.add(pinKey(infoOf(it), it));
+      else { next.delete(pinKey(infoOf(it), it)); next.delete(plain(it.fileName)); }
+    }
     pins = next;
     try {
       await invoke("set_pins", { instanceId: current.id, pins: [...next] });

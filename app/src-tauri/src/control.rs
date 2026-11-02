@@ -169,6 +169,7 @@ pub fn start(app: tauri::AppHandle) {
     if super::sandboxed() {
         return;
     }
+    std::thread::spawn(recover_swaps);
     let Ok(listener) = TcpListener::bind("127.0.0.1:0") else { return };
     let Ok(port) = listener.local_addr().map(|a| a.port()) else { return };
     let token = random_hex(32);
@@ -589,7 +590,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             } else {
                 let cf = cf.ok_or("no CurseForge API key in Obelisk's Settings")?;
                 let (m, f) = (info.project_id.parse().map_err(|_| "bad project id")?, up.id.parse().map_err(|_| "bad file id")?);
-                if cf.replace(&dir, &info.kind, file, m, f, &loader, &mc)?.is_some() {
+                if cf.replace(&dir, &info.kind, file, m, f, info.current.parse().unwrap_or(0), &loader, &mc)?.is_some() {
                     return Err("CurseForge only allows this file on its website; ask the user".into());
                 }
             }
@@ -1984,6 +1985,32 @@ fn save_names(dir: &Path) -> std::collections::HashSet<std::ffi::OsString> {
 }
 
 /// Per-run changes: jars in mods/ set aside, jars from the test bench added and TOML config keys set, all undone after the game exits.
+const SWAP_JOURNAL: &str = "swap-journal.json";
+
+/// Runs cut off by an Obelisk restart left their swaps in place (mods set aside, added jars, edited configs): put
+/// them back in every copy no game is running in.
+fn recover_swaps() {
+    for e in std::fs::read_dir(&tb().root).into_iter().flatten().flatten() {
+        let copy = e.path();
+        let journal = copy.join(".obelisk").join(SWAP_JOURNAL);
+        let Ok(bytes) = std::fs::read(&journal) else { continue };
+        if game_running_in(&copy) { continue }
+        let j: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        let paths = |k: &str| -> Vec<PathBuf> { j[k].as_array().into_iter().flatten().filter_map(|p| p.as_str()).map(PathBuf::from)
+            .filter(|p| p.starts_with(&copy)).collect() };
+        for p in paths("added") { let _ = std::fs::remove_file(p); }
+        for p in paths("off") { let _ = std::fs::rename(&p, p.with_extension("")); }
+        for c in j["configs"].as_array().into_iter().flatten() {
+            let (Some(path), Some(b)) = (c[0].as_str().map(PathBuf::from), c[1].as_array()) else { continue };
+            if !path.starts_with(&copy) { continue }
+            let b: Vec<u8> = b.iter().filter_map(|x| x.as_u64().map(|x| x as u8)).collect();
+            let _ = std::fs::write(path, b);
+        }
+        let _ = std::fs::remove_file(&journal);
+        audit("swap-recovered", &json!({ "copy": copy }), "put back after a restart");
+    }
+}
+
 #[derive(Default)]
 struct ModSwap {
     mods: PathBuf,
@@ -2062,7 +2089,17 @@ impl ModSwap {
             std::fs::write(path, text).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
             self.written.push(i);
         }
+        self.journal();
         Ok(())
+    }
+
+    /// What apply changed, on disk: if Obelisk restarts mid-run (an update) the next start puts it back.
+    fn journal(&self) {
+        let Some(copy) = self.mods.parent() else { return };
+        let configs: Vec<Value> = self.written.iter().map(|&i| json!([self.configs[i].0, self.configs[i].1])).collect();
+        let _ = std::fs::create_dir_all(copy.join(".obelisk"));
+        let _ = std::fs::write(copy.join(".obelisk").join(SWAP_JOURNAL),
+            serde_json::to_vec(&json!({ "off": self.off, "added": self.added, "configs": configs })).unwrap_or_default());
     }
 
     /// Undo everything apply did, even after a failed run.
@@ -2079,7 +2116,10 @@ impl ModSwap {
             let (path, bytes, _) = &self.configs[i];
             if std::fs::write(path, bytes).is_err() { bad.push(path.clone()); }
         }
-        if bad.is_empty() { Ok(()) } else { Err(format!("couldn't restore: {bad:?}")) }
+        if bad.is_empty() {
+            if let Some(copy) = self.mods.parent() { let _ = std::fs::remove_file(copy.join(".obelisk").join(SWAP_JOURNAL)); }
+            Ok(())
+        } else { Err(format!("couldn't restore: {bad:?}")) }
     }
 }
 

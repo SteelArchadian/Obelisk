@@ -282,7 +282,7 @@ impl Client {
 
     /// Replace an installed file with another file of the same project (an update).
     /// Returns Ok(None) when done, Ok(Some(file)) when the new file must be downloaded by hand.
-    pub fn replace(&self, game: &Path, kind: &str, old_file: &str, mod_id: u64, file_id: u64, loader: &str, mc: &str) -> Result<Option<Value>, String> {
+    pub fn replace(&self, game: &Path, kind: &str, old_file: &str, mod_id: u64, file_id: u64, current: u64, loader: &str, mc: &str) -> Result<Option<Value>, String> {
         crate::check_name(kind, old_file)?;
         let project = self.project(mod_id)?;
         let file = self.file(mod_id, file_id)?;
@@ -297,7 +297,32 @@ impl Client {
         }
         // An update swaps one file for its own newer one: no duplicate check (an empty index).
         match self.place(game, &project, &file, kind, &mut Some(Default::default()), pack.as_ref())? {
-            Placed::Unfit(why) => return Err(why),
+            // The newest doesn't load here (needs a newer NeoForge, say): the newest one between it and the
+            // installed file that does, if any.
+            Placed::Unfit(why) => {
+                let mut older: Vec<Value> = self.files(mod_id, mc, if kind == "mods" { loader } else { "" })?.into_iter()
+                    .filter(|f| f["id"].as_u64().is_some_and(|id| id > current && id < file_id))
+                    .filter(|f| f["downloadUrl"].as_str().is_some_and(|u| !u.is_empty()))
+                    .collect();
+                older.sort_by_key(|f| std::cmp::Reverse(f["id"].as_u64().unwrap_or(0)));
+                older.truncate(5);
+                let placed = older.iter().find_map(|f| {
+                    let same = f["fileName"].as_str() == Some(old_file);
+                    match self.place(game, &project, f, kind, &mut Some(Default::default()), pack.as_ref()) {
+                        Ok(Placed::Yes) => Some(Ok(same)),
+                        Err(e) => Some(Err(e)),
+                        _ => None,
+                    }
+                });
+                match placed {
+                    Some(Ok(same)) => {
+                        if !same { crate::delete_content(game, kind, old_file, |p| fs::remove_file(p).map_err(|e| e.to_string()))?; }
+                        return Ok(None);
+                    }
+                    Some(Err(e)) => return Err(e),
+                    None => return Err(why),
+                }
+            }
             Placed::Blocked => return Ok(Some(file)),
             _ => {}
         }

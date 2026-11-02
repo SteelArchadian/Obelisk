@@ -211,6 +211,13 @@ pub fn check(meta: &Meta, pack: &Pack, replacing: &[String]) -> Vec<Problem> {
         ("neoforge" | "forge", "fabric" | "quilt") => out.push(Problem::Unloadable(format!("it's a {} build", meta.kind))),
         _ => {}
     }
+    // NeoForge and Forge refuse a mod whose version doesn't start with a digit ("Illegal version number specified
+    // neoforge-1.0.1": Grand Teleport 1.0.1).
+    if matches!(meta.kind.as_str(), "neoforge" | "forge") && meta.kind == loader {
+        if let Some((_, v)) = meta.mods.iter().find(|(_, v)| !v.is_empty() && !v.contains("${") && !v.starts_with(|c: char| c.is_ascii_digit())) {
+            out.push(Problem::Unloadable(format!("its version \"{v}\" doesn't start with a number, so the loader rejects it")));
+        }
+    }
     let mine: Vec<&str> = meta.mods.iter().map(|(id, _)| id.as_str()).collect();
     for d in &meta.deps {
         if mine.contains(&d.id.as_str()) { continue }
@@ -443,6 +450,13 @@ version=\"0.116.15\"
         z.write_all(&inner).unwrap();
         let ffapi = read_bundle(&z.finish().unwrap().into_inner()).unwrap();
         assert!(matches!(check(&ffapi, &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
+        // 2d. A version that doesn't start with a digit (Grand Teleport 1.0.1's "neoforge-1.0.1").
+        let gt = read(std::io::Cursor::new(jar(&[("META-INF/neoforge.mods.toml", "modLoader=\"javafml\"
+[[mods]]
+modId=\"gtalike_teleport\"
+version=\"neoforge-1.0.1\"
+")]))).unwrap();
+        assert!(matches!(check(&gt, &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
         // 3. No modLoader line.
         let towers = read(std::io::Cursor::new(jar(&[("META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"structory_towers\"\nversion=\"1.0.17\"\n")]))).unwrap();
         assert!(matches!(check(&towers, &pack, &[]).as_slice(), [Problem::Unloadable(_)]));
