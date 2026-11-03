@@ -507,7 +507,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario"],
+            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -531,6 +531,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "play-status" => Ok(play_status()),
         "play-wait" => play_wait(args),
         "kill" => kill(args, jobs),
+        "game-test" => game_test(args, jobs),
         "game-query" | "game-cmd" | "game-scenario" => {
             let (dir, started) = game_of(args, jobs)?;
             super::game::command(cmd, args, &dir, started)
@@ -857,6 +858,53 @@ fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {
         }
         l = cv.wait_timeout(l, left).unwrap().0;
     }
+}
+
+/// One call for a whole test, so a chat spends one turn instead of a launch, waits, log reads and a kill: launch,
+/// wait until the player is in the world, run the steps (game.rs), quit at once, and return one compact result.
+fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
+    let mut la = args.clone();
+    let steps = la.as_object_mut().and_then(|o| o.remove("steps")).unwrap_or(json!([]));
+    let scenario_timeout = la.as_object_mut().and_then(|o| o.remove("scenario_timeout")).unwrap_or(json!(300));
+    // Stays in the world until the steps are done; the kill below ends it.
+    if ["test_world", "world", "new_world"].iter().all(|k| la.get(*k).is_none_or(Value::is_null)) {
+        la["test_world"] = json!({ "hold": 900 });
+    } else if let Some(tw) = la.get_mut("test_world").filter(|v| v.is_object()) {
+        if tw.get("hold").is_none() { tw["hold"] = json!(900) }
+    } else {
+        let jvm = la["jvm"].as_array().cloned().unwrap_or_default();
+        if !jvm.iter().any(|a| a.as_str().is_some_and(|a| a.contains(".hold="))) {
+            la["jvm"] = Value::Array(jvm.into_iter().chain([json!("-Dspeedloader.hold=900")]).collect());
+        }
+    }
+    let id = launch(&la, jobs)?["job"].as_u64().ok_or("launch gave no job")?;
+    let waited = wait(&json!({ "job": id, "until": "inWorld", "timeout": 1800 }), jobs)?;
+    let mut scenario = Value::Null;
+    if waited["state"] == "running" && waited["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "inWorld")) {
+        let (dir, started) = game_of(&json!({ "job": id }), jobs)?;
+        // The probe file appears once mods load; give a slow join a few seconds more.
+        let t0 = Instant::now();
+        let first = loop {
+            match super::game::command("game-query", &json!({}), &dir, started) {
+                Ok(q) => break Ok(q),
+                Err(e) if t0.elapsed() > Duration::from_secs(30) => break Err(e),
+                Err(_) => std::thread::sleep(Duration::from_secs(1)),
+            }
+        };
+        scenario = match first {
+            Ok(_) if steps.as_array().is_some_and(|s| !s.is_empty()) =>
+                super::game::command("game-scenario", &json!({ "steps": steps, "timeout": scenario_timeout }), &dir, started)
+                    .unwrap_or_else(|e| json!({ "ok": false, "error": e })),
+            Ok(q) => json!({ "ok": true, "query": q }),
+            Err(e) => json!({ "ok": false, "error": e }),
+        };
+        let _ = kill(&json!({ "job": id }), jobs);
+    }
+    let done = wait(&json!({ "job": id, "timeout": 120 }), jobs)?;
+    let stages: serde_json::Map<String, Value> = done["events"].as_array().into_iter().flatten()
+        .filter(|e| e["src"] == "log" || e["src"] == "obelisk")
+        .filter_map(|e| Some((e["event"].as_str()?.to_string(), e["t"].clone()))).collect();
+    Ok(json!({ "job": id, "state": done["state"], "detail": done["detail"], "stages": stages, "scenario": scenario }))
 }
 
 /// A running launch or gate job's game folder and start time, for the harness probe.
