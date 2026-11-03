@@ -1274,7 +1274,10 @@ fn game_command(dir: &Path, extra: &[String]) -> Result<(String, Vec<String>), S
         ("${launcher_version}", "1".into()), ("${classpath}", cp.join(";"))];
     let sub = |s: &str| subs.iter().fold(s.to_string(), |acc, (k, v)| acc.replace(k, v));
     let mut a: Vec<String> = ["-Xmx6000m", "-Xms256m", "-XX:+UseZGC", "-XX:+ZGenerational", "-Dvoxy.experimentalTemporalMdi=true",
-        "-Dtestharness.background=true"].iter().map(|s| s.to_string()).collect();
+        "-Dtestharness.background=true",
+        // Essential's stage1 loader still shows its update prompt when autoUpdate=false is ignored; a download
+        // address that refuses at once means there's never an update to offer (Crashaholic, 2026-11-02).
+        "-Dessential.download.url=http://127.0.0.1:9"].iter().map(|s| s.to_string()).collect();
     a.extend(extra.iter().cloned());
     for x in van.pointer("/arguments/jvm").and_then(|v| v.as_array()).into_iter().flatten() {
         if let Some(s) = x.as_str() {
