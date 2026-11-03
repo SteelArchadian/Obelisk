@@ -874,7 +874,9 @@ fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {
 fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let mut la = args.clone();
     let o = la.as_object_mut().ok_or("arguments must be an object")?;
-    let mut steps: Vec<Value> = match o.remove("preset").and_then(|p| p.as_str().map(String::from)) {
+    let preset = o.remove("preset").and_then(|p| p.as_str().map(String::from));
+    let dyno = preset.as_deref() == Some("dyno");
+    let mut steps: Vec<Value> = match preset.filter(|_| !dyno) {
         Some(p) => {
             let tests: Vec<String> = o.get("tests").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
             super::game::preset(&p, &tests)?
@@ -887,17 +889,40 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let background = o.remove("background").and_then(|b| b.as_bool()).unwrap_or(false);
     let mut jvm: Vec<Value> = o.get("jvm").and_then(|j| j.as_array().cloned()).unwrap_or_default();
     let has = |jvm: &[Value], k: &str| jvm.iter().any(|a| a.as_str().is_some_and(|a| a.contains(k)));
-    // A fresh world (Speed Loader makes it and deletes it after) unless the chat gave one.
-    if ["test_world", "world", "new_world"].iter().all(|k| o.get(*k).is_none_or(Value::is_null)) {
+    let copy = need(args, "copy")?.to_string();
+    let dir = readable(&copy)?;
+    let mods_named = |pre: &[&str]| -> Vec<String> {
+        std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| { let l = n.to_lowercase(); l.ends_with(".jar") && pre.iter().any(|p| l.starts_with(p)) }).collect()
+    };
+    if dyno {
+        // Block Dyno drives the run itself: its own temp world, its plan, then it quits the game (BlockDyno chat).
+        let mode = o.remove("mode").and_then(|m| m.as_str().map(String::from)).unwrap_or_else(|| "standard".into());
+        if !mode.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) { return Err("mode: a Block Dyno mode or plan name".into()) }
+        if !steps.is_empty() { return Err("preset dyno runs Block Dyno's own plan; give steps without it".into()) }
+        let jar = tb().root.join("blockdyno").join("build").join("libs").join("blockdyno-1.21.1-0.1.0.jar");
+        if !jar.is_file() { return Err(format!("Block Dyno's jar isn't at {}", jar.display())) }
+        if mods_named(&["blockdyno"]).is_empty() {
+            let mut add = o.get("add_mods").and_then(|a| a.as_array().cloned()).unwrap_or_default();
+            add.push(json!(jar.to_string_lossy()));
+            o.insert("add_mods".into(), Value::Array(add));
+        }
+        // It refuses runs capped by Dynamic FPS, and a crashed run's journal would make this one resume the old plan.
+        let mut off = o.get("disable_mods").and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        off.extend(mods_named(&["dynamic-fps", "dynamic_fps", "dynamicfps"]).into_iter().map(Value::from));
+        o.insert("disable_mods".into(), Value::Array(off));
+        let _ = std::fs::remove_file(dir.join("blockdyno").join("journal.json"));
+        jvm.push(json!(format!("-Dblockdyno.autorun={mode}")));
+        jvm.push(json!("-Dblockdyno.label=obelisk"));
+    } else if ["test_world", "world", "new_world"].iter().all(|k| o.get(*k).is_none_or(Value::is_null)) {
+        // A fresh world (Speed Loader makes it and deletes it after) unless the chat gave one.
         o.insert("new_world".into(), json!(format!("{}", now() % 1_000_000_007)));
     }
     if let Some(tw) = o.get_mut("test_world").filter(|v| v.is_object()) {
         if tw.get("hold").is_none() { tw["hold"] = json!(1800) }
-    } else if !has(&jvm, ".hold=") {
+    } else if !dyno && !has(&jvm, ".hold=") {
         jvm.push(json!("-Dspeedloader.hold=1800")); // stays in the world until the steps are done
     }
-    let copy = need(args, "copy")?.to_string();
-    let dir = readable(&copy)?;
     let lightning = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
         .any(|e| { let n = e.file_name().to_string_lossy().to_lowercase(); n.starts_with("lightning") && n.ends_with(".jar") });
     if lightning && !has(&jvm, "lightning.") {
@@ -910,7 +935,7 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     super::game::progress(id, |p| { p.phase = "launching".into(); p.steps = steps.len(); });
     let jobs2 = jobs.clone();
     let run = move || {
-        let result = run_test(id, steps, scenario_timeout, &jobs2, &dir).unwrap_or_else(|e| json!({ "job": id, "error": e }));
+        let result = run_test(id, steps, scenario_timeout, dyno, &jobs2, &dir).unwrap_or_else(|e| json!({ "job": id, "error": e }));
         super::game::progress(id, |p| { p.phase = "done".into(); p.result = Some(result.clone()); });
         result
     };
@@ -921,7 +946,7 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     Ok(run())
 }
 
-fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, jobs: &Shared, dir: &Path) -> Result<Value, String> {
+fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, jobs: &Shared, dir: &Path) -> Result<Value, String> {
     let t_of = |jobs: &Shared| -> f64 {
         let (m, _) = &**jobs;
         m.lock().unwrap().list.get(&id).and_then(|j| j.now["t"].as_f64()).unwrap_or(0.0)
@@ -929,7 +954,7 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, jobs: &Shared, di
     let waited = wait(&json!({ "job": id, "until": "inWorld", "timeout": 3600 }), jobs)?;
     let mut scenario = Value::Null;
     let (mut t_steps, mut t_steps_end, mut t_quit) = (None, None, None);
-    let in_world = waited["state"] == "running" && waited["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "inWorld"));
+    let in_world = !dyno && waited["state"] == "running" && waited["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "inWorld"));
     if in_world {
         super::game::progress(id, |p| p.phase = "in world".into());
         let (_, gdir, started) = game_of(&json!({ "job": id }), jobs)?;
@@ -959,6 +984,15 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, jobs: &Shared, di
             let _ = kill(&json!({ "job": id }), jobs);
         }
     }
+    if dyno {
+        super::game::progress(id, |p| p.phase = "block dyno".into());
+        // Block Dyno quits the game itself when its plan is done.
+        t_steps = waited["events"].as_array().into_iter().flatten().find(|e| e["event"] == "inWorld").and_then(|e| e["t"].as_f64());
+        loop {
+            let d = wait(&json!({ "job": id, "timeout": 3600 }), jobs)?;
+            if d["state"] != "running" || super::game::progress_of(id).is_some_and(|p| p.stop) { break }
+        }
+    }
     let mut done = wait(&json!({ "job": id, "timeout": 180 }), jobs)?;
     if done["state"] == "running" {
         let _ = kill(&json!({ "job": id }), jobs);
@@ -977,7 +1011,7 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, jobs: &Shared, di
         ("start", Some(0.0), ev("modsLoaded")),
         ("load", ev("modsLoaded"), loaded),
         ("worldBuild", ev("joinStart"), t_steps.or(ev("inWorld"))),
-        ("inMotion", t_steps, t_steps_end),
+        ("inMotion", t_steps, t_steps_end.or(ev("leaveStart"))),
         ("quit", t_quit, Some(end)),
     ];
     let mut profile = serde_json::Map::new();
@@ -999,8 +1033,28 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, jobs: &Shared, di
         "suspects": d.suspects.iter().take(5).map(|s| json!({ "mod": s.mod_id, "why": s.reason })).collect::<Vec<_>>(),
     })).unwrap_or(Value::Null);
     let lightning = prism::lightning::runs(dir, 1).into_iter().next().map(|r| json!(r)).unwrap_or(Value::Null);
+    if dyno { scenario = dyno_result(dir, done["started"].as_u64().unwrap_or(0)) }
     Ok(json!({ "job": id, "state": done["state"], "detail": done["detail"], "stages": stages, "profile": profile,
         "scenario": scenario, "log": log, "lightning": lightning }))
+}
+
+/// Block Dyno's newest result from this run, per phase in short (its full result.json and summary.md stay on disk).
+fn dyno_result(dir: &Path, since: u64) -> Value {
+    let newest = std::fs::read_dir(dir.join("blockdyno").join("results")).into_iter().flatten().flatten()
+        .filter(|e| e.path().join("result.json").is_file())
+        .filter(|e| e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|t| t.as_secs() >= since))
+        .max_by_key(|e| e.file_name());
+    let Some(run) = newest else { return json!({ "ok": false, "error": "Block Dyno saved no result in this run (see log)" }) };
+    let r: Value = std::fs::read(run.path().join("result.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    const KEEP: &[&str] = &["name", "seconds", "fps_avg", "fps_1pct_low", "frame_p99_ms", "frame_max_ms", "spikes_over_50ms", "bound",
+        "server_tick_mean_ms", "server_tick_max_ms", "heap_peak_mb", "gc_pause_ms", "alloc_stalls", "chunk_loads_per_s", "max_entities", "max_loaded_chunks"];
+    let runs: Vec<Value> = r["runs"].as_array().into_iter().flatten().map(|run| json!({
+        "variant": run["variant"], "valid": run["valid"], "invalid": run["invalid_reasons"],
+        "phases": run["phases"].as_array().into_iter().flatten().map(|p| {
+            Value::Object(KEEP.iter().filter_map(|k| p.get(*k).map(|v| (k.to_string(), v.clone()))).collect())
+        }).collect::<Vec<_>>(),
+    })).collect();
+    json!({ "ok": true, "plan": r["plan"]["name"].clone(), "runs": runs, "folder": run.path().to_string_lossy() })
 }
 
 /// A background game_test's progress (phase, step, results so far) or its final result.
