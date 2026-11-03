@@ -507,7 +507,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-retry", "release-optout", "errors"],
+            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -531,6 +531,10 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "play-status" => Ok(play_status()),
         "play-wait" => play_wait(args),
         "kill" => kill(args, jobs),
+        "game-query" | "game-cmd" | "game-scenario" => {
+            let (dir, started) = game_of(args, jobs)?;
+            super::game::command(cmd, args, &dir, started)
+        }
         "heap" => heap(args, jobs),
         // What the running Obelisk sees (a chat's own view of AppData is a redirected copy).
         "data-dir-set" => {
@@ -853,6 +857,21 @@ fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {
         }
         l = cv.wait_timeout(l, left).unwrap().0;
     }
+}
+
+/// A running launch or gate job's game folder and start time, for the harness probe.
+fn game_of(args: &Value, jobs: &Shared) -> Result<(PathBuf, u64), String> {
+    let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
+    let (m, _) = &**jobs;
+    let l = m.lock().unwrap();
+    let j = l.list.get(&id).ok_or("no such job")?;
+    if j.state != "running" { return Err(format!("job {id} is {}, not running", j.state)) }
+    let dir = match j.kind.as_str() {
+        "launch" => Path::new(&j.output).parent().and_then(|p| p.parent()).map(Path::to_path_buf).ok_or("no game folder")?,
+        "gate" => tb().root.join("gate"),
+        k => return Err(format!("job {id} is a {k}, not a game")),
+    };
+    Ok((dir, j.started))
 }
 
 fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
@@ -1289,7 +1308,9 @@ fn game_command(dir: &Path, extra: &[String]) -> Result<(String, Vec<String>), S
         "-Dtestharness.background=true",
         // Essential's stage1 loader still shows its update prompt when autoUpdate=false is ignored; a download
         // address that refuses at once means there's never an update to offer (Crashaholic, 2026-11-02).
-        "-Dessential.download.url=http://127.0.0.1:9"].iter().map(|s| s.to_string()).collect();
+        "-Dessential.download.url=http://127.0.0.1:9",
+        // The harness answers game_query/game_cmd/game_scenario on a localhost socket (game.rs).
+        "-Dtestharness.probe=true"].iter().map(|s| s.to_string()).collect();
     a.extend(extra.iter().cloned());
     for x in van.pointer("/arguments/jvm").and_then(|v| v.as_array()).into_iter().flatten() {
         if let Some(s) = x.as_str() {

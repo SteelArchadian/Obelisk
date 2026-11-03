@@ -11,6 +11,7 @@ mod releases;
 mod watch;
 mod datadir;
 mod devrun;
+mod game;
 mod mcp;
 mod selfupdate;
 
