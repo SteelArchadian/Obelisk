@@ -487,20 +487,33 @@ impl Client {
             let folder = p.folder;
             let dir = game.join(folder);
             fs::create_dir_all(dir.join(".index")).map_err(|e| e.to_string())?;
-            if let Some(old) = &p.replaces {
-                crate::delete_content(game, &old.kind, &old.file_name, |f| fs::remove_file(f).map_err(|e| e.to_string()))?;
-            }
+            // The jar it replaces stays until the new one is in place and clashes with nothing else, and leaves the
+            // duplicate index with it: a stale entry made Almanac's update clash with the old Almanac it had just
+            // deleted, so the pack lost both (Let Me Despawn 1.26.10.2, 2026-11-02).
+            let old_name = p.replaces.as_ref().filter(|o| o.kind == folder).map(|o| o.file_name.clone());
             let path = dir.join(&p.file.filename);
-            fs::write(&path, &p.bytes).map_err(|e| e.to_string())?;
-            if folder == "mods" {
-                let ids = crate::dupes::own_ids(&path);
+            let index = if folder == "mods" {
                 let index = have.get_or_insert_with(|| crate::dupes::index(&dir));
+                if let Some(old) = &old_name { for files in index.values_mut() { files.retain(|f| f != old) } }
+                Some(index)
+            } else { None };
+            fs::write(&path, &p.bytes).map_err(|e| e.to_string())?;
+            if let Some(index) = index {
+                let ids = crate::dupes::own_ids(&path);
                 if let Some((_, other)) = crate::dupes::clash(index, &ids, &p.file.filename) {
-                    let _ = fs::remove_file(&path);
+                    if old_name.as_deref() != Some(p.file.filename.as_str()) { let _ = fs::remove_file(&path); }
+                    if let Some(old) = &old_name { for id in crate::dupes::own_ids(&dir.join(old)) { index.entry(id).or_default().push(old.clone()) } }
                     if p.dep { continue }
                     return Err(format!("{} is already installed as {other} (probably from the other site); not adding a second copy", p.name));
                 }
                 for id in ids { index.entry(id).or_default().push(p.file.filename.clone()) }
+            }
+            if let Some(old) = &p.replaces {
+                if old.file_name != p.file.filename || old.kind != folder {
+                    crate::delete_content(game, &old.kind, &old.file_name, |f| fs::remove_file(f).map_err(|e| e.to_string()))?;
+                } else {
+                    for f in crate::index_files_for(&dir, &old.file_name) { let _ = fs::remove_file(f); }
+                }
             }
             fs::write(dir.join(".index").join(format!("{}.pw.toml", p.slug)), index_toml(&p.name, &p.v, &p.file)).map_err(|e| e.to_string())?;
             done.push(if p.replaces.is_some() && p.dep { format!("{} (updated)", p.name) } else { p.name });
