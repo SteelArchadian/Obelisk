@@ -507,7 +507,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test"],
+            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test", "game-result", "game-stop", "game-quit"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -532,9 +532,15 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "play-wait" => play_wait(args),
         "kill" => kill(args, jobs),
         "game-test" => game_test(args, jobs),
-        "game-query" | "game-cmd" | "game-scenario" => {
-            let (dir, started) = game_of(args, jobs)?;
-            super::game::command(cmd, args, &dir, started)
+        "game-query" | "game-cmd" | "game-scenario" | "game-quit" => {
+            let (id, dir, started) = game_of(args, jobs)?;
+            super::game::command(cmd, args, id, &dir, started)
+        }
+        "game-result" => game_result(args, jobs),
+        "game-stop" => {
+            let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
+            super::game::progress(id, |p| p.stop = true);
+            Ok(json!({ "job": id, "stopping": true, "note": "Automation stops before its next step or second; the game keeps running for game_cmd/game_query. End it with game_quit (measured) or kill." }))
         }
         "heap" => heap(args, jobs),
         // What the running Obelisk sees (a chat's own view of AppData is a redirected copy).
@@ -860,55 +866,155 @@ fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
 }
 
-/// One call for a whole test, so a chat spends one turn instead of a launch, waits, log reads and a kill: launch,
-/// wait until the player is in the world, run the steps (game.rs), quit at once, and return one compact result.
+/// One call for a whole test, so a chat spends one turn instead of a launch, waits, log reads and a kill: launch
+/// (a fresh world unless one is given, Lightning recording when the copy has it), wait until the player is in the
+/// world, run the preset's and/or given steps (game.rs), quit the normal way, and return one compact result: load
+/// stages, resources per phase (start, load, world build, in motion, quit), the steps' results, the log's errors by
+/// mod and Lightning's summary. background=true returns the job at once; game_result reads it, game_stop takes over.
 fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let mut la = args.clone();
-    let steps = la.as_object_mut().and_then(|o| o.remove("steps")).unwrap_or(json!([]));
-    let scenario_timeout = la.as_object_mut().and_then(|o| o.remove("scenario_timeout")).unwrap_or(json!(300));
-    // Stays in the world until the steps are done; the kill below ends it.
-    if ["test_world", "world", "new_world"].iter().all(|k| la.get(*k).is_none_or(Value::is_null)) {
-        la["test_world"] = json!({ "hold": 900 });
-    } else if let Some(tw) = la.get_mut("test_world").filter(|v| v.is_object()) {
-        if tw.get("hold").is_none() { tw["hold"] = json!(900) }
-    } else {
-        let jvm = la["jvm"].as_array().cloned().unwrap_or_default();
-        if !jvm.iter().any(|a| a.as_str().is_some_and(|a| a.contains(".hold="))) {
-            la["jvm"] = Value::Array(jvm.into_iter().chain([json!("-Dspeedloader.hold=900")]).collect());
+    let o = la.as_object_mut().ok_or("arguments must be an object")?;
+    let mut steps: Vec<Value> = match o.remove("preset").and_then(|p| p.as_str().map(String::from)) {
+        Some(p) => {
+            let tests: Vec<String> = o.get("tests").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
+            super::game::preset(&p, &tests)?
         }
+        None => vec![],
+    };
+    o.remove("tests");
+    steps.extend(o.remove("steps").and_then(|s| s.as_array().cloned()).unwrap_or_default());
+    let scenario_timeout = o.remove("scenario_timeout").and_then(|t| t.as_u64()).unwrap_or(600);
+    let background = o.remove("background").and_then(|b| b.as_bool()).unwrap_or(false);
+    let mut jvm: Vec<Value> = o.get("jvm").and_then(|j| j.as_array().cloned()).unwrap_or_default();
+    let has = |jvm: &[Value], k: &str| jvm.iter().any(|a| a.as_str().is_some_and(|a| a.contains(k)));
+    // A fresh world (Speed Loader makes it and deletes it after) unless the chat gave one.
+    if ["test_world", "world", "new_world"].iter().all(|k| o.get(*k).is_none_or(Value::is_null)) {
+        o.insert("new_world".into(), json!(format!("{}", now() % 1_000_000_007)));
     }
-    let id = launch(&la, jobs)?["job"].as_u64().ok_or("launch gave no job")?;
-    let waited = wait(&json!({ "job": id, "until": "inWorld", "timeout": 1800 }), jobs)?;
+    if let Some(tw) = o.get_mut("test_world").filter(|v| v.is_object()) {
+        if tw.get("hold").is_none() { tw["hold"] = json!(1800) }
+    } else if !has(&jvm, ".hold=") {
+        jvm.push(json!("-Dspeedloader.hold=1800")); // stays in the world until the steps are done
+    }
+    let copy = need(args, "copy")?.to_string();
+    let dir = readable(&copy)?;
+    let lightning = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
+        .any(|e| { let n = e.file_name().to_string_lossy().to_lowercase(); n.starts_with("lightning") && n.ends_with(".jar") });
+    if lightning && !has(&jvm, "lightning.") {
+        jvm.push(json!("-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads"));
+        jvm.push(json!("-Dlightning.windows=30"));
+        jvm.push(json!("-Dlightning.autoStart=1,1800"));
+    }
+    o.insert("jvm".into(), Value::Array(jvm));
+    let id = launch(&la, jobs)?["job"].as_u64().ok_or("launch gave no job")? as u32;
+    super::game::progress(id, |p| { p.phase = "launching".into(); p.steps = steps.len(); });
+    let jobs2 = jobs.clone();
+    let run = move || {
+        let result = run_test(id, steps, scenario_timeout, &jobs2, &dir).unwrap_or_else(|e| json!({ "job": id, "error": e }));
+        super::game::progress(id, |p| { p.phase = "done".into(); p.result = Some(result.clone()); });
+        result
+    };
+    if background {
+        std::thread::spawn(run);
+        return Ok(json!({ "job": id, "background": true, "note": "game_result {job} for progress or the result; game_stop {job} to take over; game_query/game_cmd work any time." }));
+    }
+    Ok(run())
+}
+
+fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, jobs: &Shared, dir: &Path) -> Result<Value, String> {
+    let t_of = |jobs: &Shared| -> f64 {
+        let (m, _) = &**jobs;
+        m.lock().unwrap().list.get(&id).and_then(|j| j.now["t"].as_f64()).unwrap_or(0.0)
+    };
+    let waited = wait(&json!({ "job": id, "until": "inWorld", "timeout": 3600 }), jobs)?;
     let mut scenario = Value::Null;
-    if waited["state"] == "running" && waited["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "inWorld")) {
-        let (dir, started) = game_of(&json!({ "job": id }), jobs)?;
-        // The probe file appears once mods load; give a slow join a few seconds more.
+    let (mut t_steps, mut t_steps_end, mut t_quit) = (None, None, None);
+    let in_world = waited["state"] == "running" && waited["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "inWorld"));
+    if in_world {
+        super::game::progress(id, |p| p.phase = "in world".into());
+        let (_, gdir, started) = game_of(&json!({ "job": id }), jobs)?;
         let t0 = Instant::now();
         let first = loop {
-            match super::game::command("game-query", &json!({}), &dir, started) {
+            match super::game::command("game-query", &json!({}), id, &gdir, started) {
                 Ok(q) => break Ok(q),
                 Err(e) if t0.elapsed() > Duration::from_secs(30) => break Err(e),
                 Err(_) => std::thread::sleep(Duration::from_secs(1)),
             }
         };
+        t_steps = Some(t_of(jobs));
         scenario = match first {
-            Ok(_) if steps.as_array().is_some_and(|s| !s.is_empty()) =>
-                super::game::command("game-scenario", &json!({ "steps": steps, "timeout": scenario_timeout }), &dir, started)
-                    .unwrap_or_else(|e| json!({ "ok": false, "error": e })),
+            Ok(_) if !steps.is_empty() => super::game::scenario(&json!({ "steps": steps, "timeout": scenario_timeout }), id, &gdir, started)
+                .unwrap_or_else(|e| json!({ "ok": false, "error": e })),
             Ok(q) => json!({ "ok": true, "query": q }),
             Err(e) => json!({ "ok": false, "error": e }),
         };
-        let _ = kill(&json!({ "job": id }), jobs);
+        t_steps_end = Some(t_of(jobs));
+        // Taken over: the chat drives the game from here and ends it itself.
+        if super::game::progress_of(id).is_some_and(|p| p.stop) {
+            return Ok(json!({ "job": id, "takenOver": true, "scenario": scenario }));
+        }
+        super::game::progress(id, |p| p.phase = "quitting".into());
+        t_quit = Some(t_of(jobs));
+        if super::game::command("game-quit", &json!({}), id, &gdir, started).is_err() {
+            let _ = kill(&json!({ "job": id }), jobs);
+        }
     }
-    let done = wait(&json!({ "job": id, "timeout": 120 }), jobs)?;
+    let mut done = wait(&json!({ "job": id, "timeout": 180 }), jobs)?;
+    if done["state"] == "running" {
+        let _ = kill(&json!({ "job": id }), jobs);
+        done = wait(&json!({ "job": id, "timeout": 30 }), jobs)?;
+    }
+    let ev = |name: &str| done["events"].as_array().into_iter().flatten().find(|e| e["event"] == name && e["src"] != "optimal").and_then(|e| e["t"].as_f64());
     let stages: serde_json::Map<String, Value> = done["events"].as_array().into_iter().flatten()
         .filter(|e| e["src"] == "log" || e["src"] == "obelisk")
         .filter_map(|e| Some((e["event"].as_str()?.to_string(), e["t"].clone()))).collect();
-    Ok(json!({ "job": id, "state": done["state"], "detail": done["detail"], "stages": stages, "scenario": scenario }))
+    // Resources per phase, from Obelisk's once-a-second samples of the game process.
+    let samples: Vec<Value> = std::fs::read_to_string(tb().root.join("obelisk-runs").join(done["copy"].as_str().unwrap_or("")).join(format!("{id}.samples.jsonl")))
+        .unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let end = samples.last().and_then(|s| s["t"].as_f64()).unwrap_or(0.0);
+    let loaded = ev("resourcesLoaded").or(ev("titleScreen"));
+    let phases = [
+        ("start", Some(0.0), ev("modsLoaded")),
+        ("load", ev("modsLoaded"), loaded),
+        ("worldBuild", ev("joinStart"), t_steps.or(ev("inWorld"))),
+        ("inMotion", t_steps, t_steps_end),
+        ("quit", t_quit, Some(end)),
+    ];
+    let mut profile = serde_json::Map::new();
+    for (name, a, b) in phases {
+        let (Some(a), Some(b)) = (a, b) else { continue };
+        let w: Vec<&Value> = samples.iter().filter(|s| s["t"].as_f64().is_some_and(|t| t >= a && t <= b)).collect();
+        if w.is_empty() { continue }
+        let col = |k: &str| -> Vec<f64> { w.iter().filter_map(|s| s[k].as_f64()).collect() };
+        let avg = |v: &[f64]| if v.is_empty() { Value::Null } else { json!((v.iter().sum::<f64>() / v.len() as f64).round()) };
+        let max = |v: &[f64]| if v.is_empty() { Value::Null } else { json!(v.iter().cloned().fold(f64::MIN, f64::max).round()) };
+        let (cpu, mem, heap, gpu, vram, disk) = (col("cpu"), col("memMB"), col("heapUsedMB"), col("gpu3d"), col("vramMB"), col("diskMBps"));
+        profile.insert(name.into(), json!({ "seconds": (b - a).round(), "cpuPctAvg": avg(&cpu), "cpuPctMax": max(&cpu),
+            "memMaxMB": max(&mem), "heapMaxMB": max(&heap), "gpuPctAvg": avg(&gpu), "vramMaxMB": max(&vram), "diskMBpsAvg": avg(&disk) }));
+    }
+    // The log in short: verdict, errors grouped by mod, suspects.
+    let log = prism::crash::diagnose(dir, "logs/latest.log").map(|d| json!({
+        "headline": d.headline,
+        "errorsByMod": d.error_groups.iter().take(8).map(|g| json!({ "who": g.who, "count": g.count, "sample": g.sample.chars().take(160).collect::<String>() })).collect::<Vec<_>>(),
+        "suspects": d.suspects.iter().take(5).map(|s| json!({ "mod": s.mod_id, "why": s.reason })).collect::<Vec<_>>(),
+    })).unwrap_or(Value::Null);
+    let lightning = prism::lightning::runs(dir, 1).into_iter().next().map(|r| json!(r)).unwrap_or(Value::Null);
+    Ok(json!({ "job": id, "state": done["state"], "detail": done["detail"], "stages": stages, "profile": profile,
+        "scenario": scenario, "log": log, "lightning": lightning }))
+}
+
+/// A background game_test's progress (phase, step, results so far) or its final result.
+fn game_result(args: &Value, jobs: &Shared) -> Result<Value, String> {
+    let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
+    let p = super::game::progress_of(id).ok_or("no game_test for that job")?;
+    if let Some(r) = p.result { return Ok(r) }
+    let (m, _) = &**jobs;
+    let state = m.lock().unwrap().list.get(&id).map(|j| j.state.clone()).unwrap_or_default();
+    Ok(json!({ "job": id, "state": state, "phase": p.phase, "step": p.step, "steps": p.steps, "results": p.results }))
 }
 
 /// A running launch or gate job's game folder and start time, for the harness probe.
-fn game_of(args: &Value, jobs: &Shared) -> Result<(PathBuf, u64), String> {
+fn game_of(args: &Value, jobs: &Shared) -> Result<(u32, PathBuf, u64), String> {
     let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
     let (m, _) = &**jobs;
     let l = m.lock().unwrap();
@@ -919,7 +1025,7 @@ fn game_of(args: &Value, jobs: &Shared) -> Result<(PathBuf, u64), String> {
         "gate" => tb().root.join("gate"),
         k => return Err(format!("job {id} is a {k}, not a game")),
     };
-    Ok((dir, j.started))
+    Ok((id, dir, j.started))
 }
 
 fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
