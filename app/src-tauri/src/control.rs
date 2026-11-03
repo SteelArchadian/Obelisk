@@ -728,7 +728,9 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
 /// A copy has no Prism instance around it, so the pack check wouldn't know its NeoForge version: note the play
 /// pack's (the version copies run) where the check reads it.
 fn note_loader_version(dir: &Path) {
-    if !prism::loader_version_of(dir).is_empty() { return }
+    // Only a copy's own note is refreshed (the pack's NeoForge moves on); a real instance knows its own version.
+    let noted = dir.join(".obelisk").join("loader-version");
+    if !noted.is_file() && !prism::loader_version_of(dir).is_empty() { return }
     if let Some(play) = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation") {
         let _ = std::fs::create_dir_all(dir.join(".obelisk"));
         let _ = std::fs::write(dir.join(".obelisk").join("loader-version"), play.loader_version);
@@ -1246,6 +1248,16 @@ fn loader_version(dir: &Path) -> String {
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v.pointer("/baseModLoader/name").and_then(|n| n.as_str()).map(String::from))
         .filter(|n| n.starts_with("neoforge-") && n.chars().all(|c| c.is_ascii_alphanumeric() || ".-".contains(c)))
+        // Else the version noted in the copy, else the one Foundation is on now: a copy runs the NeoForge its pack
+        // plays on, when the bench has it installed.
+        .or_else(|| {
+            let noted = std::fs::read_to_string(dir.join(".obelisk").join("loader-version")).ok().map(|v| v.trim().to_string());
+            let play = || prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation").map(|i| i.loader_version);
+            [noted, play()].into_iter().flatten()
+                .filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+                .map(|v| format!("neoforge-{v}"))
+                .find(|n| Path::new(&tb().install).join("versions").join(n).join(format!("{n}.json")).is_file())
+        })
         .unwrap_or_else(|| DEFAULT_VERSION.into())
 }
 
