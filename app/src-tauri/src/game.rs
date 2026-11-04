@@ -143,7 +143,7 @@ pub(crate) fn preset(name: &str, tests: &[String]) -> Result<Vec<Value>, String>
                     "chests" => json!({ "chests": { "size": 16, "height": 4, "seconds": 15 } }),
                     "mobs" => json!({ "mobs": { "count": 100, "seconds": 15 } }),
                     "hop" => json!({ "hop": { "every": 2, "rounds": 2 } }),
-                    _ => json!({ "flyover": { "seconds": 60, "speed": 20, "low": 32, "high": 60 } }),
+                    _ => json!({ "flyover": { "seconds": 40, "speed": 20, "low": 32, "high": 60 } }),
                 });
             }
         }

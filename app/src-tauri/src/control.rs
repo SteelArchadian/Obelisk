@@ -876,8 +876,14 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let o = la.as_object_mut().ok_or("arguments must be an object")?;
     let preset = o.remove("preset").and_then(|p| p.as_str().map(String::from));
     let dyno = preset.as_deref() == Some("dyno");
-    if dyno || preset.as_deref() == Some("stress") { o.insert("stop_if_playing".into(), json!(true)); }
-    let mut steps: Vec<Value> = match preset.filter(|_| !dyno) {
+    if dyno || preset.as_deref() == Some("stress") {
+        o.insert("stop_if_playing".into(), json!(true));
+        // Measured runs: 120 s in the world at most, like perf runs (launch reads this). Not a perf lock.
+        o.insert("measured".into(), json!(true));
+        // Block Dyno has no hold (it quits itself): its limit is the load allowance plus 120 s.
+        if dyno { o.insert("timeout".into(), json!(LOAD_ALLOWANCE + SMOKE_HOLD)); }
+    }
+    let mut steps: Vec<Value> = match preset.clone().filter(|_| !dyno) {
         Some(p) => {
             let tests: Vec<String> = o.get("tests").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
             super::game::preset(&p, &tests)?
@@ -886,7 +892,11 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     };
     o.remove("tests");
     steps.extend(o.remove("steps").and_then(|s| s.as_array().cloned()).unwrap_or_default());
-    let scenario_timeout = o.remove("scenario_timeout").and_then(|t| t.as_u64()).unwrap_or(600);
+    let purpose = o.get("purpose").and_then(Value::as_str).unwrap_or_default().to_string();
+    // stress and dyno are perf runs in length.
+    let long = preset.as_deref().is_some_and(|p| p == "stress" || p == "dyno");
+    let test_hold = max_hold(&purpose, long || o.get("perf").and_then(Value::as_bool).unwrap_or(false));
+    let scenario_timeout = o.remove("scenario_timeout").and_then(|t| t.as_u64()).unwrap_or(test_hold).min(test_hold);
     let background = o.remove("background").and_then(|b| b.as_bool()).unwrap_or(false);
     let mut jvm: Vec<Value> = o.get("jvm").and_then(|j| j.as_array().cloned()).unwrap_or_default();
     let has = |jvm: &[Value], k: &str| jvm.iter().any(|a| a.as_str().is_some_and(|a| a.contains(k)));
@@ -898,7 +908,8 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     };
     if dyno {
         // Block Dyno drives the run itself: its own temp world, its plan, then it quits the game (BlockDyno chat).
-        let mode = o.remove("mode").and_then(|m| m.as_str().map(String::from)).unwrap_or_else(|| "standard".into());
+        // quick (~3 min) by default: the heavier plans may not finish inside the run limit.
+        let mode = o.remove("mode").and_then(|m| m.as_str().map(String::from)).unwrap_or_else(|| "quick".into());
         if !mode.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) { return Err("mode: a Block Dyno mode or plan name".into()) }
         if !steps.is_empty() { return Err("preset dyno runs Block Dyno's own plan; give steps without it".into()) }
         let jar = tb().root.join("blockdyno").join("build").join("libs").join("blockdyno-1.21.1-0.1.0.jar");
@@ -920,16 +931,16 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         o.insert("new_world".into(), json!(format!("{}", now() % 1_000_000_007)));
     }
     if let Some(tw) = o.get_mut("test_world").filter(|v| v.is_object()) {
-        if tw.get("hold").is_none() { tw["hold"] = json!(1800) }
+        if tw.get("hold").is_none() { tw["hold"] = json!(test_hold) }
     } else if !dyno && !has(&jvm, ".hold=") {
-        jvm.push(json!("-Dspeedloader.hold=1800")); // stays in the world until the steps are done
+        jvm.push(json!(format!("-Dspeedloader.hold={test_hold}"))); // stays in the world until the steps are done (quit early after)
     }
     let lightning = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
         .any(|e| { let n = e.file_name().to_string_lossy().to_lowercase(); n.starts_with("lightning") && n.ends_with(".jar") });
     if lightning && !has(&jvm, "lightning.") {
         jvm.push(json!("-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads"));
         jvm.push(json!("-Dlightning.windows=30"));
-        jvm.push(json!("-Dlightning.autoStart=1,1800"));
+        jvm.push(json!(format!("-Dlightning.autoStart=1,{RUN_WALL}")));
     }
     o.insert("jvm".into(), Value::Array(jvm));
     let id = launch(&la, jobs)?["job"].as_u64().ok_or("launch gave no job")? as u32;
@@ -1098,6 +1109,21 @@ fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
 }
 
 const KILLED: &str = "kill requested";
+/// Test length limits (user, 2026-11-03; kb/rules/testing.md): a smoke run, and every perf, fps or dyno run, holds the
+/// world 120 s or less; only a non-perf interaction run 600 s; the time limit is 600 s; and no run lives past LOAD_ALLOWANCE + hold, nor RUN_WALL, whatever
+/// the arguments ("overtime").
+const SMOKE_HOLD: u64 = 120;
+const LONG_HOLD: u64 = 600;
+const MAX_TIMEOUT: u64 = 600;
+const LOAD_ALLOWANCE: u64 = 240;
+const RUN_WALL: u64 = 720;
+const OVERTIME: &str = "overtime";
+
+/// The longest hold this run may have: 600 s for a non-perf run whose purpose says "interaction", else 120 s
+/// (perf runs measure 120 s at most, user 2026-11-03).
+fn max_hold(purpose: &str, perf: bool) -> u64 {
+    if !perf && purpose.to_lowercase().contains("interaction") { LONG_HOLD } else { SMOKE_HOLD }
+}
 /// A run cut short because the user started playing: its numbers don't count.
 const INVALID: &str = "invalid";
 
@@ -1555,24 +1581,24 @@ fn game_command(dir: &Path, extra: &[String]) -> Result<(String, Vec<String>), S
 /// The cross-PC scenario (same on every PC, so two runs compare mod by mod): a fixed-seed normal world flown
 /// through in spectator on a fixed route, the same options and Lightning capture, and no per-PC overrides.
 /// Anything the call gives itself wins over the preset (e.g. config for a shader pass).
-pub(crate) const CROSSPC: &str = "crosspc-1";
+pub(crate) const CROSSPC: &str = "crosspc-2"; // 2: 120 s in the world (user, 2026-11-03), not comparable with crosspc-1
 fn crosspc_args(args: &Value) -> Value {
     let preset = json!({
-        "perf": true, "eta": 8, "timeout": 900,
+        "perf": true, "eta": 8, "timeout": 600,
         "test_world": {
-            "terrain": "normal", "seed": "obelisk-crosspc", "game_mode": "spectator", "hold": 210,
+            "terrain": "normal", "seed": "obelisk-crosspc", "game_mode": "spectator", "hold": 120,
             "spawn": { "x": 0, "y": 140, "z": 0 },
             "setup": ["gamerule doDaylightCycle false", "time set 6000", "weather clear", "gamerule doWeatherCycle false"],
             "events": [
-                { "at": 40, "command": "tp @a 512 140 0 90 20" },
-                { "at": 80, "command": "tp @a 512 140 512 0 20" },
-                { "at": 120, "command": "tp @a 0 140 512 -90 20" },
-                { "at": 160, "command": "tp @a -512 140 -512 135 20" }
+                { "at": 30, "command": "tp @a 512 140 0 90 20" },
+                { "at": 50, "command": "tp @a 512 140 512 0 20" },
+                { "at": 70, "command": "tp @a 0 140 512 -90 20" },
+                { "at": 90, "command": "tp @a -512 140 -512 135 20" }
             ]
         },
         "options": { "enableVsync": false, "maxFps": 260, "renderDistance": 6, "simulationDistance": 6 },
         // Lightning records from 35 s in the world for 150 s (all four legs of the route), then quits the game.
-        "jvm": ["-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads", "-Dlightning.crosspc=true", "-Dlightning.autoStart=35,150,quit"],
+        "jvm": ["-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads", "-Dlightning.crosspc=true", "-Dlightning.autoStart=15,100,quit"],
     });
     let mut out = preset;
     for (k, v) in args.as_object().into_iter().flatten() {
@@ -1595,7 +1621,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let owner = label(need(args, "owner")?, "owner")?;
     let purpose = label(need(args, "purpose")?, "purpose")?;
     let eta = num(args, "eta", 5, 1, 30)?;
-    let timeout = num(args, "timeout", 900, 60, 3600)?;
+    let timeout = num(args, "timeout", MAX_TIMEOUT, 60, MAX_TIMEOUT)?;
     // Always in the background (user, 2026-10-24): "park": false is no longer honoured.
     let park = true;
     let mut extra = jvm_props(args)?;
@@ -1694,6 +1720,28 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         return Err(format!("a game is already running in {name}"));
     }
     // Build the command now so a broken copy fails before queueing.
+    // Holds: what the chat asked (jvm), a test_world's own, or the default one put in above.
+    let perf_run = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
+    let fps_props = extra.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)) && !a.starts_with("-Dspeedloader.autobench"));
+    let cap = max_hold(&purpose, perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false));
+    let mut hold = None;
+    for a in &extra {
+        let Some(v) = a.strip_prefix("-Dspeedloader.hold=").or_else(|| a.strip_prefix("-Doptimal.hold=")) else { continue };
+        let h: u64 = v.trim().parse().map_err(|_| format!("{a}: the hold is whole seconds"))?;
+        if h > cap {
+            return Err(format!("hold {h} s is over the limit of {cap} s ({}; kb/rules/testing.md)",
+                if cap == SMOKE_HOLD { "a smoke run; put \"interaction\" and what it checks in purpose for up to 600 s" } else { "interaction or perf" }));
+        }
+        hold = Some(hold.map_or(h, |o: u64| o.max(h)));
+    }
+    // The hard wall clock: load allowance plus the hold, never past RUN_WALL; with no hold, the time limit.
+    let timeout = match hold {
+        Some(h) => {
+            let wall = (LOAD_ALLOWANCE + h).min(RUN_WALL);
+            if args.get("timeout").is_some_and(|v| !v.is_null()) { wall.min(timeout.max(h + 60)) } else { wall }
+        }
+        None => timeout,
+    };
     let (mut java, mut cmd) = game_command(&dir, &extra)?;
     // The pack's own Java and JVM settings (its profile in Prism), unless the run asks for a bench Java.
     let profile = copy_source(&name);
@@ -1735,6 +1783,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let reply_gc = gc_used.clone();
     std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
     Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc,
+        "limit": format!("ended as \"{OVERTIME}\" {timeout} s after the game starts"),
         "preset": crosspc.then_some(CROSSPC) }))
 }
 
@@ -1921,12 +1970,12 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             }
             let hung_on_exit = stopping.is_some_and(|t| t.elapsed() > Duration::from_secs(30));
             if hung_on_exit || t0.elapsed() > Duration::from_secs(timeout) {
-                let v = screenshot(pid, &runs, id, if hung_on_exit { "hung on exit" } else { "ran past its time limit" },
+                let v = screenshot(pid, &runs, id, if hung_on_exit { "hung on exit" } else { "overtime" },
                     (prism::timeline::now_ms() - click_ms) as f64 / 1000.0);
                 update(&jobs, id, |j| j.shots.push(v));
                 super::kill_tree(pid);
                 let _ = game.wait();
-                break if hung_on_exit { "killed: still alive 30 s after Stopping!".into() } else { format!("killed: ran past {timeout} s") };
+                break if hung_on_exit { "killed: still alive 30 s after Stopping!".into() } else { format!("{OVERTIME}: killed at its {timeout} s limit") };
             }
             std::thread::sleep(Duration::from_millis(250));
         };
@@ -1959,6 +2008,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let (state, detail) = match result {
         Ok(d) if d.starts_with("HUNG") => ("hung", d),
         Ok(d) if d.starts_with(INVALID) => ("invalid", d),
+        Ok(d) if d.starts_with(OVERTIME) => (OVERTIME, d),
         Ok(d) if d.starts_with("killed") || d.contains("crash report") => ("failed", d),
         Ok(d) => ("done", d),
         Err(e) => ("failed", e),
@@ -2486,7 +2536,7 @@ fn foreground_window() -> isize {
 fn gate(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let owner = label(need(args, "owner")?, "owner")?;
     let mut a: Vec<String> = vec![format!("{}/gate.py", tb().scripts), "run".into(), "--owner".into(), owner.clone()];
-    a.extend(["--cycles".into(), num(args, "cycles", 2, 1, 5)?.to_string(), "--hold".into(), num(args, "hold", 120, 30, 600)?.to_string()]);
+    a.extend(["--cycles".into(), num(args, "cycles", 2, 1, 2)?.to_string(), "--hold".into(), num(args, "hold", SMOKE_HOLD, 30, SMOKE_HOLD)?.to_string()]);
     if args.get("sync").and_then(|v| v.as_bool()).unwrap_or(true) {
         a.push("--sync".into());
     }
@@ -2525,12 +2575,28 @@ fn gate(args: &Value, jobs: &Shared) -> Result<Value, String> {
             let mut child = python().args(&a).current_dir(&tb().root).stdout(f.try_clone().map_err(|e| e.to_string())?).stderr(f)
                 .spawn().map_err(|e| e.to_string())?;
             update(&jobs, id, |j| { j.state = "running".into(); j.pid = Some(child.id()); });
-            let code = child.wait().map_err(|e| e.to_string())?.code();
+            // The run limit counts from when the gate holds the lock (benchlock prints "acquired by").
+            let mut since: Option<Instant> = None;
+            let code = loop {
+                if let Some(st) = child.try_wait().map_err(|e| e.to_string())? { break st.code() }
+                if since.is_none() && std::fs::read_to_string(&out).is_ok_and(|t| t.contains("acquired by")) { since = Some(Instant::now()) }
+                if since.is_some_and(|t| t.elapsed() > Duration::from_secs(RUN_WALL)) {
+                    super::kill_tree(child.id());
+                    let _ = child.wait();
+                    return Ok(format!("{OVERTIME}: killed at the {RUN_WALL} s run limit"));
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            };
             let text = std::fs::read_to_string(&out).unwrap_or_default();
             let verdict = if text.contains("PASS") && code == Some(0) { "PASS" } else { "FAIL" };
             Ok(format!("{verdict} (exit {})", code.map(|c| c.to_string()).unwrap_or("killed".into())))
         })();
-        let (state, detail) = match r { Ok(d) if d.starts_with("PASS") => ("done", d), Ok(d) => ("failed", d), Err(e) => ("failed", e) };
+        let (state, detail) = match r {
+            Ok(d) if d.starts_with("PASS") => ("done", d),
+            Ok(d) if d.starts_with(OVERTIME) => (OVERTIME, d),
+            Ok(d) => ("failed", d),
+            Err(e) => ("failed", e),
+        };
         audit("gate-end", &json!({ "job": id }), &format!("{state}: {detail}"));
         finish(&jobs, id, state, detail);
     });
