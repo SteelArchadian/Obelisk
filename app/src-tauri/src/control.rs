@@ -876,6 +876,7 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let o = la.as_object_mut().ok_or("arguments must be an object")?;
     let preset = o.remove("preset").and_then(|p| p.as_str().map(String::from));
     let dyno = preset.as_deref() == Some("dyno");
+    if dyno || preset.as_deref() == Some("stress") { o.insert("stop_if_playing".into(), json!(true)); }
     let mut steps: Vec<Value> = match preset.filter(|_| !dyno) {
         Some(p) => {
             let tests: Vec<String> = o.get("tests").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
@@ -1097,6 +1098,16 @@ fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
 }
 
 const KILLED: &str = "kill requested";
+/// A run cut short because the user started playing: its numbers don't count.
+const INVALID: &str = "invalid";
+
+/// What the user is playing (benchlock.py playing: their launcher's Minecraft outside the bench, or any fullscreen
+/// app), or None.
+fn user_playing() -> Option<String> {
+    let o = bench(&["playing"]).output().ok()?;
+    if o.status.code() != Some(0) { return None }
+    Some(String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
+}
 
 /// Remove this Obelisk's waiting tickets for `owner` from the bench queue.
 fn drop_tickets(owner: &str) {
@@ -1720,14 +1731,15 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let jobs = jobs.clone();
     // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
+    let stop_if_playing = perf || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
     Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc,
         "preset": crosspc.then_some(CROSSPC) }))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, java: String, cmd: Vec<String>,
+fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
     build_world: Option<(Value, u64)>) {
     let me = std::process::id().to_string();
@@ -1745,18 +1757,21 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let got = loop {
         if let Ok(Some(s)) = child.try_wait() { break s.code() == Some(0); }
         let holder = bench(&["status"]).output().ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
-        let d = match holder {
+        let d = match (user_playing(), holder) {
+            (Some(p), _) => Some(format!("waiting: the user is playing ({p})")),
+            (None, holder) => match holder {
             Some(h) if h["owner"].is_string() => Some(format!("waiting for the bench lock: {} has it, expected to end {}",
                 h["owner"].as_str().unwrap_or("?"), h["expected_end"].as_str().unwrap_or("?"))),
             Some(h) if h["shared"].is_array() => Some(format!("waiting for the bench lock: shared by {}",
                 h["shared"].as_array().into_iter().flatten().map(|s| format!("{} in {} (until {})", s["owner"].as_str().unwrap_or("?"),
                     s["copy"].as_str().unwrap_or("?"), s["expected_end"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", "))),
             _ => None,
+            },
         };
         if let Some(d) = d { update(&jobs, id, |j| if j.detail != KILLED { j.detail = d }); }
         std::thread::sleep(Duration::from_secs(15));
     };
-    update(&jobs, id, |j| if j.detail.starts_with("waiting for the bench lock") { j.detail.clear() });
+    update(&jobs, id, |j| if j.detail.starts_with("waiting for the bench lock") || j.detail.starts_with("waiting: the user is playing") { j.detail.clear() });
     update(&jobs, id, |j| j.helper_pid = None);
     if !got {
         // The ticket names Obelisk's own pid, which stays alive, so benchlock.py never reaps it: a killed or failed
@@ -1767,6 +1782,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
     let fps_run = perf || cmd.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)));
+    let stop_if_playing = stop_if_playing || fps_run;
     let caps = std::sync::Mutex::new(None);
     let run_set = std::sync::Mutex::new(None);
     let result = (|| -> Result<String, String> {
@@ -1822,6 +1838,16 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let stdout_file = runs.join(format!("{id}.stdout"));
         let mut stall = Stall::default();
         let mut frozen_since: Option<Instant> = None;
+        // Numbers taken while the user plays are wrong and the run hurts their game (user, 2026-11-03; KB #31).
+        let playing = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let watching = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(stop_if_playing));
+        if stop_if_playing {
+            let (playing, watching) = (playing.clone(), watching.clone());
+            std::thread::spawn(move || while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(p) = user_playing() { *playing.lock().expect("playing") = Some(p); break }
+                std::thread::sleep(Duration::from_secs(10));
+            });
+        }
         let why = loop {
             if let Ok(Some(status)) = game.try_wait() {
                 let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
@@ -1874,6 +1900,11 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 let t = (prism::timeline::now_ms() - click_ms) as f64 / 1000.0;
                 break corpse(pid, &mut game, &java, &runs, id, &dir, t, if in_world { "window not responding" } else { "no progress" }, &jobs);
             }
+            if let Some(p) = playing.lock().expect("playing").take() {
+                super::kill_tree(pid);
+                let _ = game.wait();
+                break format!("{INVALID}: stopped because the user started playing ({p})");
+            }
             if let Some(why) = kill_now {
                 super::kill_tree(pid);
                 let _ = game.wait();
@@ -1899,6 +1930,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             }
             std::thread::sleep(Duration::from_millis(250));
         };
+        watching.store(false, std::sync::atomic::Ordering::Relaxed);
         let t = prism::timeline::record(&dir, prism::timeline::Session { source: "test".into(), label: lock.clone(), click_ms,
             java_ms: Some(click_ms), window_ms, exit_ms: Some(prism::timeline::now_ms()), ..Default::default() });
         let times: Vec<String> = prism::timeline::phases(&t).iter().filter(|p| !p.idle && p.key != "launcher")
@@ -1926,6 +1958,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let _ = bench(&["release", &lock]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     let (state, detail) = match result {
         Ok(d) if d.starts_with("HUNG") => ("hung", d),
+        Ok(d) if d.starts_with(INVALID) => ("invalid", d),
         Ok(d) if d.starts_with("killed") || d.contains("crash report") => ("failed", d),
         Ok(d) => ("done", d),
         Err(e) => ("failed", e),
