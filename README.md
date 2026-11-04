@@ -31,7 +31,19 @@ modpacks, their mods, updates, crash help and sharing, in one calm window.
 - **Updates itself** from this repository's releases. Each release is signed and the signature is checked
   before anything installs.
 
-### For AI assistants (optional, off by default)
+## Works with your AI
+
+In **Settings → AI assistant**, press **Connect** to hook up Claude or Codex, or copy the line shown there
+and paste it to any AI. Once connected, Obelisk tells the AI everything it can do. You can then ask it to:
+
+- run test copies of your pack, so your real one is never touched;
+- script test scenes: a flat world, a mob in front of you, punches, and screenshots at set moments;
+- run tests and stress tests, and profile performance;
+- take screenshots and explain crashes;
+- find which mod causes a problem by switching half the mods off and halving again;
+- update or install mods, with a backup made first.
+
+### Technical details (optional, off by default)
 
 Settings → Plugins → AI assistant connects Claude or ChatGPT (through Codex) to Obelisk over a local MCP
 server (`obelisk.exe --mcp`). The assistant can do what the app's own window can do, with a few things
