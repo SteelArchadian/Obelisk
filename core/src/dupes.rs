@@ -94,3 +94,35 @@ mod tests {
         let _ = fs::remove_dir_all(&game);
     }
 }
+
+/// The mod ids a jar requires to load (NeoForge/Forge mods.toml required dependencies, Fabric "depends"), without
+/// the game, the loader and Java themselves.
+pub fn needs(jar: &Path) -> Vec<String> {
+    use std::io::Read;
+    let Ok(mut zip) = fs::File::open(jar).map_err(|_| ()).and_then(|f| zip::ZipArchive::new(f).map_err(|_| ())) else { return vec![] };
+    let mut read = |name: &str| -> Option<String> {
+        let mut s = String::new();
+        zip.by_name(name).ok()?.read_to_string(&mut s).ok()?;
+        Some(s)
+    };
+    let mut out = Vec::new();
+    for name in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
+        let Some(doc) = read(name).and_then(|t| t.parse::<toml::Table>().ok()) else { continue };
+        for deps in doc.get("dependencies").and_then(|d| d.as_table()).into_iter().flat_map(|t| t.values()) {
+            for d in deps.as_array().into_iter().flatten() {
+                let required = match d.get("type").and_then(|t| t.as_str()) {
+                    Some(t) => t.eq_ignore_ascii_case("required"),
+                    None => d.get("mandatory").and_then(|m| m.as_bool()).unwrap_or(false),
+                };
+                if let (true, Some(id)) = (required, d.get("modId").and_then(|m| m.as_str())) { out.push(id.to_lowercase()) }
+            }
+        }
+    }
+    if let Some(v) = read("fabric.mod.json").and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+        out.extend(v["depends"].as_object().into_iter().flatten().map(|(k, _)| k.to_lowercase()));
+    }
+    out.retain(|id| !matches!(id.as_str(), "minecraft" | "neoforge" | "forge" | "fabricloader" | "java"));
+    out.sort();
+    out.dedup();
+    out
+}

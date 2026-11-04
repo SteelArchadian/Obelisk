@@ -126,12 +126,12 @@ struct Job {
 }
 
 #[derive(Default)]
-struct Jobs {
+pub(crate) struct Jobs {
     next: u32,
     list: HashMap<u32, Job>,
 }
 
-type Shared = Arc<(Mutex<Jobs>, Condvar)>;
+pub(crate) type Shared = Arc<(Mutex<Jobs>, Condvar)>;
 
 fn now() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -326,7 +326,7 @@ fn s<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str()).filter(|v| !v.is_empty())
 }
 
-fn need<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+pub(crate) fn need<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     s(args, key).ok_or_else(|| format!("missing \"{key}\""))
 }
 
@@ -361,7 +361,7 @@ fn is_play(p: &Path) -> bool {
 }
 
 /// A test copy: a game folder directly in the test bench (not a link to somewhere else, never the play instance).
-fn test_copy(name: &str) -> Result<PathBuf, String> {
+pub(crate) fn test_copy(name: &str) -> Result<PathBuf, String> {
     plain_name(name, "copy")?;
     if NOT_COPIES.contains(&name.to_ascii_lowercase().as_str()) {
         return Err(format!("{name} isn't a game copy"));
@@ -513,18 +513,19 @@ fn unstring(args: &Value) -> Value {
 }
 
 fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> Result<Value, String> {
-    if !matches!(cmd, "ping" | "help" | "app-commands" | "app" | "mcp-tools") {
+    if !matches!(cmd, "ping" | "help" | "app-commands" | "app" | "mcp-tools" | "guide") {
         tb_ready()?;
     }
     let args = &unstring(args);
     match cmd {
         // The MCP helper's tool list comes from here, so a running helper picks up an updated Obelisk's tools.
         "mcp-tools" => Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "tools": super::mcp::tools() })),
+        "guide" => Ok(json!({ "guide": include_str!("ai-guide.md") })),
         "ping" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test", "game-result", "game-stop", "game-quit"],
+            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test", "game-result", "game-stop", "game-quit", "bisect"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -549,6 +550,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "play-wait" => play_wait(args),
         "kill" => kill(args, jobs),
         "game-test" => game_test(args, jobs),
+        "bisect" => super::bisect::command(args, jobs),
         "game-query" | "game-cmd" | "game-scenario" | "game-quit" => {
             let (id, dir, started) = game_of(args, jobs)?;
             super::game::command(cmd, args, id, &dir, started)
@@ -878,7 +880,7 @@ fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {
 /// world, run the preset's and/or given steps (game.rs), quit the normal way, and return one compact result: load
 /// stages, resources per phase (start, load, world build, in motion, quit), the steps' results, the log's errors by
 /// mod and Lightning's summary. background=true returns the job at once; game_result reads it, game_stop takes over.
-fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
+pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let mut la = args.clone();
     let o = la.as_object_mut().ok_or("arguments must be an object")?;
     let preset = o.remove("preset").and_then(|p| p.as_str().map(String::from));
@@ -890,7 +892,15 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         // Block Dyno has no hold (it quits itself): its limit is the load allowance plus 120 s.
         if dyno { o.insert("timeout".into(), json!(LOAD_ALLOWANCE + SMOKE_HOLD)); }
     }
-    let mut steps: Vec<Value> = match preset.clone().filter(|_| !dyno) {
+    let scene = preset.as_deref() == Some("scene");
+    // scene: a small flat grass world at noon with time, weather and spawning frozen, for scripted situations
+    // (summon, punch, shot steps). The chat's own test_world or world wins.
+    if scene && ["test_world", "world", "new_world"].iter().all(|k| o.get(*k).is_none_or(Value::is_null)) {
+        o.insert("test_world".into(), json!({ "layers": [{ "block": "minecraft:grass_block", "height": 1 }], "border": 64, "game_mode": "creative",
+            "setup": ["gamerule doDaylightCycle false", "time set noon", "gamerule doWeatherCycle false", "weather clear",
+                "gamerule doMobSpawning false", "gamerule doPatrolSpawning false", "gamerule doTraderSpawning false", "kill @e[type=!player]"] }));
+    }
+    let mut steps: Vec<Value> = match preset.clone().filter(|_| !dyno && !scene) {
         Some(p) => {
             let tests: Vec<String> = o.get("tests").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
             super::game::preset(&p, &tests)?

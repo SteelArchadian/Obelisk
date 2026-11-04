@@ -21,6 +21,7 @@ pub(crate) fn tools() -> Value {
     let strs = || json!({ "type": "array", "items": { "type": "string" } });
     let job = || json!({ "job": { "type": "integer" } });
     json!([
+        t("guide", "Read first: everything Obelisk can do for you (simulations, tests, screenshots, bisect, profiling, mod management) and its rules.", obj(json!({}), &[])),
         t("copies", "Test copies and whether a game runs in each.", obj(json!({}), &[])),
         t("launch", "Launch a test copy (waits for the bench lock; perf/fps runs queue until the user is away and end \"invalid\" when they return; muted, off-screen, test harness). LIMITS: hold <=120 s (perf too); <=600 s only for a non-perf run whose purpose says \"interaction\"; timeout <=600; killed as \"overtime\" at 240 s + hold. Returns a job: use wait; end with kill when no save is needed.",
             obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
@@ -62,14 +63,17 @@ pub(crate) fn tools() -> Value {
         t("reports", "A copy's crash reports and logs.", obj(json!({ "copy": copy }), &["copy"])),
         t("diagnose", "Explain a crash report or log (default latest.log): cause, mods at fault, errors by mod.", obj(json!({ "copy": copy, "file": st() }), &["copy"])),
         t("log", "Read a log, grep (substring) and tail.", obj(json!({ "copy": copy, "file": st(), "grep": st(), "tail": int() }), &["copy"])),
-        t("game_test", "Whole test in one call: launch, wait for the world, run steps, quit normally; returns stages, per-phase profile, step results, log summary, Lightning. preset basic: visit 4 structures. stress: tests [chests, mobs, hop, flyover]. dyno: Block Dyno's own plan (mode, default quick). Same limits as launch; stress/dyno measure <=120 s, queue until the user is away (then run in the background) and end \"invalid\" when they return. background=true: follow with game.",
+        t("game_test", "Whole test in one call: launch, wait for the world, run steps, quit normally; returns stages, per-phase profile, step results, log summary, Lightning. preset basic: visit 4 structures. stress: tests [chests, mobs, hop, flyover]. dyno: Block Dyno's own plan (mode, default quick). scene: 64x64 flat grass, noon, time/weather/spawns frozen, creative; script it with steps (summon, punch, shot). Same limits as launch; stress/dyno measure <=120 s, queue until the user is away (then run in the background) and end \"invalid\" when they return. background=true: follow with game.",
             obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
-                "preset": { "type": "string", "enum": ["basic", "stress", "dyno"] }, "mode": st(), "tests": strs(),
+                "preset": { "type": "string", "enum": ["basic", "stress", "dyno", "scene"] }, "mode": st(), "tests": strs(),
                 "steps": { "type": "array", "items": { "type": "object" }, "description": "Extra steps (see game)" },
                 "background": { "type": "boolean" }, "scenario_timeout": int(),
                 "test_world": { "type": "object" }, "world": st(), "new_world": st(), "java": int(), "jvm": strs(), "options": { "type": "object" },
                 "config": { "type": "array", "items": { "type": "object" } }, "add_mods": strs(), "disable_mods": strs(), "perf": { "type": "boolean" } }), &["copy", "owner", "purpose"])),
-        t("game", "Talk to a running test game (job). op query: fps, mspt, heap, chunks, entities, player, errors. cmd: run command as the player. scenario: steps [{cmd},{tp:[x,y,z]},{wait:s},{wait_chunks:s},{sample:s},{locate:[ids]},{visit:{count,wait}},{hop},{flyover},{mobs},{chests},{assert:{field,min|max|equals}}]. quit: normal quit. stop: take over a game_test. result: game_test progress or result.",
+        t("bisect", "Thanos: find the mod causing a behaviour by halving. start {copy, run: game_test args (owner, purpose, preset, steps), keep: [file prefixes never disabled], suspects?: [files]}: each round runs the scenario with half the suspects off (mods others require stay on) in the background; check game_result and its shots, then answer {present: true|false} or {failed: true}. Also retry, status, stop. ~log2(mods) rounds.",
+            obj(json!({ "copy": copy, "action": { "type": "string", "enum": ["start", "answer", "retry", "status", "stop"] }, "run": { "type": "object" },
+                "keep": strs(), "suspects": strs(), "present": { "type": "boolean" }, "failed": { "type": "boolean" } }), &["copy", "action"])),
+        t("game", "Talk to a running test game (job). op query: fps, mspt, heap, chunks, entities, player, errors. cmd: run command as the player. scenario: steps [{cmd},{tp:[x,y,z]},{wait:s},{wait_chunks:s},{sample:s},{locate:[ids]},{visit:{count,wait}},{hop},{flyover},{mobs},{chests},{assert:{field,min|max|equals}},{summon:{mob,distance,ai,nbt}} (in front, faced, no AI by default),{punch:{times,every,shots:[s after each punch],label}},{shot:label}]. Shots: <copy>/screenshots/obt-<run>-<label>.png, same label = comparable across runs. quit: normal quit. stop: take over a game_test. result: game_test progress or result.",
             obj(json!({ "job": { "type": "integer" }, "op": { "type": "string", "enum": ["query", "cmd", "scenario", "quit", "stop", "result"] },
                 "command": st(), "steps": { "type": "array", "items": { "type": "object" } }, "timeout": int() }), &["job", "op"])),
         t("screenshots", "Newest screenshot paths in a copy.", obj(json!({ "copy": copy, "count": int() }), &["copy"])),
@@ -161,7 +165,7 @@ pub fn serve() {
                 "protocolVersion": msg.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18")),
                 "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "obelisk", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status."
+                "instructions": "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management)."
             })),
             "ping" => Ok(json!({})),
             "tools/list" => {
@@ -181,6 +185,7 @@ pub fn serve() {
                     args["timeout"] = json!(50);
                 }
                 Ok(match call(&name, &args) {
+                    Ok(v) if name == "guide" => json!({ "content": [{ "type": "text", "text": v["guide"].as_str().unwrap_or_default() }] }),
                     Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
                     Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
                 })
@@ -203,6 +208,15 @@ pub fn serve() {
             }
         }
     }
+}
+
+/// The line the user pastes to their AI so it connects itself and learns what Obelisk does.
+#[tauri::command]
+pub fn ai_hookup_line() -> Result<String, String> {
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    let helper = me.with_file_name("obelisk-mcp.exe");
+    let exe = if helper.is_file() { helper } else { me }.to_string_lossy().into_owned();
+    Ok(format!("I use Obelisk, a Minecraft modpack app with a test bench for AI assistants. Connect to it as an MCP server (stdio, name \"obelisk\"): command \"{exe}\" with argument --mcp. Then call its guide tool and follow it."))
 }
 
 /// Register `obelisk.exe --mcp` with the assistant (Settings → Plugins → Connect). Writes the assistant's

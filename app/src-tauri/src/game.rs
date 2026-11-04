@@ -254,7 +254,70 @@ impl Game<'_> {
         if let Some(v) = step.get("chests") {
             return self.chests((n(v, "size", 16.0) as i64).clamp(2, 32), (n(v, "height", 4.0) as i64).clamp(1, 16), n(v, "seconds", 15.0));
         }
-        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs or chests"))
+        if let Some(v) = step.get("summon") {
+            return self.summon(v);
+        }
+        if let Some(v) = step.get("punch") {
+            return self.punch(n(v, "times", 1.0).clamp(1.0, 50.0) as usize, n(v, "every", 1.0).max(0.1),
+                &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"));
+        }
+        if let Some(v) = step.get("shot") {
+            return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"));
+        }
+        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch or shot"))
+    }
+
+    /// A screenshot named for this run and the label, so the same label can be compared across runs.
+    fn shot(&self, label: &str) -> Result<Value, String> {
+        let label: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(40).collect();
+        self.ask(json!({ "op": "shot", "name": format!("obt-{}-{label}", self.started) }))
+    }
+
+    /// A mob `distance` blocks in front of the player at its feet height, facing it; no AI by default (it stands still).
+    fn summon(&self, v: &Value) -> Result<Value, String> {
+        let mob = v.as_str().or_else(|| v["mob"].as_str()).ok_or("summon needs a mob, e.g. {\"summon\":{\"mob\":\"zombie\"}}")?;
+        if !mob.chars().all(|c| c.is_ascii_alphanumeric() || "_:.-/".contains(c)) { return Err("summon: a mob id like zombie or minecraft:warden".into()) }
+        let mob = if mob.contains(':') { mob.to_string() } else { format!("minecraft:{mob}") };
+        let dist = v["distance"].as_f64().unwrap_or(3.0).clamp(1.0, 32.0);
+        let q = self.query()?;
+        let p = &q["player"];
+        let (x, y, z) = (p["x"].as_f64().ok_or("no player in the world")?, p["y"].as_f64().unwrap_or(0.0), p["z"].as_f64().unwrap_or(0.0));
+        let yaw = p["yaw"].as_f64().unwrap_or(0.0).to_radians();
+        let (mx, mz) = (x - yaw.sin() * dist, z + yaw.cos() * dist);
+        let mut nbt = vec!["PersistenceRequired:1b".to_string()];
+        if !v["ai"].as_bool().unwrap_or(false) { nbt.push("NoAI:1b".into()) }
+        if let Some(extra) = v["nbt"].as_str().map(|t| t.trim().trim_start_matches('{').trim_end_matches('}')).filter(|t| !t.is_empty()) { nbt.push(extra.into()) }
+        let out = self.cmd(format!("summon {mob} {mx:.2} {y:.2} {mz:.2} {{{}}}", nbt.join(",")))?;
+        (self.pause)(0.25)?;
+        // Face its eyes so the punch lands and the shot shows it.
+        self.cmd(format!("tp @s {x:.2} {y:.2} {z:.2} facing entity @e[type={mob},limit=1,sort=nearest] eyes"))?;
+        (self.pause)(0.25)?;
+        Ok(json!({ "summoned": mob, "at": [mx, y, mz], "output": out["output"] }))
+    }
+
+    /// `times` punches `every` seconds apart; after each, screenshots at the given offsets (seconds after that punch).
+    fn punch(&self, times: usize, every: f64, shots: &[f64], label: &str) -> Result<Value, String> {
+        let mut plan: Vec<(f64, Option<(usize, f64)>)> = Vec::new(); // (when, None = punch | Some(punch, offset) = shot)
+        for i in 0..times {
+            let t = i as f64 * every;
+            plan.push((t, None));
+            for &s in shots.iter().filter(|s| **s >= 0.0 && **s <= 30.0) { plan.push((t + s, Some((i, s)))) }
+        }
+        plan.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.is_some().cmp(&b.1.is_some())));
+        let t0 = Instant::now();
+        let (mut hits, mut files) = (Vec::new(), Vec::new());
+        for (at, what) in plan {
+            let wait = at - t0.elapsed().as_secs_f64();
+            if wait > 0.0 { (self.pause)(wait)? }
+            match what {
+                None => hits.push(self.ask(json!({ "op": "attack" }))?),
+                Some((i, s)) => {
+                    let f = self.shot(&format!("{label}{}-{}ms", i + 1, (s * 1000.0).round()))?;
+                    files.push(json!({ "punch": i + 1, "after": s, "file": f["file"], "late_ms": ((t0.elapsed().as_secs_f64() - at) * 1000.0).round() }));
+                }
+            }
+        }
+        Ok(json!({ "hits": hits, "shots": files }))
     }
 
     /// Frame and tick stats over `secs`, `during` running once per loop (it should take about a second); readyS =

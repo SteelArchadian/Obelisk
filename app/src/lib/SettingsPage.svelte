@@ -177,6 +177,12 @@
 
   const mb = (n: number) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : `${Math.round(n / (1 << 20))} MB`);
 
+  let aiLine = $state("");
+  $effect(() => { if (settings.controlApi && !aiLine) invoke<string>("ai_hookup_line").then((l) => (aiLine = l)).catch(() => {}); });
+  async function copyAiLine() {
+    await navigator.clipboard.writeText(aiLine);
+    toast("Copied. Paste it to your AI.");
+  }
   let aiBusy = $state(false);
   async function connectAi() {
     aiBusy = true;
@@ -387,6 +393,13 @@
           <button class="primary" disabled={aiBusy} onclick={connectAi}>{aiBusy ? "Connecting…" : "Connect"}</button>
         </div>
         <p class="muted small">Connect adds Obelisk to {settings.aiAssistant === "gpt" ? "Codex" : "Claude Code"} as a tool. Start a new chat afterwards to see it. Keep Obelisk open (the tray is enough) while the assistant works.</p>
+        {#if aiLine}
+          <p class="muted small">Working with another AI, or one already open? Tell it this:</p>
+          <div class="ai-line">
+            <code>{aiLine}</code>
+            <button onclick={copyAiLine}>Copy</button>
+          </div>
+        {/if}
         <Releases />
       {/if}
     {:else if app.settingsSection === "curseforge"}
@@ -514,6 +527,8 @@
   .ghost:disabled { opacity: 0.6; }
   .link { background: none; border: 0; color: var(--accent); padding: 0; }
   .ai-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: -4px 0 0; }
+  .ai-line { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 8px; }
+  .ai-line code { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 6px; background: var(--panel-2); font-size: 12px; overflow-wrap: anywhere; user-select: all; }
   .seg { display: inline-flex; flex-wrap: wrap; width: fit-content; max-width: 100%; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .seg button { padding: 6px 12px; background: transparent; border: 0; color: inherit; cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--line); }
