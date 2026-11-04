@@ -467,15 +467,32 @@ fn jvm_props(args: &Value) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// Is a game running in this instance? Any java whose command line points into it, as benchlock.py swapwait checks
+/// ("/<folder name>" then /, quote, space or the end), so a game Prism started (natives, gameDir) counts too.
 fn game_running_in(dir: &Path) -> bool {
     let want = canon(dir).map(|c| c.to_string_lossy().trim_start_matches(r"\\?\").replace('\\', "/").to_ascii_lowercase());
     let Some(want) = want else { return false };
+    let key = format!("/{}", want.trim_end_matches('/').rsplit('/').next().unwrap_or_default());
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always));
     sys.processes().values().any(|p| {
-        p.name().to_string_lossy().to_ascii_lowercase().starts_with("java")
-            && p.cmd().iter().any(|a| a.to_string_lossy().replace('\\', "/").to_ascii_lowercase().trim_end_matches('/') == want)
+        if !p.name().to_string_lossy().to_ascii_lowercase().starts_with("java") { return false }
+        let line = p.cmd().iter().map(|a| a.to_string_lossy().replace('\\', "/").to_ascii_lowercase()).collect::<Vec<_>>().join(" ");
+        line.match_indices(&key).any(|(i, _)| line[i + key.len()..].chars().next().is_none_or(|c| matches!(c, '/' | '"' | ' ')))
     })
+}
+
+/// Jars are swapped only while that instance's game is closed (user, KB #36): wait up to 50 s for it to close.
+fn swap_wait(dir: &Path) -> Result<(), String> {
+    let t0 = Instant::now();
+    while game_running_in(dir) {
+        if t0.elapsed() > Duration::from_secs(50) {
+            let name = dir.file_name().unwrap_or_default().to_string_lossy();
+            return Err(format!("the game in {name} is running; nothing was changed. Jars are only swapped while it is closed: try again after it closes (play_wait for the play instance)"));
+        }
+        std::thread::sleep(Duration::from_secs(5));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- commands
@@ -575,9 +592,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "mod-update" => {
             let file = need(args, "file")?;
             let dir = changeable(need(args, "copy")?, &format!("mod-update {file}"))?;
-            if game_running_in(&dir) {
-                return Err("a game is running in that copy; stop it first".into());
-            }
+            swap_wait(&dir)?;
             let (loader, mc) = pack_of(args)?;
             note_loader_version(&dir);
             let mr = prism::modrinth::Client::new()?;
@@ -612,9 +627,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             // "AANobbMI" / "sodium" (Modrinth id or slug) or "cf:238222" (CurseForge project id).
             let project = need(args, "project")?.to_string();
             let dir = changeable(need(args, "copy")?, &format!("mod-install {project}"))?;
-            if game_running_in(&dir) {
-                return Err("a game is running in that copy; stop it first".into());
-            }
+            swap_wait(&dir)?;
             let (loader, mc) = pack_of(args)?;
             note_loader_version(&dir);
             let version = s(args, "version").map(str::to_string);
@@ -642,9 +655,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "mod-enable" | "mod-disable" => {
             let file = need(args, "file")?;
             let dir = changeable(need(args, "copy")?, &format!("{cmd} {file}"))?;
-            if game_running_in(&dir) {
-                return Err("a game is running in that copy; stop it first".into());
-            }
+            swap_wait(&dir)?;
             if cmd == "mod-enable" {
                 let ids = prism::dupes::own_ids(&dir.join("mods").join(file));
                 if let Some((id, other)) = prism::dupes::clash(&prism::dupes::index(&dir.join("mods")), &ids, file) {
@@ -659,9 +670,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             let jar = mcw_jar(need(args, "jar")?)?;
             let name = jar.file_name().unwrap().to_owned();
             let dir = changeable(need(args, "copy")?, &format!("mod-add {}", name.to_string_lossy()))?;
-            if game_running_in(&dir) {
-                return Err("a game is running in that copy; stop it first".into());
-            }
+            swap_wait(&dir)?;
             let ids = prism::dupes::own_ids(&jar);
             if let Some((id, other)) = prism::dupes::clash(&prism::dupes::index(&dir.join("mods")), &ids, &name.to_string_lossy()) {
                 return Err(format!("{other} already provides {id}; remove or disable it first (two copies stop the game starting)"));
@@ -676,9 +685,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
                 return Err("\"file\" must be a jar file name from the mods list".into());
             }
             let dir = changeable(need(args, "copy")?, &format!("mod-remove {file}"))?;
-            if game_running_in(&dir) {
-                return Err("a game is running in that copy; stop it first".into());
-            }
+            swap_wait(&dir)?;
             let src = dir.join("mods").join(file);
             if !src.is_file() {
                 return Err(format!("{file} isn't in mods"));
@@ -878,7 +885,7 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let dyno = preset.as_deref() == Some("dyno");
     if dyno || preset.as_deref() == Some("stress") {
         o.insert("stop_if_playing".into(), json!(true));
-        // Measured runs: 120 s in the world at most, like perf runs (launch reads this). Not a perf lock.
+        // Measured runs: 120 s in the world at most and the bench to themselves, like perf runs (launch reads this).
         o.insert("measured".into(), json!(true));
         // Block Dyno has no hold (it quits itself): its limit is the load allowance plus 120 s.
         if dyno { o.insert("timeout".into(), json!(LOAD_ALLOWANCE + SMOKE_HOLD)); }
@@ -897,7 +904,10 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let long = preset.as_deref().is_some_and(|p| p == "stress" || p == "dyno");
     let test_hold = max_hold(&purpose, long || o.get("perf").and_then(Value::as_bool).unwrap_or(false));
     let scenario_timeout = o.remove("scenario_timeout").and_then(|t| t.as_u64()).unwrap_or(test_hold).min(test_hold);
-    let background = o.remove("background").and_then(|b| b.as_bool()).unwrap_or(false);
+    let mut background = o.remove("background").and_then(|b| b.as_bool()).unwrap_or(false);
+    // A measured run queues until the user is away, maybe for hours: don't hold the chat's call that long.
+    let away_wait = if long || o.get("perf").and_then(Value::as_bool).unwrap_or(false) { user_not_away() } else { None };
+    if away_wait.is_some() { background = true }
     let mut jvm: Vec<Value> = o.get("jvm").and_then(|j| j.as_array().cloned()).unwrap_or_default();
     let has = |jvm: &[Value], k: &str| jvm.iter().any(|a| a.as_str().is_some_and(|a| a.contains(k)));
     let copy = need(args, "copy")?.to_string();
@@ -953,7 +963,8 @@ fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     };
     if background {
         std::thread::spawn(run);
-        return Ok(json!({ "job": id, "background": true, "note": "game_result {job} for progress or the result; game_stop {job} to take over; game_query/game_cmd work any time." }));
+        return Ok(json!({ "job": id, "background": true, "queued_until_away": away_wait,
+            "note": "game_result {job} for progress or the result; game_stop {job} to take over; game_query/game_cmd work any time." }));
     }
     Ok(run())
 }
@@ -963,7 +974,11 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, jobs:
         let (m, _) = &**jobs;
         m.lock().unwrap().list.get(&id).and_then(|j| j.now["t"].as_f64()).unwrap_or(0.0)
     };
-    let waited = wait(&json!({ "job": id, "until": "inWorld", "timeout": 3600 }), jobs)?;
+    // A measured run may sit in the queue for hours (until the user is away).
+    let waited = loop {
+        let w = wait(&json!({ "job": id, "until": "inWorld", "timeout": 3600 }), jobs)?;
+        if w["state"] != "queued" { break w }
+    };
     let mut scenario = Value::Null;
     let (mut t_steps, mut t_steps_end, mut t_quit) = (None, None, None);
     let in_world = !dyno && waited["state"] == "running" && waited["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "inWorld"));
@@ -1133,6 +1148,13 @@ fn user_playing() -> Option<String> {
     let o = bench(&["playing"]).output().ok()?;
     if o.status.code() != Some(0) { return None }
     Some(String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Why the user isn't away (benchlock.py away: input in the last 10 min, or a game), or None when they are.
+fn user_not_away() -> Option<String> {
+    let o = bench(&["away"]).output().ok()?;
+    if o.status.code() == Some(0) { return None }
+    Some(String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty()).or(Some("not away".into()))
 }
 
 /// Remove this Obelisk's waiting tickets for `owner` from the bench queue.
@@ -1723,7 +1745,8 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // Holds: what the chat asked (jvm), a test_world's own, or the default one put in above.
     let perf_run = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
     let fps_props = extra.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)) && !a.starts_with("-Dspeedloader.autobench"));
-    let cap = max_hold(&purpose, perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false));
+    let measured = perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false);
+    let cap = max_hold(&purpose, measured);
     let mut hold = None;
     for a in &extra {
         let Some(v) = a.strip_prefix("-Dspeedloader.hold=").or_else(|| a.strip_prefix("-Doptimal.hold=")) else { continue };
@@ -1785,25 +1808,29 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let lock = format!("{owner} - {purpose} (obelisk)");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
-    // Only a performance test needs the bench to itself; anything else shares it, one run per copy.
+    // Only a measured run (perf, fps, stress, dyno) needs the bench to itself; anything else shares it, one run per
+    // copy. A measured run queues until the user is away and ends "invalid" when they come back (user, KB #36).
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
-    let stop_if_playing = perf || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
+    let exclusive = measured;
+    let stop_if_playing = exclusive || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
-    Ok(json!({ "job": id, "state": "queued", "lock": format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\""), "gc": reply_gc,
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, exclusive, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
+    let lock_note = if exclusive { format!("measured run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
+        else { format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") };
+    Ok(json!({ "job": id, "state": "queued", "lock": lock_note, "gc": reply_gc,
         "limit": format!("ended as \"{OVERTIME}\" {timeout} s after the game starts"),
         "preset": crosspc.then_some(CROSSPC) }))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
+fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, exclusive: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
     build_world: Option<(Value, u64)>) {
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
     let mut acquire = vec!["acquire", &lock, "--pid", &me, "--wait", "--eta", &eta_s];
-    if !perf { acquire.extend(["--shared", "--copy", &copy]); }
+    if !exclusive { acquire.extend(["--shared", "--copy", &copy]); }
     let child = bench(&acquire).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     let Ok(mut child) = child else {
         update(&jobs, id, |j| { j.state = "failed".into(); j.detail = "couldn't run benchlock.py".into(); j.ended = Some(now()); });
@@ -1814,7 +1841,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let got = loop {
         if let Ok(Some(s)) = child.try_wait() { break s.code() == Some(0); }
         let holder = bench(&["status"]).output().ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
-        let d = match (user_playing(), holder) {
+        let d = match (if exclusive { user_not_away() } else { user_playing() }, holder) {
+            (Some(p), _) if exclusive => Some(format!("waiting until the user is away ({p})")),
             (Some(p), _) => Some(format!("waiting: the user is playing ({p})")),
             (None, holder) => match holder {
             Some(h) if h["owner"].is_string() => Some(format!("waiting for the bench lock: {} has it, expected to end {}",
@@ -1901,7 +1929,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         if stop_if_playing {
             let (playing, watching) = (playing.clone(), watching.clone());
             std::thread::spawn(move || while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(p) = user_playing() { *playing.lock().expect("playing") = Some(p); break }
+                if let Some(p) = if exclusive { user_not_away() } else { user_playing() } { *playing.lock().expect("playing") = Some(p); break }
                 std::thread::sleep(Duration::from_secs(10));
             });
         }
@@ -1960,7 +1988,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             if let Some(p) = playing.lock().expect("playing").take() {
                 super::kill_tree(pid);
                 let _ = game.wait();
-                break format!("{INVALID}: stopped because the user started playing ({p})");
+                break format!("{INVALID}: stopped because the user {} ({p})", if exclusive { "came back" } else { "started playing" });
             }
             if let Some(why) = kill_now {
                 super::kill_tree(pid);

@@ -22,7 +22,7 @@ pub(crate) fn tools() -> Value {
     let job = || json!({ "job": { "type": "integer" } });
     json!([
         t("copies", "Test copies and whether a game runs in each.", obj(json!({}), &[])),
-        t("launch", "Launch a test copy (waits for the bench lock; muted, off-screen, test harness). LIMITS: hold <=120 s (perf too); <=600 s only for a non-perf run whose purpose says \"interaction\"; timeout <=600; killed as \"overtime\" at 240 s + hold. Returns a job: use wait; end with kill when no save is needed.",
+        t("launch", "Launch a test copy (waits for the bench lock; perf/fps runs queue until the user is away and end \"invalid\" when they return; muted, off-screen, test harness). LIMITS: hold <=120 s (perf too); <=600 s only for a non-perf run whose purpose says \"interaction\"; timeout <=600; killed as \"overtime\" at 240 s + hold. Returns a job: use wait; end with kill when no save is needed.",
             obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
                 "preset": { "type": "string", "enum": ["crosspc"], "description": "Fixed cross-PC profiling run (perf)" },
                 "eta": { "type": "integer", "description": "Minutes" },
@@ -52,7 +52,7 @@ pub(crate) fn tools() -> Value {
         t("heap", "jcmd snapshot of a running launch into <copy>/jfr: histogram (default), dump (.hprof), threads (3 dumps, stuck frames by mod).",
             obj(json!({ "job": { "type": "integer" }, "kind": { "type": "string", "enum": ["histogram", "dump", "threads"] } }), &["job"])),
         t("mods", "A copy's mods, enabled state and duplicates.", obj(json!({ "copy": copy }), &["copy"])),
-        t("mod_set", "Enable, disable or remove (moved aside, never deleted) a mod file in a copy.",
+        t("mod_set", "Enable, disable or remove (moved aside, never deleted) a mod file in a copy. Mod changes wait for that game to close.",
             obj(json!({ "copy": copy, "file": st(), "state": { "type": "string", "enum": ["enabled", "disabled", "removed"] } }), &["copy", "file", "state"])),
         t("mod_add", "Copy a bench .jar into a copy's mods (refused if its mod id is already there).", obj(json!({ "copy": copy, "jar": st() }), &["copy", "jar"])),
         t("mod_install", "Install from Modrinth (id/slug) or CurseForge (cf:<id>) with dependencies.",
@@ -62,7 +62,7 @@ pub(crate) fn tools() -> Value {
         t("reports", "A copy's crash reports and logs.", obj(json!({ "copy": copy }), &["copy"])),
         t("diagnose", "Explain a crash report or log (default latest.log): cause, mods at fault, errors by mod.", obj(json!({ "copy": copy, "file": st() }), &["copy"])),
         t("log", "Read a log, grep (substring) and tail.", obj(json!({ "copy": copy, "file": st(), "grep": st(), "tail": int() }), &["copy"])),
-        t("game_test", "Whole test in one call: launch, wait for the world, run steps, quit normally; returns stages, per-phase profile, step results, log summary, Lightning. preset basic: visit 4 structures. stress: tests [chests, mobs, hop, flyover]. dyno: Block Dyno's own plan (mode, default quick). Same limits as launch; stress/dyno measure <=120 s and end \"invalid\" if the user starts playing. background=true: follow with game.",
+        t("game_test", "Whole test in one call: launch, wait for the world, run steps, quit normally; returns stages, per-phase profile, step results, log summary, Lightning. preset basic: visit 4 structures. stress: tests [chests, mobs, hop, flyover]. dyno: Block Dyno's own plan (mode, default quick). Same limits as launch; stress/dyno measure <=120 s, queue until the user is away (then run in the background) and end \"invalid\" when they return. background=true: follow with game.",
             obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
                 "preset": { "type": "string", "enum": ["basic", "stress", "dyno"] }, "mode": st(), "tests": strs(),
                 "steps": { "type": "array", "items": { "type": "object" }, "description": "Extra steps (see game)" },
