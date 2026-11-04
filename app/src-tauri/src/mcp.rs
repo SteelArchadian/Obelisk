@@ -8,144 +8,111 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
 
 fn copy_arg() -> Value {
-    json!({ "type": "string", "description": "A test copy folder directly in the test bench (see copies). Read-only tools and the mod tools also take \"play\" for the play instance (mod changes there take a safety backup first; it is never launched)." })
+    json!({ "type": "string", "description": "Test copy folder (see copies); \"play\" = the play instance (reads and mod changes only, backed up first, never launched)" })
 }
 
+// Kept short on purpose: every chat carries this list in its context on every turn (user, 2026-11-03).
 pub(crate) fn tools() -> Value {
     let copy = copy_arg();
     let obj = |props: Value, req: &[&str]| json!({ "type": "object", "properties": props, "required": req });
     let t = |name: &str, desc: &str, schema: Value| json!({ "name": name, "description": desc, "inputSchema": schema });
+    let st = || json!({ "type": "string" });
+    let int = || json!({ "type": "integer" });
+    let strs = || json!({ "type": "array", "items": { "type": "string" } });
+    let job = || json!({ "job": { "type": "integer" } });
     json!([
-        t("copies", "List the test copies in the test bench and whether a game runs in each.", obj(json!({}), &[])),
-        t("launch", "Launch Minecraft in a test copy (never the play instance), at full speed outside the assistant's sandbox. LIMITS (kb/rules/testing.md): hold 120 s or less, perf/fps runs included (600 s only for a non-perf run whose purpose says \"interaction\" and what it checks); timeout 600 s or less; every run is killed as state \"overtime\" at 240 s + its hold (12 min at most). Waits for the bench lock first (shared with other test runs, one per copy, unless perf is set), mutes the game, adds the test harness (no mouse grab), turns off Absolute AFK Cinema, parks the window off-screen, and kills it if still alive 30 s after \"Stopping!\". Returns a job id; use wait. End runs that need no saved progress with kill (fast quit).",
-            obj(json!({ "copy": copy, "owner": { "type": "string", "description": "Your chat's name (for the bench lock)" },
-                "purpose": { "type": "string" },
-                "preset": { "type": "string", "enum": ["crosspc"], "description": "crosspc: the cross-PC profiling scenario (crosspc-2: 120 s in the world), the same on every PC: fixed-seed normal world flown in spectator on a fixed teleport route (Lightning records 100 s from 15 s in, then quits), vsync off, maxFps 260, render and simulation distance 6, Lightning capture gpu,render,ticks,cpu,alloc,gc,threads, perf lock, and this PC's pc-overrides skipped. Arguments you give win (e.g. config for a shader pass)" },
-                "eta": { "type": "integer", "description": "Expected minutes, 1-30" },
-                "world": { "type": "string", "description": "Save folder to open automatically (Speed Loader autobench), or \"new:<seed>\" for a fresh world (same as new_world)" },
-                "jvm": { "type": "array", "items": { "type": "string" }, "description": "Extra -Dmod.key=value properties, e.g. -Dlightning.capture=gpu,cpu or -Dpackbench.scene=gate" },
-                "camera": { "type": "object", "description": "Hold the player's view for aimed screenshots (sky, shadows, models). pitch: -90 straight up to 90 straight down; yaw: 0 south, 90 west, 180 north, -90 east. Either may be left out",
-                    "properties": { "pitch": { "type": "number" }, "yaw": { "type": "number" } } },
-                "timeout": { "type": "integer", "description": "Seconds before the run is killed as overtime (60-600, default 600; with a hold the limit is 240 s + hold)" },
-                "park": { "type": "boolean", "description": "Ignored: test windows always stay off-screen in the background" },
-                "new_world": { "type": "string", "description": "Seed: Speed Loader creates and benches a new world; it is deleted after the run" },
-                "test_world": { "type": "object", "description": "Build a custom world for this run and open it (instead of world/new_world). Overworld is flat with your layers (none = empty void); nether and end are normal. The previous test world in the copy is replaced. Scripted events count from when the player is first in the world; commands run as the server (no leading slash needed). The save is saves/obtest-<time>",
-                    "properties": {
-                        "layers": { "type": "array", "description": "Bottom first from y=-64, e.g. [{block:\"bedrock\",height:1},{block:\"sand\",height:3}]. Default bedrock, 2 dirt, grass. [] = void",
-                            "items": { "type": "object", "properties": { "block": { "type": "string" }, "height": { "type": "integer" } } } },
-                        "terrain": { "type": "string", "enum": ["flat", "normal"], "description": "normal: real overworld terrain (hills, water, caves, structures) from seed, the player starting at y 200 (use game_mode spectator to fly with tp events). Default flat" },
-                        "seed": { "description": "With terrain normal: a number or text, as in Minecraft's create-world screen (default 0)" },
-                        "biome": { "type": "string", "description": "Default plains (the_void when layers is [])" },
-                        "border": { "type": "integer", "description": "World border width in blocks (16-60000000), centred on the spawn" },
-                        "platform": { "type": "object", "description": "A square slab built when the world starts, e.g. a sky island: {y:150,size:32,block:\"stone\"} (size up to 1024). The player starts on it",
-                            "properties": { "y": { "type": "integer" }, "size": { "type": "integer" }, "block": { "type": "string" } } },
-                        "spawn": { "type": "object", "description": "Where the player starts {x,y,z}; default on the platform or the top layer at 0,0",
-                            "properties": { "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" } } },
-                        "hold": { "type": "integer", "description": "Seconds to stay in the world before the run quits (5-120; up to 600 only for non-perf interaction runs). Default: long enough for the last event (+60 s with repeating events), at least 20" },
-                        "game_mode": { "type": "string", "enum": ["creative", "survival", "adventure", "spectator"], "description": "Default creative" },
-                        "setup": { "type": "array", "items": { "type": "string" }, "description": "Commands run once when the world first starts, e.g. \"gamerule doDaylightCycle false\", \"time set night\"" },
-                        "events": { "type": "array", "description": "Scripted commands: at seconds after the player arrives, optionally repeating every N seconds, e.g. {at:5,command:\"summon zombie 4 151 4\"}",
-                            "items": { "type": "object", "properties": { "at": { "type": "number" }, "every": { "type": "number" }, "command": { "type": "string" } } } } } },
-                "jfr": { "type": "boolean", "description": "Record a JFR profile to <copy>/jfr/obelisk-<time>.jfr (CPU samples, allocation samples with stacks over time, GC and heap summaries, old-object samples)" },
-                "at": { "type": "array", "description": "Hooks at stages: when event has happened and after more seconds passed, do it. Results land in the job's hooks (wait shows them)",
-                    "items": { "type": "object", "properties": {
-                        "event": { "type": "string", "description": "window, modsLoaded, resourcesLoaded, titleScreen, joinStart, inWorld, terrainReady, leaveStart, leaveDone, quit, pressure0..3" },
-                        "after": { "type": "number", "description": "Seconds after the event (default 0)" },
-                        "do": { "type": "string", "enum": ["histogram", "dump", "threads", "kill"], "description": "histogram/dump/threads: snapshot to <copy>/jfr (see heap); kill: fast quit there (ends the game at once, no world save; the quickest way to finish a run that needs no saved progress)" } },
-                        "required": ["event", "do"] } },
-                "jfr_roots": { "type": "boolean", "description": "With jfr: keep each old-object sample's reference chain to its GC root (who holds it); adds time when the recording is written at exit" },
-                "disable_mods": { "type": "array", "items": { "type": "string" }, "description": "Jar file names in mods/ to set aside for this run only" },
-                "add_mods": { "type": "array", "items": { "type": "string" }, "description": "Jars in the test bench to add for this run only" },
-                "config": { "type": "array", "items": { "type": "object", "properties": { "file": { "type": "string" }, "key": { "type": "string" }, "value": { "type": "string" } }, "required": ["file", "key", "value"] }, "description": "TOML settings for this run only: file relative to the copy, dotted key (section.key, must exist), value as TOML (true, 12, \"text\"). Restored byte-for-byte after" },
-                "java": { "type": "integer", "description": "Leave out to use the Java of the profile the copy came from (its JVM args and memory are always used). 21 = the install's Java, 25 = jdk-25* in the test bench's java folder" },
-                "compact_headers": { "type": "boolean", "description": "Java 25 only: -XX:+UseCompactObjectHeaders" },
-                "gc": { "type": "array", "items": { "type": "string" }, "description": "This run's garbage collector, in place of every GC flag from the profile and bench defaults (nothing saved): exactly one -XX:+Use...GC plus GC tuning only, e.g. [\"-XX:+UseShenandoahGC\", \"-XX:ShenandoahGCMode=generational\", \"-XX:ConcGCThreads=2\"]. The flags used appear in the launch reply and the job result." },
-                "options": { "type": "object", "description": "options.txt settings for this run only, put back after it, e.g. {\"renderDistance\": 12, \"simulationDistance\": 8}. Test copies run at renderDistance 6 unless a run sets it." },
-                "perf": { "type": "boolean", "description": "A performance test (FPS, load times, memory): waits until no other test runs and has the bench to itself. Only when the user asked for one. Default false: shares the bench with other non-performance runs, one run per copy" } }), &["copy", "owner", "purpose"])),
-        t("gate", "Run the full-pack gate (gate.py in the test bench's scripts) in its gate copy, optionally swapping in a candidate jar. Limits: cycles 1-2 (default 2), hold 30-120 s (default 120); killed as state \"overtime\" 720 s after it gets the bench lock.",
-            obj(json!({ "owner": { "type": "string" }, "jar": { "type": "string", "description": "Candidate .jar in the test bench" },
-                "replace": { "type": "string", "description": "Glob in mods/ of the jar(s) it replaces" }, "mods": { "type": "string" },
-                "cycles": { "type": "integer" }, "hold": { "type": "integer" }, "sync": { "type": "boolean" }, "tag": { "type": "string" },
-                "loader_version": { "type": "string", "description": "A loader version folder in the install to run instead of the default (e.g. a library-override test version like neoforge-21.1.252-mixin017)" } }), &["owner"])),
-        t("play_status", "Is the user playing? The user's own games (packs in Prism's instances folder, e.g. Foundation, Odyssey; never test copies) running now: pack, name, pid, since (unix seconds), minutes. Read-only; never touches the game.", obj(json!({}), &[])),
-        t("play_wait", "Block until the user's own game is closed (or the timeout passes, default 50 s, max 600; keep it under your client's tool timeout and call again while closed is false), then return closed true/false. Use it instead of polling before installing into a play pack. Read-only; never touches the game.",
-            obj(json!({ "timeout": { "type": "integer", "description": "Seconds to wait (1-600, default 50)" } }), &[])),
-        t("status", "Jobs started through Obelisk (launches, gates, copies) and their state.", obj(json!({ "job": { "type": "integer" } }), &[])),
-        t("wait", "Block until a job finishes, reaches a stage (until), or the timeout passes (default 50 s, max 600; keep it under your client's tool timeout), then return the job. Call again while it is still queued or running. A launch's job carries events (stages with seconds since Java started) and now (latest CPU/memory/GPU/heap sample); every sample is in C:/mcw/obelisk-runs/<copy>/<job>.samples.jsonl.",
-            obj(json!({ "job": { "type": "integer" }, "timeout": { "type": "integer" },
-                "until": { "type": "string", "description": "Return as soon as this stage happens: window, modsLoaded, resourcesLoaded, titleScreen, joinStart, inWorld, terrainReady, leaveStart, leaveDone, quit, or pressure0..pressure3 (Optimal's memory pressure)" } }), &["job"])),
-        t("kill", "Fast quit: ends a job's game (or script) at once without saving, the same as End task. Use it to finish any test that doesn't need its world saved, instead of waiting for a normal quit. In the game itself, shift-clicking the pause menu's quit button does the same.", obj(json!({ "job": { "type": "integer" } }), &["job"])),
-        t("heap", "Snapshot a running launch's heap with jcmd, into <copy>/jfr/. \"histogram\" (default): live objects per class, count and shallow bytes; forces a full GC, a few seconds, repeat it for a series over time. \"dump\": an .hprof of live objects for retained sizes in Eclipse MAT or VisualVM; freezes the game while writing and is about as large as the used heap. \"threads\": where a hang is: three thread dumps 1.5 s apart; for the render, server and main threads and busy loading workers, their top frames, whether they stayed stuck on the same frames, and which packages (mods) they are in.",
+        t("copies", "Test copies and whether a game runs in each.", obj(json!({}), &[])),
+        t("launch", "Launch a test copy (waits for the bench lock; muted, off-screen, test harness). LIMITS: hold <=120 s (perf too); <=600 s only for a non-perf run whose purpose says \"interaction\"; timeout <=600; killed as \"overtime\" at 240 s + hold. Returns a job: use wait; end with kill when no save is needed.",
+            obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
+                "preset": { "type": "string", "enum": ["crosspc"], "description": "Fixed cross-PC profiling run (perf)" },
+                "eta": { "type": "integer", "description": "Minutes" },
+                "world": { "type": "string", "description": "Save to open, or new:<seed>" },
+                "new_world": { "type": "string", "description": "Seed for a fresh world, deleted after" },
+                "test_world": { "type": "object", "description": "Custom world: layers [{block,height}] (bottom first; [] = void), terrain flat|normal, seed, biome, border, platform {y,size,block}, spawn {x,y,z}, hold, game_mode, setup [cmds], events [{at,every,command}] (seconds after arrival)" },
+                "jvm": { "type": "array", "items": { "type": "string" }, "description": "-Dmod.key=value" },
+                "timeout": int(),
+                "camera": { "type": "object", "description": "{pitch,yaw} held for screenshots" },
+                "jfr": { "type": "boolean" }, "jfr_roots": { "type": "boolean" },
+                "at": { "type": "array", "items": { "type": "object" }, "description": "Hooks [{event,after,do}]; do: histogram|dump|threads|kill; event: a stage as in wait" },
+                "disable_mods": strs(), "add_mods": strs(),
+                "config": { "type": "array", "items": { "type": "object" }, "description": "[{file,key,value}] TOML for this run only" },
+                "options": { "type": "object", "description": "options.txt for this run only" },
+                "java": { "type": "integer", "description": "21 or 25; default the profile's" },
+                "compact_headers": { "type": "boolean" },
+                "gc": { "type": "array", "items": { "type": "string" }, "description": "One -XX:+Use...GC plus tuning, replaces the profile's" },
+                "perf": { "type": "boolean", "description": "Bench to itself; only when the user asked" } }), &["copy", "owner", "purpose"])),
+        t("gate", "Full-pack gate in the gate copy, optionally with a candidate jar. cycles <=2, hold <=120; overtime at 720 s.",
+            obj(json!({ "owner": st(), "jar": st(), "replace": { "type": "string", "description": "Glob of the jar(s) it replaces" },
+                "mods": st(), "cycles": int(), "hold": int(), "sync": { "type": "boolean" }, "tag": st(), "loader_version": st() }), &["owner"])),
+        t("play_wait", "Wait until the user's own game is closed (timeout default 50 s); returns closed true/false.", obj(json!({ "timeout": int() }), &[])),
+        t("status", "Obelisk jobs and their state.", obj(job(), &[])),
+        t("wait", "Wait for a job to finish or reach a stage (until: window, modsLoaded, titleScreen, inWorld, terrainReady, leaveStart, quit, pressure0..3). timeout default 50, max 600. Samples: C:/mcw/obelisk-runs/<copy>/<job>.samples.jsonl.",
+            obj(json!({ "job": { "type": "integer" }, "timeout": int(), "until": st() }), &["job"])),
+        t("kill", "Fast quit a job's game, no save.", obj(job(), &["job"])),
+        t("heap", "jcmd snapshot of a running launch into <copy>/jfr: histogram (default), dump (.hprof), threads (3 dumps, stuck frames by mod).",
             obj(json!({ "job": { "type": "integer" }, "kind": { "type": "string", "enum": ["histogram", "dump", "threads"] } }), &["job"])),
-        t("mods", "List a copy's mods with file names and enabled state, plus any duplicates (same mod installed twice).", obj(json!({ "copy": copy }), &["copy"])),
-        t("mod_enable", "Enable a mod in a test copy.", obj(json!({ "copy": copy, "file": { "type": "string" } }), &["copy", "file"])),
-        t("mod_disable", "Disable a mod in a test copy.", obj(json!({ "copy": copy, "file": { "type": "string" } }), &["copy", "file"])),
-        t("mod_add", "Copy a .jar from in the test bench into a test copy's mods. Refused if another enabled jar already provides the same mod id.", obj(json!({ "copy": copy, "jar": { "type": "string" } }), &["copy", "jar"])),
-        t("mod_remove", "Move a mod out of a test copy (into mods-removed-obelisk; never deleted).", obj(json!({ "copy": copy, "file": { "type": "string" } }), &["copy", "file"])),
-        t("mod_install", "Install a mod (and its required dependencies) from Modrinth or CurseForge into a copy or play (play gets a safety backup first). Refuses a mod that is already there from the other site. Loader/Minecraft default to Foundation's.",
-            obj(json!({ "copy": { "type": "string" }, "project": { "type": "string", "description": "Modrinth project id or slug, or cf:<CurseForge project id>" },
-                "version": { "type": "string", "description": "Exact Modrinth version id or CurseForge file id (default: newest that fits)" },
-                "loader": { "type": "string" }, "minecraft": { "type": "string" } }), &["copy", "project"])),
-        t("updates", "Which files in a copy (or play) have updates on Modrinth/CurseForge, and which are on neither site.",
-            obj(json!({ "copy": { "type": "string" }, "loader": { "type": "string" }, "minecraft": { "type": "string" } }), &["copy"])),
-        t("mod_update", "Update one file to its newest fitting version (play gets a safety backup first).",
-            obj(json!({ "copy": { "type": "string" }, "file": { "type": "string", "description": "File name from mods/updates" },
-                "loader": { "type": "string" }, "minecraft": { "type": "string" } }), &["copy", "file"])),
-        t("duplicates", "Mods present twice among a copy's enabled jars (same mod id, usually one from each site); the game won't start until one is disabled. mods also lists these.",
-            obj(json!({ "copy": { "type": "string" } }), &["copy"])),
-        t("reports", "List a copy's crash reports and logs.", obj(json!({ "copy": copy }), &["copy"])),
-        t("diagnose", "Explain a crash report or log: cause, mods at fault, slow loading by mod, errors by mod.", obj(json!({ "copy": copy, "file": { "type": "string", "description": "Default logs/latest.log" } }), &["copy"])),
-        t("log", "Read a log, optionally filtered (case-insensitive substring) and tailed.", obj(json!({ "copy": copy, "file": { "type": "string" }, "grep": { "type": "string" }, "tail": { "type": "integer" } }), &["copy"])),
-        t("game_test", "A whole test in ONE call (the cheapest way to test). preset \"basic\" = does it run: fresh world, find nearby structures, visit 4 for 10 s each. preset \"stress\" = tests [chests, mobs, hop, flyover] (default all): 1024 chests, 100 random mobs, rapid teleports between structures, a 40 s flight 32-60 blocks above the ground (all inside the 120 s measuring limit). preset \"dyno\" = the heavy stress test: Block Dyno runs its own plan (mode) in its own world and quits; the result has its per-phase fps, 1% low, p99 frame, tick times, heap and chunk loading. stress and dyno (like every perf run) stop if the user starts playing: state \"invalid\", numbers not usable; no run starts while they play. Same limits as launch: hold 120 s (stress and dyno measure 120 s at most; 600 s only for a basic/custom run whose purpose says interaction), killed as \"overtime\" at 240 s + hold. Or your own steps (as game_scenario), or both. Launches (same arguments as launch; a fresh world unless one is given), waits until in the world, runs the steps, quits the normal way and returns: stages (load times), profile (CPU/memory/heap/GPU/disk per phase: start, load, worldBuild, inMotion, quit), scenario results (fps, low1, worstMs, mspt, chunk readiness per step), log (verdict, errors by mod, suspects) and lightning (profiler summary when the copy has Lightning). background=true returns the job at once: read it with game_result, take over with game_stop, use game_query/game_cmd any time.",
-            obj(json!({ "copy": copy, "owner": { "type": "string" }, "purpose": { "type": "string" },
-                "preset": { "type": "string", "enum": ["basic", "stress", "dyno"] },
-                "mode": { "type": "string", "description": "dyno only: Block Dyno mode (quick ~3 min (default), standard (heavier: mob crowd and shader-off phases; may not finish inside the run limit), loadtime, showcase, tune) or a plan name" },
-                "tests": { "type": "array", "items": { "type": "string", "enum": ["chests", "mobs", "hop", "flyover"] }, "description": "stress only; default all" },
-                "steps": { "type": "array", "items": { "type": "object" }, "description": "Extra steps after the preset's (see game_scenario)" },
-                "background": { "type": "boolean" },
-                "scenario_timeout": { "type": "integer", "description": "Seconds for the steps (at most the hold: 120 s, or 600 s for a non-perf interaction purpose)" },
-                "test_world": { "type": "object", "description": "As in launch" }, "world": { "type": "string" }, "new_world": { "type": "string" },
-                "java": { "type": "integer" }, "jvm": { "type": "array", "items": { "type": "string" } }, "options": { "type": "object" },
-                "config": { "type": "array", "items": { "type": "object" } }, "add_mods": { "type": "array", "items": { "type": "string" } },
-                "disable_mods": { "type": "array", "items": { "type": "string" } }, "perf": { "type": "boolean" } }), &["copy", "owner", "purpose"])),
-        t("game_result", "Progress of a background game_test (phase, step, results so far) or its final result.", obj(json!({ "job": { "type": "integer" } }), &["job"])),
-        t("game_stop", "Take over a running game_test: its automation stops before the next step or second, the game keeps running for game_cmd/game_query; end it with game_quit or kill.", obj(json!({ "job": { "type": "integer" } }), &["job"])),
-        t("game_quit", "Quit a running test game the normal way (leave the world, close), so the quit is measured. kill is the fast way.", obj(json!({ "job": { "type": "integer" } }), &["job"])),
-        t("game_query", "Ask a running test game (launch or gate job) for its state in one short JSON answer: fps, mspt/tps, heap, chunksLoaded, entities, renderReady (all visible chunks built), player {x,y,z,yaw,pitch,dim}, screen, inWorld, errorCount and the last 5 errors. busy=true means the game didn't answer in 5 s (frozen or loading). Use instead of reading logs or screenshots.",
-            obj(json!({ "job": { "type": "integer" } }), &["job"])),
-        t("game_cmd", "Run a server command in a running test game as the player (permission 4, @s = the player), e.g. \"time set night\", \"tp @s 0 120 0\", \"summon zombie ~ ~ ~5\". Returns the command's chat output.",
-            obj(json!({ "job": { "type": "integer" }, "command": { "type": "string" } }), &["job", "command"])),
-        t("game_scenario", "Run a scripted test in a running test game and get one compact result. Steps in order, each one key: {cmd:\"...\"}, {tp:[x,y,z]} or [x,y,z,yaw,pitch], {wait:s}, {wait_chunks:max_s} (until all visible chunks are built), {fly:{path:[[x,y,z],...],seconds}}, {sample:s} (frame stats over s seconds: fps, low1, worstMs, mspt, msptMax, readyS, heapPeakMB), {query:true}, {locate:[structure ids or #tags]}, {visit:{count,wait,above}} (the located ones, nearest first), {hop:{every,rounds}}, {flyover:{seconds,speed,low,high}}, {mobs:{count,seconds}}, {chests:{size,height,seconds}}, {assert:{field, min|max|equals}} (checks the previous step's result, e.g. field \"fps\" or \"player.y\"). Stops at the first failure. Launch with world/test_world and a long hold (or a high timeout) so the game stays in the world, then kill the job after.",
-            obj(json!({ "job": { "type": "integer" }, "steps": { "type": "array", "items": { "type": "object" } },
-                "timeout": { "type": "integer", "description": "Seconds for the whole scenario (10-600, default 300)" } }), &["job", "steps"])),
-        t("screenshots", "Newest screenshot paths in a copy.", obj(json!({ "copy": copy, "count": { "type": "integer" } }), &["copy"])),
-        t("lightning", "Newest Lightning profiler runs in a copy, summarised as in the Diagnosis tab (FPS, frame times, 1% low, GPU-bound %, tick times, heap and GC), plus their results.json paths for per-mod detail.", obj(json!({ "copy": copy, "count": { "type": "integer" } }), &["copy"])),
-        t("timeline", "Load times of the newest game sessions in a copy (or play): launcher, Java, mods, resources to the menu, each world join/leave and quitting, from Obelisk's view plus the log and Optimal's (formerly Speed Loader) bench.jsonl. Saved per session in <copy>/obelisk-timeline.jsonl.",
-            obj(json!({ "copy": copy, "count": { "type": "integer" } }), &["copy"])),
-        t("app_commands", "Everything the Obelisk app can do (each command its UI uses), with arguments and descriptions: modpacks, mods, settings, Java, backups, updates, sharing, data and modpack folders. Run one with app.", obj(json!({}), &[])),
-        t("app", "Run one Obelisk command live through its window, as if the user clicked it (lists and settings in the window stay in step). See app_commands for names and arguments (camelCase). Changes show in the user's Obelisk right away; for anything big or hard to undo (moving modpacks, deleting a profile), check with the user first.",
-            obj(json!({ "command": { "type": "string" }, "args": { "type": "object", "description": "The command's arguments, camelCase, e.g. {\"instanceId\": \"Foundation\"}" },
-                "timeout": { "type": "integer", "description": "Seconds to wait for the answer (5-3600, default 120). Past it the command still finishes in the window." } }), &["command"])),
-        t("errors", "Errors Obelisk showed the user or hit in the background (newest first, with time, version and where), so they can be fixed at the cause. Stays on this PC.",
-            obj(json!({ "limit": { "type": "integer", "description": "1-200, default 30" }, "since": { "type": "integer", "description": "Only errors after this time (ms since 1970)" } }), &[])),
-        t("release_submit", "Submit a build of a mod we make to its release line (user rule 00). kind fix = stable: after a 2-cycle gate in each pack's own copy, it goes into EVERY pack that has the mod, one at a time, once the pack is closed, with a safety backup and the old jar kept. kind feature = test build: TEST DUMMY only, until promoted. Builds are rolled back automatically if a crash in that pack names them as the code that was running. Label: fixes are stable, features are test.",
-            obj(json!({ "jar": { "type": "string", "description": "The built .jar, in the test bench (C:\\mcw\\...)" },
-                "kind": { "type": "string", "enum": ["fix", "feature"] }, "owner": { "type": "string", "description": "Your chat's name" },
-                "notes": { "type": "string", "description": "What changed and what to check in game" },
-                "mod": { "type": "string", "description": "Mod id, when the jar declares more than one" },
-                "version": { "type": "string", "description": "Only when the jar's own version can't be read" } }), &["jar", "kind", "owner"])),
-        t("release_status", "Release lines: each mod's latest stable and test build, which version every pack has, the rollout queue (with gate progress), recent installs, failures and rollbacks, and owner notices.", obj(json!({}), &[])),
-        t("release_promote", "Promote a test build to stable, which rolls it out to every pack that has the mod. reason user-played: the user played it and it works. reason proven-in-td: checked by Obelisk (3 TEST DUMMY sessions since it went in and no crash naming it).",
-            obj(json!({ "mod": { "type": "string" }, "version": { "type": "string" }, "reason": { "type": "string", "enum": ["user-played", "proven-in-td"] } }), &["mod", "version", "reason"])),
-        t("release_rollback", "Put back the jar a release replaced in one pack (safety backup first). The pack must be closed.",
-            obj(json!({ "mod": { "type": "string" }, "pack": { "type": "string", "description": "The pack's folder name, e.g. Foundation" }, "reason": { "type": "string" } }), &["mod", "pack"])),
-        t("release_retry", "Queue a failed rollout again (its newest one for this mod and pack), with fresh tries: for a gate that failed on something since fixed in the pack.",
-            obj(json!({ "mod": { "type": "string" }, "pack": { "type": "string", "description": "The pack's folder name, e.g. Odyssey" }, "reason": { "type": "string" } }), &["mod", "pack"])),
-        t("release_optout", "Stop (on=true) or resume (on=false) automatic releases into one pack.",
-            obj(json!({ "pack": { "type": "string" }, "on": { "type": "boolean" } }), &["pack"])),
-        t("copy_pack", "Make a new test copy in the test bench from another copy or \"play\" (skips saves unless saves=true). Test rules are set in the copy: Absolute AFK Cinema off, pauseOnLostFocus false, windowed.",
-            obj(json!({ "from": copy, "to": { "type": "string", "description": "New folder name in the test bench" }, "saves": { "type": "boolean" }, "owner": { "type": "string" } }), &["from", "to"])),
+        t("mods", "A copy's mods, enabled state and duplicates.", obj(json!({ "copy": copy }), &["copy"])),
+        t("mod_set", "Enable, disable or remove (moved aside, never deleted) a mod file in a copy.",
+            obj(json!({ "copy": copy, "file": st(), "state": { "type": "string", "enum": ["enabled", "disabled", "removed"] } }), &["copy", "file", "state"])),
+        t("mod_add", "Copy a bench .jar into a copy's mods (refused if its mod id is already there).", obj(json!({ "copy": copy, "jar": st() }), &["copy", "jar"])),
+        t("mod_install", "Install from Modrinth (id/slug) or CurseForge (cf:<id>) with dependencies.",
+            obj(json!({ "copy": st(), "project": st(), "version": st(), "loader": st(), "minecraft": st() }), &["copy", "project"])),
+        t("updates", "Which files in a copy have updates, and which are on neither site.", obj(json!({ "copy": st(), "loader": st(), "minecraft": st() }), &["copy"])),
+        t("mod_update", "Update one file to its newest fitting version.", obj(json!({ "copy": st(), "file": st(), "loader": st(), "minecraft": st() }), &["copy", "file"])),
+        t("reports", "A copy's crash reports and logs.", obj(json!({ "copy": copy }), &["copy"])),
+        t("diagnose", "Explain a crash report or log (default latest.log): cause, mods at fault, errors by mod.", obj(json!({ "copy": copy, "file": st() }), &["copy"])),
+        t("log", "Read a log, grep (substring) and tail.", obj(json!({ "copy": copy, "file": st(), "grep": st(), "tail": int() }), &["copy"])),
+        t("game_test", "Whole test in one call: launch, wait for the world, run steps, quit normally; returns stages, per-phase profile, step results, log summary, Lightning. preset basic: visit 4 structures. stress: tests [chests, mobs, hop, flyover]. dyno: Block Dyno's own plan (mode, default quick). Same limits as launch; stress/dyno measure <=120 s and end \"invalid\" if the user starts playing. background=true: follow with game.",
+            obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
+                "preset": { "type": "string", "enum": ["basic", "stress", "dyno"] }, "mode": st(), "tests": strs(),
+                "steps": { "type": "array", "items": { "type": "object" }, "description": "Extra steps (see game)" },
+                "background": { "type": "boolean" }, "scenario_timeout": int(),
+                "test_world": { "type": "object" }, "world": st(), "new_world": st(), "java": int(), "jvm": strs(), "options": { "type": "object" },
+                "config": { "type": "array", "items": { "type": "object" } }, "add_mods": strs(), "disable_mods": strs(), "perf": { "type": "boolean" } }), &["copy", "owner", "purpose"])),
+        t("game", "Talk to a running test game (job). op query: fps, mspt, heap, chunks, entities, player, errors. cmd: run command as the player. scenario: steps [{cmd},{tp:[x,y,z]},{wait:s},{wait_chunks:s},{sample:s},{locate:[ids]},{visit:{count,wait}},{hop},{flyover},{mobs},{chests},{assert:{field,min|max|equals}}]. quit: normal quit. stop: take over a game_test. result: game_test progress or result.",
+            obj(json!({ "job": { "type": "integer" }, "op": { "type": "string", "enum": ["query", "cmd", "scenario", "quit", "stop", "result"] },
+                "command": st(), "steps": { "type": "array", "items": { "type": "object" } }, "timeout": int() }), &["job", "op"])),
+        t("screenshots", "Newest screenshot paths in a copy.", obj(json!({ "copy": copy, "count": int() }), &["copy"])),
+        t("lightning", "Newest Lightning profiler runs in a copy, summarised, with results.json paths.", obj(json!({ "copy": copy, "count": int() }), &["copy"])),
+        t("timeline", "Load times of a copy's newest sessions (launcher to quit).", obj(json!({ "copy": copy, "count": int() }), &["copy"])),
+        t("app_commands", "Every command the Obelisk app's UI uses, with arguments. Run one with app.", obj(json!({}), &[])),
+        t("app", "Run an Obelisk app command live, as if the user clicked it (args camelCase). Ask the user before anything big or hard to undo.",
+            obj(json!({ "command": st(), "args": { "type": "object" }, "timeout": int() }), &["command"])),
+        t("errors", "Errors Obelisk showed or hit, newest first.", obj(json!({ "limit": int(), "since": { "type": "integer", "description": "ms since 1970" } }), &[])),
+        t("release_submit", "Submit a mod build to its release line. fix = stable: gated, then into every pack with the mod. feature = test build, Test Dummy only until promoted. Auto-rollback on a crash naming it.",
+            obj(json!({ "jar": st(), "kind": { "type": "string", "enum": ["fix", "feature"] }, "owner": st(),
+                "notes": st(), "mod": st(), "version": st() }), &["jar", "kind", "owner"])),
+        t("release_status", "Release lines, versions per pack, rollout queue, installs, failures, rollbacks, notices.", obj(json!({}), &[])),
+        t("release_promote", "Promote a test build to stable (rolls out to every pack).",
+            obj(json!({ "mod": st(), "version": st(), "reason": { "type": "string", "enum": ["user-played", "proven-in-td"] } }), &["mod", "version", "reason"])),
+        t("release_pack", "For one pack: rollback (put back the replaced jar), retry (queue a failed rollout again), optout or optin (automatic releases).",
+            obj(json!({ "action": { "type": "string", "enum": ["rollback", "retry", "optout", "optin"] }, "mod": st(), "pack": st(), "reason": st() }), &["action", "pack"])),
+        t("copy_pack", "New test copy from a copy or \"play\" (no saves unless saves=true).",
+            obj(json!({ "from": copy, "to": st(), "saves": { "type": "boolean" }, "owner": st() }), &["from", "to"])),
     ])
+}
+
+/// The merged tools (game, mod_set, release_pack) to the control API's own commands.
+fn route(name: &str, mut args: Value) -> Result<(String, Value), String> {
+    let take = |args: &mut Value, k: &str| args.as_object_mut().and_then(|o| o.remove(k)).and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+    Ok(match name {
+        "game" => {
+            let op = take(&mut args, "op");
+            if !["query", "cmd", "scenario", "quit", "stop", "result"].contains(&op.as_str()) { return Err("op: query, cmd, scenario, quit, stop or result".into()) }
+            (format!("game-{op}"), args)
+        }
+        "mod-set" => {
+            let cmd = match take(&mut args, "state").as_str() { "enabled" => "mod-enable", "disabled" => "mod-disable", "removed" => "mod-remove", _ => return Err("state: enabled, disabled or removed".into()) };
+            (cmd.into(), args)
+        }
+        "release-pack" => match take(&mut args, "action").as_str() {
+            "rollback" => ("release-rollback".into(), args),
+            "retry" => ("release-retry".into(), args),
+            a @ ("optout" | "optin") => { args["on"] = json!(a == "optout"); ("release-optout".into(), args) }
+            _ => return Err("action: rollback, retry, optout or optin".into()),
+        },
+        _ => (name.to_string(), args),
+    })
 }
 
 /// One request to the running Obelisk. Err = it isn't running or refused.
@@ -204,7 +171,12 @@ pub fn serve() {
             }
             "tools/call" => {
                 let name = msg.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("").replace('_', "-");
-                let mut args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+                let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+                let (name, mut args) = match route(&name, args) {
+                    Ok(r) => r,
+                    Err(e) => { let r = json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": e }], "isError": true } });
+                        if writeln!(out, "{r}").and_then(|_| out.flush()).is_err() { break } continue }
+                };
                 if (name == "wait" || name == "play-wait") && args.get("timeout").is_none() {
                     args["timeout"] = json!(50);
                 }
