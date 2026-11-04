@@ -1734,6 +1734,14 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         }
         hold = Some(hold.map_or(h, |o: u64| o.max(h)));
     }
+    // An autobench run without Optimal would sit on the title screen until the hang check (Overseer, 2026-11-03).
+    if extra.iter().any(|a| a.starts_with("-Dspeedloader.autobench")) {
+        let autobench = |n: &str| { let n = n.to_lowercase(); (n.starts_with("optimal") || n.starts_with("speedloader")) && n.ends_with(".jar") };
+        let in_mods = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten().any(|e| autobench(&e.file_name().to_string_lossy()));
+        let added = args.get("add_mods").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str)
+            .any(|p| Path::new(p).file_name().is_some_and(|f| autobench(&f.to_string_lossy())));
+        if !in_mods && !added { return Err(format!("no autobench mod (Optimal) in copy {name}")) }
+    }
     // The hard wall clock: load allowance plus the hold, never past RUN_WALL; with no hold, the time limit.
     let timeout = match hold {
         Some(h) => {
