@@ -17,7 +17,8 @@ game_test {copy, owner, purpose, preset, steps} launches, waits for the world, r
 and returns load stages, per-phase resources, each step's result, log errors by mod and the profiler summary.
 background: true returns the job at once; read it with game {op: result}.
 
-- preset "scene": a 64x64 flat grass world at noon, time, weather and mob spawning frozen, creative. About as fast as
+- preset "scene": a 64x64 flat grass world, time (midnight, with night vision: day-bright, undead never burn), weather
+  and mob spawning frozen, creative; steps start once the terrain is drawn. About as fast as
   the pack can load.
 - preset "basic": visit four structures. "stress": chests, mobs, hop, flyover. "dyno": Block Dyno's heavy plan.
 - Your own world: test_world {layers [{block,height}], terrain flat|normal, border, platform, spawn, game_mode,
@@ -25,11 +26,19 @@ background: true returns the job at once; read it with game {op: result}.
 
 Steps, in order, as granular as you need:
 - {cmd: "<any command>"} runs as the player (op level). {tp: [x,y,z,(yaw,pitch)]}. {wait: seconds} (fractions work).
-- {summon: {mob: "zombie", distance: 3, ai: false, nbt: "..."}}: in front of the player, who faces it.
+- {summon: {mob: "zombie", distance: 3, ai: false, knockback: false, nbt: "..."}}: in front of the player, who faces
+  it; no AI and no knockback by default, so it stays in frame.
 - {punch: {times: 5, every: 1.0, shots: [0.5, 0.75, 1.75], label: "z"}}: real player punches (swing, attack,
   cooldown); screenshots at those offsets after each punch. Each reports what was hit and its health.
 - {shot: "label"}: a screenshot now. Shots land in <copy>/screenshots/obt-<run>-<label>.png; the same labels in
   two runs give comparable pictures.
+- {record: {seconds: 10, label: "x"}} (max 30): watches every frame and reports what you would otherwise have to stare
+  at: flicker (spots that change for one frame and snap back), sudden colour or brightness jumps, stutters, and how
+  often each part of the screen really updates (an animation stepping at 12/s while the game draws 60). Frames
+  before/during/after the first events are saved as PNGs (obr-*.png); per-frame numbers in .obelisk/record-*.csv.
+  Hold the camera still (and use a scene) so only the thing under test moves, or give during: [steps] (fly, tp,
+  cmd...) to record while those run, for artifacts that only show in motion; flicker is still found while moving
+  (motion never snaps back), update rates then mean less.
 - {sample: seconds}: fps, 1% low, mspt over that time. {query: true}: fps, mspt, heap, chunks, entities, player.
 - {wait_chunks: seconds}, {fly: {path, seconds}}, {locate: [structures]}, {visit}, {hop}, {flyover}, {mobs}, {chests}.
 - {assert: {field, min|max|equals}} checks the previous step's result.

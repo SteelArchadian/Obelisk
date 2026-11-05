@@ -261,10 +261,32 @@ impl Game<'_> {
             return self.punch(n(v, "times", 1.0).clamp(1.0, 50.0) as usize, n(v, "every", 1.0).max(0.1),
                 &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"));
         }
+        if let Some(v) = step.get("record") {
+            let label: String = v["label"].as_str().unwrap_or("rec").chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(40).collect();
+            let req = json!({ "op": "record", "seconds": v["seconds"].as_f64().unwrap_or(10.0).clamp(1.0, 30.0), "name": format!("{}-{label}", self.started) });
+            let during: Vec<Value> = v["during"].as_array().cloned().unwrap_or_default();
+            if during.is_empty() { return self.ask(req) }
+            // Recording while other steps run (fly a path, walk through a portal): artifacts that only show in motion.
+            let (dir, started) = (self.dir, self.started);
+            return std::thread::scope(|sc| {
+                let rec = sc.spawn(move || ask(dir, started, req));
+                (self.pause)(0.3)?; // the recording starts on the next frame
+                let mut done = Vec::new();
+                for d in &during {
+                    match self.step(d, &Value::Null, found) {
+                        Ok(r) => done.push(r),
+                        Err(e) => { done.push(json!({ "error": e })); break }
+                    }
+                }
+                let mut out = rec.join().map_err(|_| "the recording thread failed".to_string())??;
+                out["during"] = json!(done);
+                Ok(out)
+            });
+        }
         if let Some(v) = step.get("shot") {
             return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"));
         }
-        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch or shot"))
+        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch, shot or record"))
     }
 
     /// A screenshot named for this run and the label, so the same label can be compared across runs.
@@ -286,6 +308,8 @@ impl Game<'_> {
         let (mx, mz) = (x - yaw.sin() * dist, z + yaw.cos() * dist);
         let mut nbt = vec!["PersistenceRequired:1b".to_string()];
         if !v["ai"].as_bool().unwrap_or(false) { nbt.push("NoAI:1b".into()) }
+        // Punches don't push it out of frame unless asked.
+        if !v["knockback"].as_bool().unwrap_or(false) { nbt.push("attributes:[{id:\"minecraft:generic.knockback_resistance\",base:1.0d}]".into()) }
         if let Some(extra) = v["nbt"].as_str().map(|t| t.trim().trim_start_matches('{').trim_end_matches('}')).filter(|t| !t.is_empty()) { nbt.push(extra.into()) }
         let out = self.cmd(format!("summon {mob} {mx:.2} {y:.2} {mz:.2} {{{}}}", nbt.join(",")))?;
         (self.pause)(0.25)?;

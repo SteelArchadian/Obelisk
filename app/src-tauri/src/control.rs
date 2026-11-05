@@ -893,11 +893,12 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         if dyno { o.insert("timeout".into(), json!(LOAD_ALLOWANCE + SMOKE_HOLD)); }
     }
     let scene = preset.as_deref() == Some("scene");
-    // scene: a small flat grass world at noon with time, weather and spawning frozen, for scripted situations
-    // (summon, punch, shot steps). The chat's own test_world or world wins.
+    // scene: a small flat grass world with time, weather and spawning frozen, for scripted situations (summon, punch,
+    // shot steps). Midnight with night vision: as bright as day to the camera, and undead don't burn. The chat's own
+    // test_world or world wins.
     if scene && ["test_world", "world", "new_world"].iter().all(|k| o.get(*k).is_none_or(Value::is_null)) {
         o.insert("test_world".into(), json!({ "layers": [{ "block": "minecraft:grass_block", "height": 1 }], "border": 64, "game_mode": "creative",
-            "setup": ["gamerule doDaylightCycle false", "time set noon", "gamerule doWeatherCycle false", "weather clear",
+            "setup": ["gamerule doDaylightCycle false", "time set midnight", "gamerule doWeatherCycle false", "weather clear",
                 "gamerule doMobSpawning false", "gamerule doPatrolSpawning false", "gamerule doTraderSpawning false", "kill @e[type=!player]"] }));
     }
     let mut steps: Vec<Value> = match preset.clone().filter(|_| !dyno && !scene) {
@@ -908,6 +909,10 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         None => vec![],
     };
     o.remove("tests");
+    if scene {
+        // Shots taken before the terrain is drawn show only fog.
+        steps.splice(0..0, [json!({ "cmd": "effect give @s minecraft:night_vision infinite 0 true" }), json!({ "wait_chunks": 20 }), json!({ "wait": 2 })]);
+    }
     steps.extend(o.remove("steps").and_then(|s| s.as_array().cloned()).unwrap_or_default());
     let purpose = o.get("purpose").and_then(Value::as_str).unwrap_or_default().to_string();
     // stress and dyno are perf runs in length.
@@ -961,6 +966,7 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         jvm.push(json!("-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads"));
         jvm.push(json!("-Dlightning.windows=30"));
         jvm.push(json!(format!("-Dlightning.autoStart=1,{RUN_WALL}")));
+        o.insert("auto_profile".into(), json!(true));
     }
     o.insert("jvm".into(), Value::Array(jvm));
     let id = launch(&la, jobs)?["job"].as_u64().ok_or("launch gave no job")? as u32;
@@ -1754,7 +1760,10 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // Build the command now so a broken copy fails before queueing.
     // Holds: what the chat asked (jvm), a test_world's own, or the default one put in above.
     let perf_run = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
-    let fps_props = extra.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)) && !a.starts_with("-Dspeedloader.autobench"));
+    // game_test records Lightning on every run it can: that alone doesn't make it a measured run.
+    let auto_profile = args.get("auto_profile").and_then(|v| v.as_bool()).unwrap_or(false);
+    let fps_props = extra.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)) && !a.starts_with("-Dspeedloader.autobench")
+        && !(auto_profile && a.starts_with("-Dlightning.")));
     let measured = perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false);
     let cap = max_hold(&purpose, measured);
     let mut hold = None;
