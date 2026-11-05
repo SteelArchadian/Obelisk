@@ -1875,18 +1875,31 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     // While queued, say who holds the lock and until when, so a wait shows why it's slow.
     let got = loop {
         if let Ok(Some(s)) = child.try_wait() { break s.code() == Some(0); }
-        let holder = bench(&["status"]).output().ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
-        let d = match (if exclusive { user_not_away() } else { user_playing() }, holder) {
+        let queue = bench(&["queue"]).output().ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
+        let d = match (if exclusive { user_not_away() } else { user_playing() }, queue) {
             (Some(p), _) if exclusive => Some(format!("waiting until the user is away ({p})")),
             (Some(p), _) => Some(format!("waiting: the user is playing ({p})")),
-            (None, holder) => match holder {
-            Some(h) if h["owner"].is_string() => Some(format!("waiting for the bench lock: {} has it, expected to end {}",
-                h["owner"].as_str().unwrap_or("?"), h["expected_end"].as_str().unwrap_or("?"))),
-            Some(h) if h["shared"].is_array() => Some(format!("waiting for the bench lock: shared by {}",
-                h["shared"].as_array().into_iter().flatten().map(|s| format!("{} in {} (until {})", s["owner"].as_str().unwrap_or("?"),
-                    s["copy"].as_str().unwrap_or("?"), s["expected_end"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", "))),
+            (None, Some(q)) => {
+                // Only what really blocks this run: the exclusive holder, shared runs in this copy (all of them for a
+                // perf run), or a perf run queued first (it only goes first once the user is away).
+                let held = &q["held"];
+                let shared: Vec<String> = q["shared"].as_array().into_iter().flatten()
+                    .filter(|s| exclusive || s["copy"].as_str() == Some(copy.as_str()))
+                    .map(|s| format!("{} in {} (until {})", s["owner"].as_str().unwrap_or("?"), s["copy"].as_str().unwrap_or("?"),
+                        s["expected_end"].as_str().unwrap_or("?"))).collect();
+                let perf: Vec<&str> = q["waiting"].as_array().into_iter().flatten()
+                    .filter(|w| w["copy"].is_null() && w["owner"].as_str() != Some(lock.as_str())).filter_map(|w| w["owner"].as_str()).collect();
+                Some(if let Some(o) = held["owner"].as_str() {
+                    format!("waiting for the bench lock: {o} has it, expected to end {}", held["expected_end"].as_str().unwrap_or("?"))
+                } else if !shared.is_empty() {
+                    format!("waiting for the bench lock: shared by {}", shared.join(", "))
+                } else if !exclusive && !perf.is_empty() {
+                    format!("waiting for the bench lock: perf runs go first while the user is away ({})", perf.join(", "))
+                } else {
+                    format!("waiting for the bench lock (a game may still be running in {copy})")
+                })
+            }
             _ => None,
-            },
         };
         if let Some(d) = d { update(&jobs, id, |j| if j.detail != KILLED { j.detail = d }); }
         std::thread::sleep(Duration::from_secs(15));
@@ -2567,12 +2580,28 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, size: O
         fn SetForegroundWindow(h: isize) -> i32;
         fn IsWindow(h: isize) -> i32;
         fn GetWindowRect(h: isize, r: *mut super::shot::Rect) -> i32;
+        fn GetWindowLongPtrW(h: isize, index: i32) -> isize;
+        fn IsIconic(h: isize) -> i32;
+        fn ShowWindow(h: isize, cmd: i32) -> i32;
     }
     // Checked every time, not once: the game moves its own window back (centred on the monitor) when it sets its
     // display mode after start-up, which would leave a full-size window over the user's desktop.
     for (h, p, vis, _, _) in super::top_windows() {
         if p != pid || !vis { continue }
-        parked.insert(h);
+        // Minimized (by the user or anything else) is out of the way too: never move it, or Windows and window
+        // managers like FancyZones see a window being dragged back while the user works (user, 2026-11-04).
+        if unsafe { IsIconic(h) } != 0 { parked.insert(h); continue }
+        if parked.insert(h) {
+            // A test window is not the user's: no taskbar button, no Alt-Tab entry, and clicks never activate it
+            // (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, minus WS_EX_APPWINDOW). Hidden and shown once so the taskbar
+            // drops its button; the game keeps rendering.
+            unsafe {
+                let ex = GetWindowLongPtrW(h, -20 /* GWL_EXSTYLE */);
+                SetWindowLongPtrW(h, -20, (ex | 0x80 | 0x0800_0000) & !0x0004_0000);
+                ShowWindow(h, 0 /* SW_HIDE */);
+                ShowWindow(h, 4 /* SW_SHOWNOACTIVATE */);
+            }
+        }
         let mut r = super::shot::Rect::default();
         if unsafe { GetWindowRect(h, &mut r) } == 0 { continue }
         let at = r.l == -20000 && r.t == -20000;

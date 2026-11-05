@@ -413,6 +413,7 @@ async fn clone_instance(instance_id: String, name: String) -> Result<String, Str
 
 #[tauri::command]
 async fn delete_instance(instance_id: String) -> Result<(), String> {
+    watch::release(&instance_id);
     blocking(move || prism::delete_instance(&prism::data_dir(), &instance_id).map(|_| ())).await
 }
 

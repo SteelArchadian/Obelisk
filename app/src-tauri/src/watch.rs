@@ -8,6 +8,15 @@ use tauri::Emitter;
 
 static CURRENT: Mutex<Option<(String, notify::RecommendedWatcher)>> = Mutex::new(None);
 
+/// Stop watching this pack, if it is the one watched: the watch holds its folders open, so Windows refuses to move
+/// the pack (deleting a profile you were just looking at failed with "Access is denied").
+pub fn release(instance_id: &str) {
+    let mut cur = CURRENT.lock().unwrap();
+    if cur.as_ref().is_some_and(|(id, _)| id == instance_id) {
+        *cur = None;
+    }
+}
+
 /// Watch this pack's content folders (replacing the previous pack's watch). An empty id stops watching.
 #[tauri::command]
 pub async fn watch_content(app: tauri::AppHandle, instance_id: String) -> Result<(), String> {

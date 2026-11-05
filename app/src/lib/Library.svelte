@@ -254,14 +254,8 @@
       {#each trash as t (t.id)}
         <div class="prow">
           <div class="pinfo"><strong>{t.name}</strong><small>Deleted {ago(t.deletedMs).toLowerCase()} · {gb(t.bytes)} · deleted for good in {daysLeft(t.deletedMs)} day{daysLeft(t.deletedMs) === 1 ? "" : "s"}</small></div>
-          {#if forget?.id === t.id}
-            <span class="muted">Delete for good? It goes to the Recycle Bin.</span>
-            <button class="tool" onclick={() => (forget = null)}>Cancel</button>
-            <button class="tool danger" onclick={() => removePack(t)}>Delete</button>
-          {:else}
-            <button class="tool" onclick={() => (forget = t)}>Delete forever</button>
-            <button class="tool restore" onclick={() => restorePack(t)}>Restore</button>
-          {/if}
+          <button class="tool forever" onclick={() => (forget = t)}>Delete forever</button>
+          <button class="tool restore" onclick={() => restorePack(t)}>Restore</button>
         </div>
       {:else}
         <p class="muted">The modpack trash is empty.</p>
@@ -324,6 +318,21 @@
 </div>
 
 
+{#if forget}
+  {@const f = forget}
+  <!-- A whole modpack is a lot to lose: a real "are you sure", not an inline line (user, 2026-11-04). -->
+  <div class="fback" role="presentation" onclick={(e) => e.target === e.currentTarget && (forget = null)}>
+    <div class="fdialog" role="dialog" aria-modal="true" tabindex="-1">
+      <h3>Delete {f.name} for good?</h3>
+      <p class="muted">The whole modpack, worlds included, leaves the modpack trash and goes to the Windows Recycle Bin. Obelisk can't bring it back after this.</p>
+      <div class="factions"><div class="spacer"></div>
+        <button class="tool" onclick={() => (forget = null)}>Cancel</button>
+        <button class="fdel" onclick={() => removePack(f)}>Delete for good</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .library { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .toolbar { display: flex; align-items: center; gap: 6px; padding: 12px 0; }
@@ -348,7 +357,15 @@
   .pinfo small { color: var(--muted); }
   .tool { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; }
   .tool.restore { background: var(--accent); color: #fff; border-color: transparent; }
-  .tool.danger { color: var(--danger); }
+  .tool.forever { background: var(--danger); color: #fff; }
+  .tool.forever:hover { background: color-mix(in srgb, var(--danger) 85%, #fff); }
+  .fback { position: fixed; inset: 0; background: rgb(0 0 0 / 0.6); display: grid; place-items: center; z-index: 40; }
+  .fdialog { width: min(460px, 92vw); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; outline: none; }
+  .fdialog h3 { margin: 0; }
+  .fdialog p { margin: 0; }
+  .factions { display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 14px; }
+  .fdel { color: #fff; background: var(--danger); border: 0; border-radius: 4px; padding: 8px 20px; font-weight: 600; }
+  .fdel:hover { background: color-mix(in srgb, var(--danger) 85%, #fff); }
   .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px; min-width: 180px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.45); }
   .menu > button { display: flex; justify-content: space-between; width: 100%; background: none; border: 0; padding: 7px 10px; border-radius: 5px; text-align: left; color: var(--text-2); }
   .menu > button:hover { background: var(--panel); }
