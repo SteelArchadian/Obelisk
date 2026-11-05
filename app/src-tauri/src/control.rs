@@ -911,7 +911,7 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     o.remove("tests");
     if scene {
         // Shots taken before the terrain is drawn show only fog.
-        steps.splice(0..0, [json!({ "cmd": "effect give @s minecraft:night_vision infinite 0 true" }), json!({ "wait_chunks": 20 }), json!({ "wait": 2 })]);
+        steps.splice(0..0, [json!({ "cmd": "effect give @s minecraft:night_vision infinite 0 true" }), json!({ "wait_chunks": 20 }), json!({ "settle": 15 })]);
     }
     steps.extend(o.remove("steps").and_then(|s| s.as_array().cloned()).unwrap_or_default());
     let purpose = o.get("purpose").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -954,6 +954,19 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     } else if ["test_world", "world", "new_world"].iter().all(|k| o.get(*k).is_none_or(Value::is_null)) {
         // A fresh world (Speed Loader makes it and deletes it after) unless the chat gave one.
         o.insert("new_world".into(), json!(format!("{}", now() % 1_000_000_007)));
+    }
+    // What the camera shows is the test (scene, shots, recordings): no AFK or respawn cinematic camera taking over
+    // an idle player, no teleport fly-in after each tp step, no Dynamic FPS slowing the unfocused window, no chat
+    // over the picture. Off for this run only.
+    let visual = scene || steps.iter().any(|s| ["shot", "punch", "record"].iter().any(|k| s.get(*k).is_some()));
+    if visual {
+        let mut off = o.get("disable_mods").and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let add: Vec<Value> = mods_named(&VISUAL_OFF).into_iter().filter(|f| !off.iter().any(|o| o.as_str() == Some(f))).map(Value::from).collect();
+        off.extend(add);
+        o.insert("disable_mods".into(), Value::Array(off));
+        let mut opts = o.get("options").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
+        if opts.get("chatVisibility").is_none() { opts["chatVisibility"] = json!("2") }
+        o.insert("options".into(), opts);
     }
     if let Some(tw) = o.get_mut("test_world").filter(|v| v.is_object()) {
         if tw.get("hold").is_none() { tw["hold"] = json!(test_hold) }
@@ -2521,6 +2534,8 @@ fn log_says_stopping(latest: &Path, since: SystemTime) -> bool {
 
 /// Mods set aside for a perf run (file names start with these).
 const PERF_OFF: [&str; 2] = ["dynamic-fps", "absolute-afk-cinema"];
+/// Mods that move the camera or slow the window on their own: off for runs whose pictures are the test.
+const VISUAL_OFF: [&str; 4] = ["dynamic-fps", "absolute-afk-cinema", "cinematic_respawn", "grandteleport"];
 
 /// The primary monitor's resolution in real pixels (its current display mode, so DPI scaling doesn't shrink it).
 fn native_resolution() -> Option<(u32, u32)> {

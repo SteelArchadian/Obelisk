@@ -95,11 +95,25 @@ mod tests {
     }
 }
 
-/// The mod ids a jar requires to load (NeoForge/Forge mods.toml required dependencies, Fabric "depends"), without
-/// the game, the loader and Java themselves.
+/// Every mod id a jar provides, the ones in its bundled jars too (Kotlin for Forge declares its id only inside one).
+pub fn provides(jar: &Path) -> Vec<String> {
+    fs::File::open(jar).map(|f| crate::configs::ids_in(f, 0)).unwrap_or_default()
+}
+
+/// The mod ids a jar requires to load (NeoForge/Forge mods.toml required dependencies and a language provider other
+/// than Java's, Fabric "depends"), its bundled jars' too, without the game, the loader and Java themselves.
 pub fn needs(jar: &Path) -> Vec<String> {
+    let Ok(f) = fs::File::open(jar) else { return vec![] };
+    let mut out = needs_in(f, true);
+    out.retain(|id| !matches!(id.as_str(), "minecraft" | "neoforge" | "forge" | "fabricloader" | "java" | "javafml" | "lowcodefml"));
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn needs_in<R: std::io::Read + std::io::Seek>(reader: R, nested: bool) -> Vec<String> {
     use std::io::Read;
-    let Ok(mut zip) = fs::File::open(jar).map_err(|_| ()).and_then(|f| zip::ZipArchive::new(f).map_err(|_| ())) else { return vec![] };
+    let Ok(mut zip) = zip::ZipArchive::new(reader) else { return vec![] };
     let mut read = |name: &str| -> Option<String> {
         let mut s = String::new();
         zip.by_name(name).ok()?.read_to_string(&mut s).ok()?;
@@ -108,6 +122,7 @@ pub fn needs(jar: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for name in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
         let Some(doc) = read(name).and_then(|t| t.parse::<toml::Table>().ok()) else { continue };
+        if let Some(l) = doc.get("modLoader").and_then(|v| v.as_str()) { out.push(l.to_lowercase()) }
         for deps in doc.get("dependencies").and_then(|d| d.as_table()).into_iter().flat_map(|t| t.values()) {
             for d in deps.as_array().into_iter().flatten() {
                 let required = match d.get("type").and_then(|t| t.as_str()) {
@@ -121,8 +136,15 @@ pub fn needs(jar: &Path) -> Vec<String> {
     if let Some(v) = read("fabric.mod.json").and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
         out.extend(v["depends"].as_object().into_iter().flatten().map(|(k, _)| k.to_lowercase()));
     }
-    out.retain(|id| !matches!(id.as_str(), "minecraft" | "neoforge" | "forge" | "fabricloader" | "java"));
-    out.sort();
-    out.dedup();
+    if nested {
+        let inner: Vec<String> = zip.file_names()
+            .filter(|n| (n.starts_with("META-INF/jarjar/") || n.starts_with("META-INF/jars/")) && n.ends_with(".jar")).map(str::to_string).collect();
+        for n in inner {
+            let mut bytes = Vec::new();
+            if zip.by_name(&n).ok().and_then(|mut f| f.read_to_end(&mut bytes).ok()).is_some() {
+                out.extend(needs_in(std::io::Cursor::new(bytes), false));
+            }
+        }
+    }
     out
 }

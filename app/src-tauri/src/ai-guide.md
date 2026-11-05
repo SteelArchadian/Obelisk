@@ -24,6 +24,9 @@ background: true returns the job at once; read it with game {op: result}.
 - Your own world: test_world {layers [{block,height}], terrain flat|normal, border, platform, spawn, game_mode,
   setup [commands], events [{at,every,command}]}, or world / new_world.
 
+A scene, or any run with shot, punch or record steps, turns off for that run the mods that move the camera or slow
+the window on their own (AFK and respawn cinematics, teleport fly-ins, Dynamic FPS) and hides chat.
+
 Steps, in order, as granular as you need:
 - {cmd: "<any command>"} runs as the player (op level). {tp: [x,y,z,(yaw,pitch)]}. {wait: seconds} (fractions work).
 - {summon: {mob: "zombie", distance: 3, ai: false, knockback: false, nbt: "..."}}: in front of the player, who faces
@@ -40,6 +43,7 @@ Steps, in order, as granular as you need:
   cmd...) to record while those run, for artifacts that only show in motion; flicker is still found while moving
   (motion never snaps back), update rates then mean less.
 - {sample: seconds}: fps, 1% low, mspt over that time. {query: true}: fps, mspt, heap, chunks, entities, player.
+- {settle: max_seconds}: until the player has stayed put for 2 s (scene does this first).
 - {wait_chunks: seconds}, {fly: {path, seconds}}, {locate: [structures]}, {visit}, {hop}, {flyover}, {mobs}, {chests}.
 - {assert: {field, min|max|equals}} checks the previous step's result.
 While a game runs: game {op: query|cmd|scenario|quit|stop}; heap for histograms, dumps and thread stacks.

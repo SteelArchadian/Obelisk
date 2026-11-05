@@ -28,12 +28,23 @@ fn save(copy: &str, st: &Value) -> Result<(), String> {
     std::fs::write(&f, serde_json::to_vec_pretty(st).unwrap()).map_err(|e| e.to_string())
 }
 
-/// Enabled jars: file -> (ids it provides, ids it requires).
+/// Enabled jars: file -> (ids it provides, ids it requires). Reading a big pack's jars takes about 20 s, so each
+/// jar's answer is kept for as long as the file is unchanged.
 fn jars(dir: &Path) -> Jars {
+    type Seen = HashMap<(PathBuf, u64, std::time::SystemTime), (Vec<String>, Vec<String>)>;
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<Seen>> = std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
     std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
         .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
         .filter(|(n, _)| n.to_lowercase().ends_with(".jar"))
-        .map(|(n, p)| (n, (prism::dupes::own_ids(&p), prism::dupes::needs(&p))))
+        .map(|(n, p)| {
+            let meta = std::fs::metadata(&p).ok();
+            let key = (p.clone(), meta.as_ref().map_or(0, |m| m.len()), meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH));
+            if let Some(v) = seen.lock().unwrap().get(&key) { return (n, v.clone()) }
+            let v = (prism::dupes::provides(&p), prism::dupes::needs(&p));
+            seen.lock().unwrap().insert(key, v.clone());
+            (n, v)
+        })
         .collect()
 }
 

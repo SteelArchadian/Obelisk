@@ -261,6 +261,20 @@ impl Game<'_> {
             return self.punch(n(v, "times", 1.0).clamp(1.0, 50.0) as usize, n(v, "every", 1.0).max(0.1),
                 &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"));
         }
+        if let Some(max) = step.get("settle").and_then(|w| w.as_f64()) {
+            // Until the player stays put for 2 s: a world can still move them to its spawn after they arrive.
+            let t0 = Instant::now();
+            let (mut last, mut still) = (None, Instant::now());
+            loop {
+                let q = self.query()?;
+                let p = &q["player"];
+                let now = (p["x"].clone(), p["y"].clone(), p["z"].clone(), p["yaw"].clone());
+                if last.as_ref() != Some(&now) { last = Some(now); still = Instant::now() }
+                if still.elapsed().as_secs_f64() >= 2.0 { return Ok(json!({ "settled": true, "seconds": t0.elapsed().as_secs_f64().round(), "player": q["player"] })) }
+                if t0.elapsed().as_secs_f64() >= max { return Ok(json!({ "settled": false, "seconds": max, "player": q["player"] })) }
+                (self.pause)(0.5)?;
+            }
+        }
         if let Some(v) = step.get("record") {
             let label: String = v["label"].as_str().unwrap_or("rec").chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(40).collect();
             let req = json!({ "op": "record", "seconds": v["seconds"].as_f64().unwrap_or(10.0).clamp(1.0, 30.0), "name": format!("{}-{label}", self.started) });
@@ -286,7 +300,7 @@ impl Game<'_> {
         if let Some(v) = step.get("shot") {
             return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"));
         }
-        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch, shot or record"))
+        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch, shot, record or settle"))
     }
 
     /// A screenshot named for this run and the label, so the same label can be compared across runs.
