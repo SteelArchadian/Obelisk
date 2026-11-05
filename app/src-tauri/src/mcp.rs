@@ -42,7 +42,7 @@ pub(crate) fn tools() -> Value {
                 "compact_headers": { "type": "boolean" },
                 "gc": { "type": "array", "items": { "type": "string" }, "description": "One -XX:+Use...GC plus tuning, replaces the profile's" },
                 "perf": { "type": "boolean", "description": "Bench to itself; only when the user asked" } }), &["copy", "owner", "purpose"])),
-        t("gate", "Full-pack gate in the gate copy, optionally with a candidate jar. cycles <=2, hold <=120; overtime at 720 s.",
+        t("gate", "Full-pack gate in the first free gate copy (gate, gate-2, gate-3), optionally with a candidate jar. cycles <=2, hold <=120; overtime at 720 s.",
             obj(json!({ "owner": st(), "jar": st(), "replace": { "type": "string", "description": "Glob of the jar(s) it replaces" },
                 "mods": st(), "cycles": int(), "hold": int(), "sync": { "type": "boolean" }, "tag": st(), "loader_version": st() }), &["owner"])),
         t("play_wait", "Wait until the user's own game is closed (timeout default 50 s); returns closed true/false.", obj(json!({ "timeout": int() }), &[])),

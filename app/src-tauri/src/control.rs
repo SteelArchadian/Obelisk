@@ -1132,7 +1132,10 @@ fn game_of(args: &Value, jobs: &Shared) -> Result<(u32, PathBuf, u64), String> {
     if j.state != "running" { return Err(format!("job {id} is {}, not running", j.state)) }
     let dir = match j.kind.as_str() {
         "launch" => Path::new(&j.output).parent().and_then(|p| p.parent()).map(Path::to_path_buf).ok_or("no game folder")?,
-        "gate" => tb().root.join("gate"),
+        // gate.py takes the first free copy of its pool (gate, gate-2, ...) and names it: "...: gate copy <dir>".
+        "gate" => std::fs::read_to_string(&j.output).ok()
+            .and_then(|t| t.lines().find_map(|l| l.split_once(": gate copy ").map(|(_, d)| PathBuf::from(d.trim()))))
+            .unwrap_or_else(|| tb().root.join("gate")),
         k => return Err(format!("job {id} is a {k}, not a game")),
     };
     Ok((id, dir, j.started))
