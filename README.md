@@ -41,6 +41,7 @@ and paste it to any AI. Once connected, Obelisk tells the AI everything it can d
 - run tests and stress tests, and profile performance;
 - take screenshots and explain crashes;
 - find which mod causes a problem by switching half the mods off and halving again;
+- record up to 30 seconds of a test game, still or moving, and report flicker, colour jumps, stutters and slow animations;
 - update or install mods, with a backup made first.
 
 ### Technical details (optional, off by default)
