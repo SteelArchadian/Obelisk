@@ -116,6 +116,8 @@ pub(crate) enum Voice {
     Kick,
     /// A plucked string (nylon guitar, ukulele): the higher harmonics die first.
     Pluck,
+    /// The same, brighter and ringing longer: a harp.
+    Harp,
     /// A soft shaker shake.
     Shaker,
     /// A glassy sine with a faint fifth and octave above: the social cues' voice (cues.rs).
@@ -151,6 +153,7 @@ impl Voice {
                 ((x % 2001) as f64 / 1000.0 - 1.0) * (-t * 70.0).exp()
             }
             Voice::Pluck => (1..=6).map(|k| (TAU * k as f64 * ph).sin() / k as f64 * (-t * (2.5 + 2.0 * k as f64)).exp()).sum::<f64>() * 0.7,
+            Voice::Harp => (1..=6).map(|k| (TAU * k as f64 * ph).sin() / (k * k) as f64 * (-t * (1.2 + 0.9 * k as f64)).exp()).sum::<f64>(),
             Voice::Shaker => {
                 let mut x = (t * RATE as f64) as u64 ^ 0xD1B5_4A32_D192_ED03;
                 x ^= x << 13; x ^= x >> 7; x ^= x << 17;

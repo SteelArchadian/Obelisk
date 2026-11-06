@@ -68,7 +68,7 @@ export const JINGLES: [string, string][] = [
 ];
 
 /** Obelisk's own background music, which music.rs synthesizes, by setting id. */
-export const TRACKS: [string, string][] = [["lounge", "Lounge"], ["shopping", "Window Shopping"]];
+export const TRACKS: [string, string][] = [["lounge", "Lounge"], ["shopping", "Window Shopping"], ["puddle", "Puddle"], ["boutique", "Boutique"]];
 
 /** The social alert sounds cues.rs plays, by id, in its order. */
 export const CUES: [string, string][] = [

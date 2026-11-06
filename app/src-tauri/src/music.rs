@@ -6,7 +6,8 @@
 use crate::sound::{m, render_loop, Note, Voice};
 
 /// Obelisk's tracks, in the order Settings lists them: (setting id, synth). Lounge is the default.
-pub const TRACKS: [(&str, fn() -> Vec<f32>); 2] = [("lounge", lounge), ("shopping", window_shopping)];
+pub const TRACKS: [(&str, fn() -> Vec<f32>); 4] =
+    [("lounge", lounge), ("shopping", window_shopping), ("puddle", puddle), ("boutique", boutique)];
 
 /// Audio files the UI can play from the user's music folder.
 const AUDIO: [&str; 7] = ["mp3", "ogg", "oga", "opus", "wav", "flac", "m4a"];
@@ -147,4 +148,38 @@ fn lounge() -> Vec<f32> {
         for e in 0..8 { s.play(beat + e as f64 * 0.5, 0.0, 0.05, if e % 2 == 1 { 0.12 } else { 0.06 }, Voice::Shaker) }
     }
     s.render(16, 4500.0)
+}
+
+/// A shaker on every eighth, the off-beats louder.
+fn shaker(s: &mut Song, beat: f64, eighths: usize) {
+    for e in 0..eighths { s.play(beat + e as f64 * 0.5, 0.0, 0.05, if e % 2 == 1 { 0.1 } else { 0.05 }, Voice::Shaker) }
+}
+
+/// A rainy-window afternoon: slow electric-piano chords, a soft kick and brush, round bass. No tune.
+fn puddle() -> Vec<f32> {
+    let mut s = Song::new(84.0, 0.6);
+    let chords = s.chords("Dmaj9 | Bm9 | Gmaj9 | A7 | F#m7 | Bm9 | Em9 | A7 | Dmaj9 | Bm9 | Gmaj9 | Gm6 | F#m7 | Bm9 | Em9 | A7");
+    for (beat, _, notes) in &chords {
+        for &k in &notes[1..] { s.play(*beat, k - 12.0, 3.6, 0.16, Voice::Keys) }
+        s.play(beat + 2.5, notes[2] - 12.0, 1.2, 0.1, Voice::Keys);
+        s.play(*beat, notes[0] - 24.0, 1.8, 0.65, Voice::Bass);
+        s.play(beat + 2.0, notes[0] - 17.0, 1.6, 0.5, Voice::Bass);
+        for q in [0.0, 2.5] { s.play(beat + q, 0.0, 0.3, 0.3, Voice::Kick) }
+        for q in [1.0, 3.0] { s.play(beat + q, 0.0, 0.12, 0.1, Voice::Hat) }
+    }
+    s.render(16, 3200.0)
+}
+
+/// A little boutique: a harp turning over bossa chords, bass and shaker. No tune.
+fn boutique() -> Vec<f32> {
+    let mut s = Song::new(120.0, 0.5);
+    let chords = s.chords("Gmaj9 | Em9 | Am9 | D7 | Bm7 | E7 | Am9 | D7 | Cmaj9 | Cm6 | Bm7 | E7 | Am9 | D7 | Gmaj9 | D7");
+    for (beat, _, notes) in &chords {
+        for (e, i) in [0, 1, 2, 3, 2, 1, 3, 2].into_iter().enumerate() { s.play(beat + e as f64 * 0.5, notes[i % notes.len()], 1.0, 0.2, Voice::Harp) }
+        for (off, k, l) in [(0.0, notes[0] - 24.0, 1.4), (1.5, notes[0] - 17.0, 0.45), (2.0, notes[0] - 17.0, 1.4), (3.5, notes[0] - 24.0, 0.45)] {
+            s.play(beat + off, k, l, 0.6, Voice::Bass)
+        }
+        shaker(&mut s, *beat, 8);
+    }
+    s.render(16, 3600.0)
 }

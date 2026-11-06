@@ -1583,6 +1583,19 @@ fn essential_no_update(dir: &Path) {
     let _ = std::fs::create_dir_all(dir.join("essential"));
     let _ = std::fs::write(&file, lines.join("\n") + "\n");
     walk(&dir.join("essential"));
+    // Online too: a copy runs signed out (offline name), so Essential's network sign-in fails and puts "Account
+    // authentication failed" over the title screen, which held a world launch there until the hang check killed
+    // it (Reinforcements, 2026-11-06). Essential's own "enable Essential" switch off stops its connection loop
+    // before it signs in; the mod itself still loads.
+    let cfg = dir.join("essential").join("config.toml");
+    if let Ok(text) = std::fs::read_to_string(&cfg) {
+        let new: Vec<String> = text.lines().map(|l| match l.split('=').next().map(str::trim) {
+            Some("enable_essential") => format!("{}enable_essential = false", &l[..l.len() - l.trim_start().len()]),
+            _ => l.to_string(),
+        }).collect();
+        let new = new.join("\n") + "\n";
+        if new.trim_end() != text.trim_end() { let _ = std::fs::write(&cfg, new); }
+    }
 }
 
 /// Absolute AFK Cinema's master switch is `general.enabled` in a commented JSON file, so it's switched as text
@@ -1977,7 +1990,11 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // An autobench run without Optimal would sit on the title screen until the hang check (Overseer, 2026-11-03).
     if extra.iter().any(|a| a.starts_with("-Dspeedloader.autobench")) {
         let autobench = |n: &str| { let n = n.to_lowercase(); (n.starts_with("optimal") || n.starts_with("speedloader")) && n.ends_with(".jar") };
-        let in_mods = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten().any(|e| autobench(&e.file_name().to_string_lossy()));
+        // One set aside by disable_mods doesn't count: the run would load without it (Reinforcements job 12, 2026-11-06).
+        let off: Vec<String> = args.get("disable_mods").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_lowercase).collect();
+        let in_mods = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .any(|n| autobench(&n) && !off.contains(&n.to_lowercase()));
         let added = args.get("add_mods").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str)
             .any(|p| Path::new(p).file_name().is_some_and(|f| autobench(&f.to_string_lossy())));
         if !in_mods && !added { return Err(format!("no autobench mod (Optimal) in copy {name}")) }
