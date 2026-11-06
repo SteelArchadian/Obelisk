@@ -129,7 +129,7 @@ pub enum Privacy {
     Invisible,
 }
 
-/// Where events go: the UI, then (once sound.rs has cues) a sound.
+/// Where events go: a sound cue (cues.rs), then the UI.
 pub type Sink = Arc<dyn Fn(SocialEvent) + Send + Sync>;
 
 /// One social backend. Calls block (run them off the UI thread); events arrive through the sink given to `connect`.
@@ -165,8 +165,8 @@ impl Social {
 fn sink(app: &tauri::AppHandle) -> Sink {
     let app = app.clone();
     Arc::new(move |e: SocialEvent| {
-        if let Some(_cue) = e.cue() {
-            // crate::sound::cue(_cue);  // wired once obelisk sound's cues land
+        if let Some(cue) = e.cue() {
+            crate::cues::cue(&app, cue);
         }
         let _ = app.emit("social-event", &e);
     })

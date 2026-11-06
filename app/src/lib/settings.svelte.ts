@@ -50,11 +50,11 @@ type Settings = {
 
 /** The update jingles sound.rs synthesizes, by setting id. */
 export const JINGLES: [string, string][] = [
-  ["bubbles", "Bubbles"], ["glow", "Glow"], ["marimba", "Marimba"], ["kalimba", "Kalimba"], ["hum", "Hum"],
+  ["glow", "Glow"], ["bubbles", "Bubbles"], ["marimba", "Marimba"],
 ];
 
 /** Obelisk's own background music, which music.rs synthesizes, by setting id. */
-export const TRACKS: [string, string][] = [["shopping", "Window Shopping"], ["lantern", "Lantern"], ["garden", "Pocket Garden"]];
+export const TRACKS: [string, string][] = [["lounge", "Lounge"], ["shopping", "Window Shopping"]];
 
 const DEFAULTS: Settings = {
   theme: "obelisk",
@@ -74,7 +74,7 @@ const DEFAULTS: Settings = {
   aiAssistant: "claude",
   plugins: { lightning: false },
   updateJingle: "off", // staged: none plays until the user picks the update sound (user, 2026-11-06)
-  music: { on: false, source: "obelisk", track: "all", folder: "", focusOnly: true, volume: 30 },
+  music: { on: false, source: "obelisk", track: "lounge", folder: "", focusOnly: true, volume: 30 },
 };
 
 export const settings = $state<Settings>({ ...DEFAULTS });
@@ -85,6 +85,7 @@ export async function loadSettings() {
   settings.plugins = { ...DEFAULTS.plugins, ...((saved as Partial<Settings>).plugins ?? {}) };
   settings.backups = { ...DEFAULTS.backups, ...((saved as Partial<Settings>).backups ?? {}) };
   settings.music = { ...DEFAULTS.music, ...((saved as Partial<Settings>).music ?? {}) };
+  if (!TRACKS.some((t) => t[0] === settings.music.track) && settings.music.track !== "all") settings.music.track = DEFAULTS.music.track;
   if (!JINGLES.some((j) => j[0] === settings.updateJingle) && !["random", "off"].includes(settings.updateJingle)) settings.updateJingle = DEFAULTS.updateJingle;
   if (!THEMES.some((t) => t.id === settings.theme)) settings.theme = "obelisk";
   applyTheme();
