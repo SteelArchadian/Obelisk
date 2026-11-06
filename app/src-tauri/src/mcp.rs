@@ -132,8 +132,24 @@ fn call(cmd: &str, args: &Value) -> Result<Value, String> {
     let body = args.to_string();
     write!(s, "POST /v1/{cmd} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
         .map_err(|e| e.to_string())?;
+    // Read the answer up to its Content-Length rather than to the end of the connection: Windows may reset a closed
+    // connection (10054) right after the full answer, and that answer is complete.
     let mut raw = Vec::new();
-    s.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 65536];
+    let need = |raw: &[u8]| {
+        let end = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+        let len = String::from_utf8_lossy(&raw[..end]).lines()
+            .find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.trim().parse::<usize>().ok()))?;
+        Some(end + 4 + len)
+    };
+    loop {
+        if need(&raw).is_some_and(|n| raw.len() >= n) { break }
+        match s.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
     let text = String::from_utf8_lossy(&raw);
     let (head, body) = text.split_once("\r\n\r\n").ok_or("no answer from Obelisk")?;
     let ok = head.split_whitespace().nth(1) == Some("200");

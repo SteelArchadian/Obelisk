@@ -86,6 +86,8 @@ fn play_dir() -> PathBuf {
     prism::instances_dir(&prism::data_dir()).join(&tb().play).join("minecraft")
 }
 const DEFAULT_VERSION: &str = "neoforge-21.1.252";
+/// The pack test copies are made from unless said otherwise (Test Dummy is the only target, user 2026-11-05).
+const TARGET_PACK: &str = "Test Dummy";
 /// Folders under the bench root that hold tools, not game copies.
 const NOT_COPIES: &[&str] = &["scripts", "backups", "gate-template", "obelisk", "tools", "status", "maps", "mcsrc"];
 /// Skipped when copying a pack (same list as gate.py).
@@ -317,7 +319,10 @@ fn reply(mut stream: TcpStream, code: u16, v: &Value) -> std::io::Result<()> {
     let body = serde_json::to_vec(v).unwrap_or_default();
     let reason = match code { 200 => "OK", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 405 => "Method Not Allowed", _ => "Error" };
     write!(stream, "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())?;
-    stream.write_all(&body)
+    stream.write_all(&body)?;
+    // End the answer on the socket itself: a handle a child process (benchlock, gate) inherited mid-request would
+    // otherwise keep the connection open, and the caller would wait for an end that never comes.
+    stream.shutdown(std::net::Shutdown::Write)
 }
 
 // ---------------------------------------------------------------- validation
@@ -744,21 +749,21 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
 }
 
 /// Loader and Minecraft version for installs and update checks: given, or the play instance's
-/// (every test copy is a copy of Foundation unless said otherwise).
+/// (every test copy is a copy of the target pack unless said otherwise).
 /// A copy has no Prism instance around it, so the pack check wouldn't know its NeoForge version: note the play
 /// pack's (the version copies run) where the check reads it.
 fn note_loader_version(dir: &Path) {
     // Only a copy's own note is refreshed (the pack's NeoForge moves on); a real instance knows its own version.
     let noted = dir.join(".obelisk").join("loader-version");
     if !noted.is_file() && !prism::loader_version_of(dir).is_empty() { return }
-    if let Some(play) = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation") {
+    if let Some(play) = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == TARGET_PACK) {
         let _ = std::fs::create_dir_all(dir.join(".obelisk"));
         let _ = std::fs::write(dir.join(".obelisk").join("loader-version"), play.loader_version);
     }
 }
 
 fn pack_of(args: &Value) -> Result<(String, String), String> {
-    let play = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation");
+    let play = prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == TARGET_PACK);
     let loader = s(args, "loader").map(str::to_string).or_else(|| play.as_ref().map(|p| p.loader.clone()));
     let mc = s(args, "minecraft").map(str::to_string).or_else(|| play.as_ref().map(|p| p.minecraft.clone()));
     Ok((loader.ok_or("pass loader (e.g. neoforge)")?, mc.ok_or("pass minecraft (e.g. 1.21.1)")?))
@@ -1391,8 +1396,21 @@ fn test_rules(dir: &Path) {
 
 /// Essential's loader asks in a window of its own whether to update Essential ("with-prompt"), and a quiet bench
 /// launch waits on that window forever. Copies never update it: autoUpdate=false in its own config file
-/// (essential/essential-loader.properties), every other line kept.
+/// (essential/essential-loader.properties), every other line kept. Its loader also rewrites its stage files
+/// (essential/loader/stage1/.../stage2.*.properties) to autoUpdate=with-prompt, so every Essential properties file
+/// that names autoUpdate gets false too (RT core, 2026-11-06).
 fn essential_no_update(dir: &Path) {
+    fn walk(d: &Path) {
+        for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() { walk(&p); continue }
+            if p.extension().is_none_or(|x| !x.eq_ignore_ascii_case("properties")) { continue }
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            let new: Vec<&str> = text.lines().map(|l| if l.split('=').next().map(str::trim) == Some("autoUpdate") { "autoUpdate=false" } else { l }).collect();
+            let new = new.join("\n") + "\n";
+            if new.trim_end() != text.trim_end() { let _ = std::fs::write(&p, new); }
+        }
+    }
     let installed = dir.join("essential").is_dir() || std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
         .any(|e| e.file_name().to_string_lossy().to_ascii_lowercase().starts_with("essential"));
     if !installed { return }
@@ -1402,6 +1420,7 @@ fn essential_no_update(dir: &Path) {
     lines.push("autoUpdate=false".into());
     let _ = std::fs::create_dir_all(dir.join("essential"));
     let _ = std::fs::write(&file, lines.join("\n") + "\n");
+    walk(&dir.join("essential"));
 }
 
 /// Absolute AFK Cinema's master switch is `general.enabled` in a commented JSON file, so it's switched as text
@@ -1566,11 +1585,11 @@ fn loader_version(dir: &Path) -> String {
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v.pointer("/baseModLoader/name").and_then(|n| n.as_str()).map(String::from))
         .filter(|n| n.starts_with("neoforge-") && n.chars().all(|c| c.is_ascii_alphanumeric() || ".-".contains(c)))
-        // Else the version noted in the copy, else the one Foundation is on now: a copy runs the NeoForge its pack
+        // Else the version noted in the copy, else the one the target pack is on now: a copy runs the NeoForge its pack
         // plays on, when the bench has it installed.
         .or_else(|| {
             let noted = std::fs::read_to_string(dir.join(".obelisk").join("loader-version")).ok().map(|v| v.trim().to_string());
-            let play = || prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == "Foundation").map(|i| i.loader_version);
+            let play = || prism::list_instances(&prism::data_dir()).into_iter().find(|i| i.id == TARGET_PACK).map(|i| i.loader_version);
             [noted, play()].into_iter().flatten()
                 .filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'))
                 .map(|v| format!("neoforge-{v}"))
@@ -2366,9 +2385,17 @@ fn copy_source(copy: &str) -> Profile {
         .unwrap_or_else(|| play_dir().parent().map(Profile::of_instance).unwrap_or_default())
 }
 
-/// gate.py's copies (gate-<slug>) keep no source file: the pack is the instance whose folder name gives that slug
-/// (lowercase, every run of other characters one '-'), so its Java and JVM args are used, not the play pack's.
+/// gate.py's copies keep no source file. Each notes the pack it was last synced from (gate-sync.json "from", the
+/// pack's minecraft folder), so the pool (gate, gate-2, ...) follows whichever pack it mirrors; else, for gate-<slug>,
+/// the pack is the instance whose folder name gives that slug (lowercase, every run of other characters one '-'),
+/// so its Java and JVM args are used, not the play pack's.
 fn gate_source(copy: &str) -> Option<Profile> {
+    let from = std::fs::read(tb().root.join(copy).join("gate-sync.json")).ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["from"].as_str().map(PathBuf::from))
+        .and_then(|m| m.parent().map(Path::to_path_buf))
+        .filter(|inst| inst.join("instance.cfg").is_file());
+    if let Some(inst) = from { return Some(Profile::of_instance(&inst)) }
     let slug_of = |name: &str| {
         let mut out = String::new();
         for c in name.to_lowercase().chars() {
