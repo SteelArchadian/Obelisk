@@ -16,6 +16,8 @@ mod game;
 mod mcp;
 mod selfupdate;
 mod sound;
+mod music;
+mod social;
 
 /// The build stamp (`obelisk.exe --build-id`, used when publishing an update).
 pub fn build_id() -> &'static str {
@@ -2180,6 +2182,7 @@ pub fn run() {
             // Shared packs: pull friends' changes every minute while Obelisk runs (only once a pack is shared).
             let net: ShareNet = Default::default();
             app.manage(net.clone());
+            app.manage(social::Social::default());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 use tauri::Emitter;
@@ -2269,7 +2272,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, datadir::data_dir_get, datadir::data_dir_set,
+            sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism,

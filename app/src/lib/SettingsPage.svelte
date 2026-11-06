@@ -9,7 +9,8 @@
   import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
-  import { settings, saveSettings, THEMES, JINGLES } from "./settings.svelte";
+  import { settings, saveSettings, THEMES, JINGLES, TRACKS } from "./settings.svelte";
+  import { music } from "./player.svelte";
   import Resolution from "./Resolution.svelte";
   import Releases from "./Releases.svelte";
 
@@ -262,6 +263,31 @@
         </div>
         <small class="muted">A short, quiet chime on the first start after Obelisk updates itself.</small>
       </div>
+      <label class="toggle-row">
+        <span><strong>Background music</strong><small>Soft music while you browse: Obelisk's own original tracks, or your own music files. Pause it any time with the note on the left.</small></span>
+        <button class="switch" class:on={settings.music.on} role="switch" aria-checked={settings.music.on} aria-label="Background music"
+          onclick={() => { settings.music.on = !settings.music.on; music.paused = false; saveSettings(); }}><i></i></button>
+      </label>
+      {#if settings.music.on}
+        <div class="field">
+          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="obelisk" onchange={saveSettings} /> Obelisk's music
+            <select class="select" bind:value={settings.music.track} onchange={() => { settings.music.source = "obelisk"; saveSettings(); }} aria-label="Track">
+              <option value="all">All tracks</option>
+              {#each TRACKS as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            </select></label>
+          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="mine" onchange={saveSettings} /> My own music
+            <button class="ghost" onclick={async (e) => { e.preventDefault(); const dir = await open({ directory: true, title: "Choose your music folder" }); if (typeof dir === "string") { settings.music.folder = dir; settings.music.source = "mine"; saveSettings(); } }}>{settings.music.folder ? "Change folder…" : "Choose folder…"}</button></label>
+          {#if settings.music.source === "mine"}<small class="muted">{settings.music.folder || "No folder chosen yet."} Plays the mp3, ogg, opus, wav, flac and m4a files in it, shuffled. They stay on this PC.</small>{/if}
+          <label class="row-check">Play
+            <select class="select" bind:value={settings.music.focusOnly} onchange={saveSettings} aria-label="When music plays">
+              <option value={true}>only while Obelisk is the active window</option>
+              <option value={false}>the whole time Obelisk is open</option>
+            </select></label>
+          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.music.volume} onchange={saveSettings} aria-label="Music volume" /> {settings.music.volume}%</label>
+          <div class="row-buttons"><button class="ghost" onclick={() => (music.paused = !music.paused)}>{music.paused ? "Resume" : "Pause"}</button>{#if music.title}<small class="muted">Playing {music.title}</small>{/if}</div>
+          {#if music.error}<small class="muted">{music.error}</small>{/if}
+        </div>
+      {/if}
       <label class="toggle-row">
         <span><strong>Offer Fabric mods on NeoForge</strong><small>Shows “Via Connector” for Fabric-only mods (needs Sinytra Connector and Forgified Fabric API).</small></span>
         <button class="switch" class:on={settings.connector} role="switch" aria-checked={settings.connector} aria-label="Offer Fabric mods on NeoForge"

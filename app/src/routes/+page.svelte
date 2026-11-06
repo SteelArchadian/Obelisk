@@ -42,6 +42,7 @@
   import HeldReview from "$lib/HeldReview.svelte";
   import SettingsPage from "$lib/SettingsPage.svelte";
   import Bell from "$lib/Bell.svelte";
+  import MusicButton from "$lib/MusicButton.svelte";
   import Welcome from "$lib/Welcome.svelte";
   import WhatsNew from "$lib/WhatsNew.svelte";
   import WorkBar from "$lib/WorkBar.svelte";
@@ -370,6 +371,7 @@
       <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
     </button>
     <div class="grow"></div>
+    <MusicButton />
     <Bell />
     {#if account}
       <div class="acct-wrap">

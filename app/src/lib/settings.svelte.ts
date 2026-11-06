@@ -44,12 +44,17 @@ type Settings = {
   plugins: { lightning: boolean };
   /** The jingle on the first start after an update (sound.rs): one of JINGLES, "random" or "off". */
   updateJingle: string;
+  /** Background music (player.svelte.ts): Obelisk's own tracks (one of TRACKS or "all") or the user's own folder. */
+  music: { on: boolean; source: "obelisk" | "mine"; track: string; folder: string; focusOnly: boolean; volume: number };
 };
 
 /** The update jingles sound.rs synthesizes, by setting id. */
 export const JINGLES: [string, string][] = [
-  ["sparkle", "Sparkle"], ["bubbles", "Bubbles"], ["musicbox", "Music box"], ["marimba", "Marimba"], ["glow", "Glow"],
+  ["bubbles", "Bubbles"], ["glow", "Glow"], ["marimba", "Marimba"], ["kalimba", "Kalimba"], ["hum", "Hum"],
 ];
+
+/** Obelisk's own background music, which music.rs synthesizes, by setting id. */
+export const TRACKS: [string, string][] = [["shopping", "Window Shopping"], ["lantern", "Lantern"], ["garden", "Pocket Garden"]];
 
 const DEFAULTS: Settings = {
   theme: "obelisk",
@@ -68,7 +73,8 @@ const DEFAULTS: Settings = {
   controlApi: false,
   aiAssistant: "claude",
   plugins: { lightning: false },
-  updateJingle: "sparkle",
+  updateJingle: "off", // staged: none plays until the user picks the update sound (user, 2026-11-06)
+  music: { on: false, source: "obelisk", track: "all", folder: "", focusOnly: true, volume: 30 },
 };
 
 export const settings = $state<Settings>({ ...DEFAULTS });
@@ -78,6 +84,8 @@ export async function loadSettings() {
   Object.assign(settings, DEFAULTS, saved);
   settings.plugins = { ...DEFAULTS.plugins, ...((saved as Partial<Settings>).plugins ?? {}) };
   settings.backups = { ...DEFAULTS.backups, ...((saved as Partial<Settings>).backups ?? {}) };
+  settings.music = { ...DEFAULTS.music, ...((saved as Partial<Settings>).music ?? {}) };
+  if (!JINGLES.some((j) => j[0] === settings.updateJingle) && !["random", "off"].includes(settings.updateJingle)) settings.updateJingle = DEFAULTS.updateJingle;
   if (!THEMES.some((t) => t.id === settings.theme)) settings.theme = "obelisk";
   applyTheme();
 }
