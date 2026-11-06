@@ -122,7 +122,9 @@ pub fn whats_new(app: tauri::AppHandle) -> Option<Available> {
     let path = crate::datadir::root().join(WHATS_NEW);
     let note: Available = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
     let _ = std::fs::remove_file(&path);
-    (note.version == app.package_info().version.to_string()).then_some(note)
+    let fresh = note.version == app.package_info().version.to_string();
+    if fresh { crate::sound::update_jingle(&app); }
+    fresh.then_some(note)
 }
 
 const RESUME: &str = "resume-window.json";

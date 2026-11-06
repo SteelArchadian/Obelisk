@@ -9,7 +9,7 @@
   import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
-  import { settings, saveSettings, THEMES } from "./settings.svelte";
+  import { settings, saveSettings, THEMES, JINGLES } from "./settings.svelte";
   import Resolution from "./Resolution.svelte";
   import Releases from "./Releases.svelte";
 
@@ -251,6 +251,17 @@
         <button class="switch" class:on={settings.shadersOffAtStart} role="switch" aria-checked={settings.shadersOffAtStart} aria-label="Start games with shaders off"
           onclick={() => { settings.shadersOffAtStart = !settings.shadersOffAtStart; saveSettings(); }}><i></i></button>
       </label>
+      <div class="field">Sound after an update
+        <div class="row-buttons">
+          <select class="select" bind:value={settings.updateJingle} onchange={saveSettings} aria-label="Sound after an update">
+            {#each JINGLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            <option value="random">A different one each time</option>
+            <option value="off">None</option>
+          </select>
+          <button class="ghost" disabled={settings.updateJingle === "off"} onclick={() => invoke("jingle_preview", { name: settings.updateJingle }).catch(toastError)}>Preview</button>
+        </div>
+        <small class="muted">A short, quiet chime on the first start after Obelisk updates itself.</small>
+      </div>
       <label class="toggle-row">
         <span><strong>Offer Fabric mods on NeoForge</strong><small>Shows “Via Connector” for Fabric-only mods (needs Sinytra Connector and Forgified Fabric API).</small></span>
         <button class="switch" class:on={settings.connector} role="switch" aria-checked={settings.connector} aria-label="Offer Fabric mods on NeoForge"

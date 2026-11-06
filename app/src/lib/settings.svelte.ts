@@ -42,7 +42,14 @@ type Settings = {
   shadersOffAtStart: boolean;
   /** Optional integrations, off until ticked in Settings → Plugins. */
   plugins: { lightning: boolean };
+  /** The jingle on the first start after an update (sound.rs): one of JINGLES, "random" or "off". */
+  updateJingle: string;
 };
+
+/** The update jingles sound.rs synthesizes, by setting id. */
+export const JINGLES: [string, string][] = [
+  ["sparkle", "Sparkle"], ["bubbles", "Bubbles"], ["musicbox", "Music box"], ["marimba", "Marimba"], ["glow", "Glow"],
+];
 
 const DEFAULTS: Settings = {
   theme: "obelisk",
@@ -61,6 +68,7 @@ const DEFAULTS: Settings = {
   controlApi: false,
   aiAssistant: "claude",
   plugins: { lightning: false },
+  updateJingle: "sparkle",
 };
 
 export const settings = $state<Settings>({ ...DEFAULTS });

@@ -57,10 +57,13 @@
           reset = false;
           const r = await invoke<any>("cf_relations", { id: cfId, which, index: page * 20, kind, sort });
           if (g !== gen) return;
-          const got = (r.data ?? []).map(cfRow);
+          // The site's order can shift between pages; a row already listed is skipped (the list is keyed by it).
+          const seen = new Set(rows.map((x) => x.id + x.kind));
+          const got = (r.data ?? []).map(cfRow).filter((x: Row) => !seen.has(x.id + x.kind) && seen.add(x.id + x.kind));
           rows = [...rows, ...got];
           total = r.pagination?.totalCount ?? rows.length;
-          if (!got.length || rows.length >= total || shown.length >= want) break;
+          if (!r.data?.length) total = rows.length; // past the last page
+          if (!r.data?.length || rows.length >= total || shown.length >= want) break;
         }
       } else if (which === "dependencies") {
         const r = await invoke<any>("mr_dependencies", { id: hit.project_id });

@@ -114,7 +114,8 @@ pub fn relations(mod_id: u64, which: &str, index: u32, kind: &str, sort: &str) -
     let tls = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
     let agent = ureq::AgentBuilder::new().user_agent("Obelisk/0.1").tls_connector(Arc::new(tls))
         .timeout(std::time::Duration::from_secs(20)).build();
-    let mut url = format!("https://www.curseforge.com/api/v1/mods/{mod_id}/{which}?index={index}&pageSize=20");
+    // The site pages by `page` (0-based) and ignores `index`, which would hand back the first page every time.
+    let mut url = format!("https://www.curseforge.com/api/v1/mods/{mod_id}/{which}?page={}&pageSize=20", index / 20);
     if !kind.is_empty() { url += &format!("&type={}", enc(kind)) }
     url += match sort { "updated" => "&sortField=1&sortOrder=Desc", "newest" => "&sortField=4&sortOrder=Desc", "name" => "&sortField=3&sortOrder=Asc", _ => "&sortField=2&sortOrder=Desc" };
     agent.get(&url).set("Accept", "application/json").call().map_err(|e| format!("CurseForge: {e}"))?

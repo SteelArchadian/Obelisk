@@ -137,7 +137,8 @@ pub async fn cf_comments(app: tauri::AppHandle, project_id: u64, project_name: S
         let c = cookie(&app);
         let me = if c.is_empty() { None } else { cfsite::profile(&c).ok().flatten() };
         let mut v = cfsite::comments(project_id, page, Some(&c))?;
-        if page == 0 { v["enabled"] = cfsite::comments_enabled(project_id, Some(&c)).into() }
+        // The API key's project data says whether the author turned comments off (an empty list looks the same either way).
+        if page == 0 { v["enabled"] = crate::cf_client().and_then(|cf| cf.project(project_id).ok()).and_then(|p| p["hasCommentsEnabled"].as_bool()).into() }
         if let Some(id) = me.as_ref().and_then(|m| m["id"].as_u64()) {
             let mut st = load();
             for t in v["comments"].as_array().into_iter().flatten() {

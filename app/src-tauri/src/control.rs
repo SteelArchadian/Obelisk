@@ -995,6 +995,7 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         let mut opts = o.get("options").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
         if opts.get("chatVisibility").is_none() { opts["chatVisibility"] = json!("2") }
         o.insert("options".into(), opts);
+        o.insert("render".into(), json!(true)); // pictures need a drawn frame: parked off-screen, not minimized
     }
     if let Some(tw) = o.get_mut("test_world").filter(|v| v.is_object()) {
         if tw.get("hold").is_none() { tw["hold"] = json!(test_hold) }
@@ -1719,7 +1720,6 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let eta = num(args, "eta", 5, 1, 30)?;
     let timeout = num(args, "timeout", MAX_TIMEOUT, 60, MAX_TIMEOUT)?;
     // Always in the background (user, 2026-10-24): "park": false is no longer honoured.
-    let park = true;
     let mut extra = jvm_props(args)?;
     // camera {pitch, yaw}: the harness holds the player's view there, for aimed screenshots.
     if let Some(cam) = args.get("camera") {
@@ -1823,6 +1823,8 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let fps_props = extra.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)) && !a.starts_with("-Dspeedloader.autobench")
         && !(auto_profile && a.starts_with("-Dlightning.")));
     let measured = perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Frame times and pictures need a drawn frame: those windows park off-screen instead of minimized.
+    let render = measured || args.get("render").and_then(|v| v.as_bool()).unwrap_or(false);
     let cap = max_hold(&purpose, measured);
     let mut hold = None;
     for a in &extra {
@@ -1893,7 +1895,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let exclusive = measured;
     let stop_if_playing = exclusive || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, park, perf, exclusive, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, render, perf, exclusive, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
     let lock_note = if exclusive { format!("measured run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
         else { format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") };
     Ok(json!({ "job": id, "state": "queued", "lock": lock_note, "gc": reply_gc,
@@ -1902,7 +1904,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, park: bool, perf: bool, exclusive: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
+fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, render: bool, perf: bool, exclusive: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
     build_world: Option<(Value, u64)>) {
     let me = std::process::id().to_string();
@@ -2030,9 +2032,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
                 break format!("exited ({})", status.code().map(|c| c.to_string()).unwrap_or("?".into()));
             }
-            if park {
-                park_windows(pid, &mut parked, perf.then(native_resolution).flatten(), prev_fg);
-            }
+            park_windows(pid, &mut parked, render, perf.then(native_resolution).flatten(), prev_fg);
             if window_ms.is_none() && super::top_windows().iter().any(|w| w.1 == pid && w.2) {
                 let ms = prism::timeline::now_ms();
                 window_ms = Some(ms);
@@ -2620,10 +2620,12 @@ fn native_resolution() -> Option<(u32, u32)> {
     (w >= 640 && h >= 480).then_some((w, h))
 }
 
-/// Beyond every monitor, at the bottom of the z-order, never activated (as gate.py does). With `size` (a perf run)
-/// the window also loses its frame and takes that size, so the game renders full screen's pixels off-screen. A test
-/// window that still ends up in front (the game shows itself focused) hands the foreground back to `prev`.
-fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, size: Option<(u32, u32)>, prev: isize) {
+/// Out of the user's way but findable (user, 2026-11-06, KB #51; as gate.py's park): minimized without taking the
+/// focus, with its normal taskbar button and Win+Tab entry, so the user can look at it or End Task it. A run whose
+/// pictures or frame times are the test (`render`) needs a drawn frame instead: beyond every monitor at the bottom of
+/// the z-order, still on the taskbar; with `size` (perf) it also loses its frame and takes that size, so the game
+/// renders full screen's pixels. Once the user brings a window up it is theirs and left alone.
+fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render: bool, size: Option<(u32, u32)>, prev: isize) {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
@@ -2636,24 +2638,29 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, size: O
         fn IsIconic(h: isize) -> i32;
         fn ShowWindow(h: isize, cmd: i32) -> i32;
     }
-    // Checked every time, not once: the game moves its own window back (centred on the monitor) when it sets its
-    // display mode after start-up, which would leave a full-size window over the user's desktop.
+    let fg = unsafe { GetForegroundWindow() };
+    // Checked every time, not once: the game restores and centres its own window when it sets its display mode after
+    // start-up, which would leave a full-size window over the user's desktop.
     for (h, p, vis, _, _) in super::top_windows() {
-        if p != pid || !vis { continue }
-        // Minimized (by the user or anything else) is out of the way too: never move it, or Windows and window
-        // managers like FancyZones see a window being dragged back while the user works (user, 2026-11-04).
-        if unsafe { IsIconic(h) } != 0 { parked.insert(h); continue }
+        if p != pid || !vis || parked.contains(&-h) { continue }
+        if parked.contains(&h) && fg == h && fg != prev {
+            parked.insert(-h); // the user opened it: never moved or minimized again
+            continue;
+        }
         if parked.insert(h) {
-            // A test window is not the user's: no taskbar button, no Alt-Tab entry, and clicks never activate it
-            // (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, minus WS_EX_APPWINDOW). Hidden and shown once so the taskbar
-            // drops its button; the game keeps rendering.
+            // WS_EX_APPWINDOW, minus TOOLWINDOW and NOACTIVATE: a normal taskbar button and Win+Tab entry.
             unsafe {
                 let ex = GetWindowLongPtrW(h, -20 /* GWL_EXSTYLE */);
-                SetWindowLongPtrW(h, -20, (ex | 0x80 | 0x0800_0000) & !0x0004_0000);
-                ShowWindow(h, 0 /* SW_HIDE */);
-                ShowWindow(h, 4 /* SW_SHOWNOACTIVATE */);
+                SetWindowLongPtrW(h, -20, (ex | 0x0004_0000) & !(0x80 | 0x0800_0000));
             }
         }
+        if !render {
+            if unsafe { IsIconic(h) } == 0 { unsafe { ShowWindow(h, 7 /* SW_SHOWMINNOACTIVE */) }; }
+            continue;
+        }
+        // A minimized window draws nothing; moving one back would also look to Windows and window managers like
+        // FancyZones as a window dragged back while the user works (user, 2026-11-04).
+        if unsafe { IsIconic(h) } != 0 { continue }
         let mut r = super::shot::Rect::default();
         if unsafe { GetWindowRect(h, &mut r) } == 0 { continue }
         let at = r.l == -20000 && r.t == -20000;
@@ -2671,9 +2678,10 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, size: O
             }
         }
     }
+    // The game shows itself focused when it starts: the foreground goes back to what the user had.
     unsafe {
         let fg = GetForegroundWindow();
-        if prev != 0 && fg != prev && parked.contains(&fg) && IsWindow(prev) != 0 {
+        if prev != 0 && fg != prev && parked.contains(&fg) && !parked.contains(&-fg) && IsWindow(prev) != 0 {
             SetForegroundWindow(prev);
         }
     }

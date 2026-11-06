@@ -59,22 +59,6 @@ fn avatar(url: Option<&str>) -> Option<String> {
     url.map(str::trim).filter(|u| u.starts_with("http")).map(|u| u.replace("{0}", "70x70"))
 }
 
-/// Whether the project takes comments, as the site's project data says (`hasComments`); None when it can't tell
-/// (the site only shares that with a signed-in session, and an empty list looks the same either way).
-pub fn comments_enabled(project_id: u64, cookie: Option<&str>) -> Option<bool> {
-    fn find(v: &Value) -> Option<bool> {
-        match v {
-            Value::Object(m) => ["hasComments", "isCommentsEnabled", "commentsEnabled"].iter().find_map(|k| m.get(*k).and_then(Value::as_bool))
-                .or_else(|| m.values().find_map(find)),
-            Value::Array(a) => a.iter().find_map(find),
-            _ => None,
-        }
-    }
-    let (code, v) = call("GET", &format!("/mods/{project_id}"), cookie, None).ok()?;
-    if code >= 300 { return None }
-    find(&v)
-}
-
 /// One page (20, newest first) of a project's comments, replies nested under each: {comments, total}.
 pub fn comments(project_id: u64, page: u32, cookie: Option<&str>) -> Result<Value, String> {
     let (code, v) = call("GET", &format!("/mods/{project_id}/comments?page={page}&size=20"), cookie, None)?;
