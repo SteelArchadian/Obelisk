@@ -143,8 +143,106 @@ fn update(jobs: &Shared, id: u32, f: impl FnOnce(&mut Job)) {
     let (m, cv) = &**jobs;
     if let Some(j) = m.lock().unwrap().list.get_mut(&id) {
         f(j);
+        journal::state(id, &j.state);
     }
     cv.notify_all();
+}
+
+/// Jobs across an Obelisk restart (an update restarts it, often while chats have launches queued): ids keep counting
+/// up instead of starting again at 1, a launch or gate still waiting for the bench lock is submitted again under its
+/// own id, and one that was running answers "lost on restart" instead of "no such job" (Patchwork, 2026-11-06).
+mod journal {
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    #[derive(Serialize, Deserialize, Default)]
+    pub struct Journal {
+        pub next: u32,
+        /// Jobs not finished yet: their state, and (launch, gate) the request to submit again.
+        pub open: BTreeMap<u32, Open>,
+        /// Jobs a restart ended: id → why (the newest 200).
+        pub lost: BTreeMap<u32, String>,
+    }
+
+    #[derive(Serialize, Deserialize, Clone)]
+    pub struct Open {
+        pub state: String,
+        pub tool: Option<String>,
+        pub args: Option<Value>,
+    }
+
+    static J: Mutex<Option<Journal>> = Mutex::new(None);
+    thread_local! {
+        /// The id new_job uses for a job submitted again after a restart.
+        pub static REUSE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn path() -> std::path::PathBuf { super::tb().root.join("obelisk").join("jobs").join("journal.json") }
+
+    fn save(j: &Journal) {
+        let p = path();
+        let tmp = p.with_extension("json.tmp");
+        if std::fs::write(&tmp, serde_json::to_vec(j).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, &p); }
+    }
+
+    fn with<T>(f: impl FnOnce(&mut Journal) -> T) -> Option<T> {
+        let mut g = J.lock().ok()?;
+        let j = g.as_mut()?;
+        let out = f(j);
+        save(j);
+        Some(out)
+    }
+
+    /// At start-up: the last run's journal, with its open jobs taken out. Running ones become lost; the waiting ones
+    /// with a request are returned in id order, to be submitted again.
+    pub fn load() -> (u32, Vec<(u32, String, Value)>) {
+        let mut j: Journal = std::fs::read(path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let when = chrono_like_now();
+        let mut again = vec![];
+        for (id, o) in std::mem::take(&mut j.open) {
+            match (o.state.as_str(), o.tool, o.args) {
+                ("queued", Some(tool), Some(args)) => again.push((id, tool, args)),
+                (st, _, _) => { j.lost.insert(id, format!("job {id} was {st} when Obelisk restarted at {when}, so it ended; submit it again")); }
+            }
+        }
+        while j.lost.len() > 200 { let first = *j.lost.keys().next().unwrap(); j.lost.remove(&first); }
+        let next = j.next;
+        save(&j);
+        *J.lock().unwrap() = Some(j);
+        (next, again)
+    }
+
+    fn chrono_like_now() -> String {
+        let t = super::now() % 86_400;
+        format!("{:02}:{:02} UTC", t / 3600, t % 3600 / 60)
+    }
+
+    pub fn created(id: u32) {
+        with(|j| { j.next = j.next.max(id); j.open.insert(id, Open { state: "queued".into(), tool: None, args: None }); });
+    }
+
+    /// The request behind a launch or gate job, kept while it waits for the bench lock.
+    pub fn request(id: u32, tool: &str, args: &Value) {
+        with(|j| if let Some(o) = j.open.get_mut(&id) { o.tool = Some(tool.into()); o.args = Some(args.clone()); });
+    }
+
+    pub fn state(id: u32, state: &str) {
+        with(|j| match state {
+            "queued" | "running" => { if let Some(o) = j.open.get_mut(&id) { o.state = state.into() } }
+            _ => { j.open.remove(&id); }
+        });
+    }
+
+    pub fn lose(id: u32, why: String) {
+        with(|j| { j.open.remove(&id); j.lost.insert(id, why); });
+    }
+
+    /// Why a job id isn't known: lost on a restart, or never was.
+    pub fn gone(id: u32) -> String {
+        J.lock().ok().and_then(|g| g.as_ref()?.lost.get(&id).cloned()).unwrap_or_else(|| "no such job".into())
+    }
 }
 
 // ---------------------------------------------------------------- start-up
@@ -189,6 +287,24 @@ pub fn start(app: tauri::AppHandle) {
     audit("server", &json!({ "port": port }), "started");
     let jobs: Shared = Default::default();
     let _ = ACTIVE.set(jobs.clone());
+    if tb_ready().is_ok() {
+        let (next, again) = journal::load();
+        jobs.0.lock().unwrap().next = next;
+        // Submitted again in their old order, so they wait for the bench lock about where they were.
+        let (app, jobs) = (app.clone(), jobs.clone());
+        std::thread::spawn(move || for (id, tool, args) in again {
+            journal::REUSE.with(|r| r.set(Some(id)));
+            let r = dispatch(&tool, &args, &jobs, &app);
+            journal::REUSE.with(|r| r.set(None));
+            match r {
+                Ok(_) => audit(&tool, &args, &format!("job {id} submitted again after a restart")),
+                Err(e) => {
+                    audit(&tool, &args, &format!("job {id} couldn't be submitted again after a restart: {e}"));
+                    journal::lose(id, format!("job {id} was waiting when Obelisk restarted, and submitting it again failed: {e}"));
+                }
+            }
+        });
+    }
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let (app, jobs, token) = (app.clone(), jobs.clone(), token.clone());
@@ -559,8 +675,11 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         // Everything the app itself can do, run live through its window (bridge.rs).
         "app-commands" => Ok(super::bridge::commands()),
         "app" => super::bridge::call(app, args),
-        "launch" => launch(args, jobs),
-        "gate" => gate(args, jobs),
+        "launch" | "gate" => {
+            let r = if cmd == "launch" { launch(args, jobs) } else { gate(args, jobs) };
+            if let Some(id) = r.as_ref().ok().and_then(|v| v["job"].as_u64()) { journal::request(id as u32, cmd, args) }
+            r
+        }
         "errors" => Ok(super::errlog::recent(num(args, "limit", 30, 1, 200)? as usize, args.get("since").and_then(|v| v.as_u64()).unwrap_or(0))),
         "release-submit" | "release-status" | "release-promote" | "release-rollback" | "release-retry" | "release-optout" => super::releases::command(cmd, args),
         "status" => {
@@ -891,7 +1010,7 @@ fn wait(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     let mut l = m.lock().unwrap();
     loop {
-        let j = l.list.get(&id).ok_or("no such job")?;
+        let j = l.list.get(&id).ok_or_else(|| journal::gone(id))?;
         if !matches!(j.state.as_str(), "queued" | "running") || until.is_some_and(|u| j.events.iter().any(|e| e["event"] == u)) {
             return Ok(json!(j));
         }
@@ -1157,7 +1276,7 @@ fn game_of(args: &Value, jobs: &Shared) -> Result<(u32, PathBuf, u64), String> {
     let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
     let (m, _) = &**jobs;
     let l = m.lock().unwrap();
-    let j = l.list.get(&id).ok_or("no such job")?;
+    let j = l.list.get(&id).ok_or_else(|| journal::gone(id))?;
     if j.state != "running" { return Err(format!("job {id} is {}, not running", j.state)) }
     let dir = match j.kind.as_str() {
         "launch" => Path::new(&j.output).parent().and_then(|p| p.parent()).map(Path::to_path_buf).ok_or("no game folder")?,
@@ -1173,7 +1292,7 @@ fn game_of(args: &Value, jobs: &Shared) -> Result<(u32, PathBuf, u64), String> {
 fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
     let (m, _) = &**jobs;
-    let j = m.lock().unwrap().list.get(&id).cloned().ok_or("no such job")?;
+    let j = m.lock().unwrap().list.get(&id).cloned().ok_or_else(|| journal::gone(id))?;
     let mut killed = vec![];
     for pid in [j.pid, j.helper_pid].into_iter().flatten() {
         if super::kill_tree(pid) {
@@ -1235,7 +1354,7 @@ fn drop_tickets(owner: &str) {
 fn heap(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let id = args.get("job").and_then(|j| j.as_u64()).ok_or("missing \"job\"")? as u32;
     let kind = args.get("kind").and_then(|k| k.as_str()).unwrap_or("histogram");
-    let j = jobs.0.lock().unwrap().list.get(&id).cloned().ok_or("no such job")?;
+    let j = jobs.0.lock().unwrap().list.get(&id).cloned().ok_or_else(|| journal::gone(id))?;
     let (Some(pid), Some(java), "running") = (j.pid, j.java.as_ref(), j.state.as_str()) else {
         return Err("that job has no running game".into());
     };
@@ -1377,8 +1496,11 @@ fn finish(jobs: &Shared, id: u32, state: &str, detail: String) {
 fn new_job(jobs: &Shared, kind: &str, copy: &str, owner: &str, output: String) -> u32 {
     let (m, cv) = &**jobs;
     let mut l = m.lock().unwrap();
-    l.next += 1;
-    let id = l.next;
+    let id = match journal::REUSE.with(|r| r.take()) {
+        Some(id) => { l.next = l.next.max(id); id }
+        None => { l.next += 1; l.next }
+    };
+    journal::created(id);
     l.list.insert(id, Job { id, kind: kind.into(), copy: copy.into(), owner: owner.into(), state: "queued".into(), pid: None,
         started: now(), ended: None, detail: String::new(), output, helper_pid: None, java: None, events: vec![], now: Value::Null, hooks: vec![], shots: vec![] });
     cv.notify_all();

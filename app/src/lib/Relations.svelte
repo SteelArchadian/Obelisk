@@ -2,7 +2,7 @@
   // Project page → Relations. Opens on "Required by": the mods that won't run without this one (CurseForge lists them;
   // Modrinth doesn't, so a Modrinth project uses its CurseForge twin). Modpacks are left out unless asked for.
   import { invoke } from "@tauri-apps/api/core";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { compact, type Hit } from "./api";
   import { openProjectById } from "./install";
 
@@ -79,15 +79,24 @@
   // Reload from the top only when the view changes (untracked: load itself reads the page and rows it changes).
   $effect(() => { void which; void kind; void cfId; void sort; if (!checking) untrack(() => load(true)); });
 
-  // Scrolling near the end (or Load more) reads the next pages.
+  // The next page is read while the end is still about three screens away, so scrolling never waits at the bottom
+  // (user, 2026-11-06: "fast and smooth"); Load more is there too.
+  const AHEAD = 2400;
   const more = () => { if (!busy && cfId && rows.length < total && !error) load(false); };
-  const near = () => { if (sentinel && sentinel.getBoundingClientRect().top < innerHeight + 400) more(); };
+  const near = () => { if (sentinel && sentinel.getBoundingClientRect().top < innerHeight + AHEAD) more(); };
   $effect(() => {
     if (!sentinel) return;
-    addEventListener("scroll", near, { capture: true, passive: true });
-    addEventListener("wheel", near, { capture: true, passive: true });
-    return () => { removeEventListener("scroll", near, { capture: true }); removeEventListener("wheel", near, { capture: true }); };
+    const root = relEl?.closest(".content") ?? null;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { chained = 0; more(); } }, { root, rootMargin: `0px 0px ${AHEAD}px 0px` });
+    io.observe(sentinel);
+    const scrolled = () => { chained = 0; near(); };
+    addEventListener("scroll", scrolled, { capture: true, passive: true });
+    return () => { io.disconnect(); removeEventListener("scroll", scrolled, { capture: true }); };
   });
+  // A page that came in while the end is still close reads the next one (the observer only fires on a change). At
+  // most 3 in a row without the user scrolling: a list that's nearly all hidden modpacks would otherwise read on and on.
+  let chained = 0;
+  $effect(() => { if (!busy) untrack(() => tick().then(() => { if (chained < 3) { chained += 1; near(); } })); });
 
   const isPack = (r: Row) => /modpack/i.test(r.cls ?? "") || r.kind === "Include";
   let shown = $derived(which === "dependents" && (hidePacks || mode !== "all") ? rows.filter((r) => !isPack(r)) : rows);
@@ -125,9 +134,9 @@
       {#if !busy && !error}<p class="muted">{which === "dependents" && rows.length ? "Only modpacks use this so far. Untick Hide modpacks, or load more." : "Nothing here."}</p>{/if}
     {/each}
   </div>
+  {#if cfId && rows.length < total && !error}<div bind:this={sentinel} class="sentinel"></div>{/if}
   {#if busy}<p class="muted">Loading…{#if rows.length} <small>({rows.length.toLocaleString()} read so far)</small>{/if}</p>{/if}
   {#if cfId && rows.length < total && !busy && !error}
-    <div bind:this={sentinel} class="sentinel"></div>
     <button class="more" onclick={more}>Load more <small class="muted">({rows.length.toLocaleString()} of {total >= 10000 ? "10,000+" : total.toLocaleString()} read)</small></button>
   {/if}
 </div>
