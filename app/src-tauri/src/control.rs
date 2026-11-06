@@ -214,9 +214,16 @@ mod journal {
         (next, again)
     }
 
+    /// The local time of day, as the user's clock shows it.
     fn chrono_like_now() -> String {
-        let t = super::now() % 86_400;
-        format!("{:02}:{:02} UTC", t / 3600, t % 3600 / 60)
+        #[repr(C)]
+        #[derive(Default)]
+        struct SystemTime { y: u16, mo: u16, dow: u16, d: u16, h: u16, mi: u16, s: u16, ms: u16 }
+        #[link(name = "kernel32")]
+        unsafe extern "system" { fn GetLocalTime(t: *mut SystemTime); }
+        let mut t = SystemTime::default();
+        unsafe { GetLocalTime(&mut t) };
+        format!("{:02}:{:02}", t.h, t.mi)
     }
 
     pub fn created(id: u32) {
@@ -696,7 +703,16 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "play-status" => Ok(play_status()),
         "play-wait" => play_wait(args),
         "kill" => kill(args, jobs),
-        "game-test" => game_test(args, jobs),
+        "game-test" => {
+            let r = game_test(args, jobs);
+            // Kept for a restart; submitted again it runs in the background (its caller is gone), read with game_result.
+            if let Some(id) = r.as_ref().ok().and_then(|v| v["job"].as_u64()) {
+                let mut again = args.clone();
+                again["background"] = json!(true);
+                journal::request(id as u32, cmd, &again);
+            }
+            r
+        }
         "bisect" => super::bisect::command(args, jobs),
         "game-query" | "game-cmd" | "game-scenario" | "game-quit" => {
             let (id, dir, started) = game_of(args, jobs)?;

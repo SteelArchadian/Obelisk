@@ -1,7 +1,8 @@
 //! Social sound cues (obelisk-social/OUTLINE.md, "Sound cues"): one small family of glassy chimes, all in F# major
 //! pentatonic so they sound like a set, apart from the update jingles. The social framework calls `cue(id)` for each
 //! event; settings decide whether and how loud it plays. Settings key `cues`:
-//! `{ on: bool, volume: 0-100, dnd: bool, muted: [ids] }` (defaults on, 70, off, none).
+//! `{ on: bool, volume: 0-100, dnd: bool, muted: [ids] }` (defaults on, 50, off, none), set in Settings → Sound. With
+//! `muteInactive` on (the default) no cue plays while another window is in front.
 
 use crate::sound::{n, render, Voice};
 use std::time::{Duration, Instant};
@@ -29,9 +30,9 @@ pub fn cue(app: &tauri::AppHandle, id: &str) {
     let muted = get("muted").and_then(|v| v.as_array()).is_some_and(|m| m.iter().any(|v| v.as_str() == Some(id)));
     let invite = id == "invite";
     // Do Not Disturb silences everything but invites; the master switch and a muted cue silence even those.
-    if !on || muted || (dnd && !invite) { return }
+    if !on || muted || (dnd && !invite) || crate::sound::muted_now(app, &s) { return }
     let Some(&(_, _, synth)) = CUES.iter().find(|c| c.0 == id) else { return };
-    let mut volume = get("volume").and_then(|v| v.as_f64()).unwrap_or(70.0).clamp(0.0, 100.0) / 100.0;
+    let mut volume = crate::sound::gain(get("volume").and_then(|v| v.as_f64()).unwrap_or(50.0));
     if !invite && game_in_front() {
         // While playing: the small stuff is skipped, the rest is played at a third of its level.
         if matches!(id, "friend_online" | "message_sent" | "reconnected") { return }
@@ -39,8 +40,7 @@ pub fn cue(app: &tauri::AppHandle, id: &str) {
     }
     if !fresh(id) { return }
     std::thread::spawn(move || {
-        let pcm: Vec<f32> = synth().into_iter().map(|v| v * volume as f32).collect();
-        crate::sound::play(&pcm);
+        crate::sound::play(&crate::sound::scale(synth(), volume));
     });
 }
 
@@ -48,8 +48,8 @@ pub fn cue(app: &tauri::AppHandle, id: &str) {
 #[tauri::command]
 pub fn cue_preview(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let synth = CUES.iter().find(|c| c.0 == id).ok_or_else(|| format!("No cue called \"{id}\""))?.2;
-    let volume = crate::settings_value(&app).pointer("/cues/volume").and_then(|v| v.as_f64()).unwrap_or(70.0) / 100.0;
-    std::thread::spawn(move || crate::sound::play(&synth().into_iter().map(|v| v * volume as f32).collect::<Vec<_>>()));
+    let volume = crate::sound::gain(crate::settings_value(&app).pointer("/cues/volume").and_then(|v| v.as_f64()).unwrap_or(50.0));
+    std::thread::spawn(move || crate::sound::play(&crate::sound::scale(synth(), volume)));
     Ok(())
 }
 

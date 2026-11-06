@@ -61,7 +61,7 @@
     open = false;
     closeOverlays();
     app.page = "settings";
-    app.settingsSection = "modrinth";
+    app.settingsSection = "accounts";
   }
 </script>
 

@@ -1,9 +1,9 @@
-// Background music (Settings → General → Music, off by default): Obelisk's own original tracks (music.rs renders them)
-// or the user's own files from a folder they pick. Plays only while the window is active, or the whole time it's open,
-// and fades in and out instead of cutting. MusicButton.svelte (the note on the left rail) pauses it.
+// Background music (Settings → Sound, on by default): Obelisk's own original tracks (music.rs renders them) or the
+// user's own files from a folder they pick. Plays only while the window is active (unless "mute when Obelisk isn't the
+// active window" is off), and fades in and out instead of cutting. MusicButton.svelte (the note on the left rail) pauses it.
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { settings, TRACKS } from "./settings.svelte";
+import { settings, TRACKS, soundGain } from "./settings.svelte";
 
 export const music = $state({ paused: false, title: "", error: "" });
 
@@ -15,10 +15,10 @@ let focused = typeof document !== "undefined" && document.hasFocus();
 let shown = true;
 let fader: ReturnType<typeof setInterval> | undefined;
 
-const wanted = () => settings.music.on && !music.paused && shown && (!settings.music.focusOnly || focused);
+const wanted = () => settings.music.on && !music.paused && shown && (!settings.muteInactive || focused);
 const name = (path: string) => path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
 
-/** Follows the window: focus for "only while active", and hidden in the tray (closed) means not open. */
+/** Follows the window: focus for muting while inactive, and hidden in the tray (closed) means not open. */
 export function watchWindow() {
   const win = getCurrentWindow();
   const a = win.onFocusChanged(({ payload }) => { focused = payload; if (payload) shown = true; sync(); });
@@ -47,7 +47,7 @@ export async function sync() {
   }
   if (!list.length) return;
   if (!audio) start();
-  fade(wanted() ? settings.music.volume / 100 : 0);
+  fade(wanted() ? soundGain(settings.music.volume) : 0);
 }
 
 function start() {
@@ -55,7 +55,7 @@ function start() {
   audio = new Audio(track.url);
   audio.loop = list.length === 1;
   audio.volume = 0;
-  audio.onended = () => { at++; stop(); if (wanted()) { start(); fade(settings.music.volume / 100); } };
+  audio.onended = () => { at++; stop(); if (wanted()) { start(); fade(soundGain(settings.music.volume)); } };
   audio.onerror = () => { music.error = `Couldn't play ${track.title}.`; };
   music.title = track.title;
 }
@@ -77,9 +77,11 @@ function fade(to: number) {
     if (e?.name === "NotAllowedError") window.addEventListener("pointerdown", () => sync(), { once: true });
     else music.error = String(e);
   });
+  // About 20 steps whatever the level, so quiet settings fade as smoothly as loud ones.
+  const step = Math.max(to, a.volume, 0.01) / 20;
   fader = setInterval(() => {
-    const v = a.volume + Math.sign(to - a.volume) * 0.04;
-    a.volume = Math.abs(to - a.volume) <= 0.04 ? to : Math.min(1, Math.max(0, v));
+    const v = a.volume + Math.sign(to - a.volume) * step;
+    a.volume = Math.abs(to - a.volume) <= step ? to : Math.min(1, Math.max(0, v));
     if (a.volume !== to) return;
     clearInterval(fader);
     if (to === 0) a.pause();

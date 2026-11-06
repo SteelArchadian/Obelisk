@@ -1,6 +1,6 @@
 //! Obelisk's sounds: the little jingle that plays on the first start after an update (user, 2026-11-06: "nothing loud
 //! ... cute and Nintendo-y"; it plays after every update, so each is short and soft, never a beepy 8-bit tune). Everything is synthesized here and played from memory through winmm, so no audio files
-//! ship and every tune is original. Settings → General picks one of the three, a random one each time, or none.
+//! ship and every tune is original. Settings → Sound picks one of the three, a random one each time, or none, and how loud.
 
 use std::f64::consts::{PI, TAU};
 
@@ -9,18 +9,48 @@ const RATE: u32 = 32_000;
 /// The jingles, in the order Settings lists them: (setting id, synth).
 pub const JINGLES: [(&str, fn() -> Vec<f32>); 3] = [("glow", glow), ("bubbles", bubbles), ("marimba", marimba)];
 
-/// Plays the jingle the user picked, after an update installed. Settings key `updateJingle`: an id, "random" or "off".
+/// Plays the jingle the user picked, after an update installed. Settings keys `updateJingle` (an id, "random" or "off")
+/// and `jingleVolume` (0-100, default 50). With "mute when Obelisk isn't the active window" on, it waits up to 15 s for
+/// the window to come to the front (a fresh start may not have focus yet), and stays silent if it never does.
 pub fn update_jingle(app: &tauri::AppHandle) {
-    let choice = crate::settings_value(app).get("updateJingle").and_then(|v| v.as_str()).unwrap_or("off").to_string(); // staged: silent until the user picks one
-    if let Some(pcm) = pick(&choice) { std::thread::spawn(move || play(&pcm)); }
+    let s = crate::settings_value(app);
+    let choice = s.get("updateJingle").and_then(|v| v.as_str()).unwrap_or("off").to_string(); // staged: silent until the user picks one
+    let Some(pcm) = pick(&choice) else { return };
+    let volume = gain(s.get("jingleVolume").and_then(|v| v.as_f64()).unwrap_or(50.0));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..60 {
+            if !muted_now(&app, &crate::settings_value(&app)) { return play(&scale(pcm, volume)) }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
 }
 
-/// Settings' preview button (also callable from the control API): plays one jingle now.
+/// Settings' preview button (also callable from the control API): plays one jingle now, at the set volume.
 #[tauri::command]
-pub fn jingle_preview(name: String) -> Result<(), String> {
+pub fn jingle_preview(app: tauri::AppHandle, name: String) -> Result<(), String> {
     let pcm = pick(&name).ok_or_else(|| format!("No jingle called \"{name}\""))?;
-    std::thread::spawn(move || play(&pcm));
+    let volume = gain(crate::settings_value(&app).get("jingleVolume").and_then(|v| v.as_f64()).unwrap_or(50.0));
+    std::thread::spawn(move || play(&scale(pcm, volume)));
     Ok(())
+}
+
+/// A 0-100 volume setting as a gain on the sound's own level. Squared, so the slider spreads the quiet end where people
+/// listen; 50% is what 7.5% used to be (user, 2026-11-06: the old 5-10% is the new 50%). Matches soundGain in the UI.
+pub(crate) fn gain(volume: f64) -> f32 {
+    (0.3 * (volume.clamp(0.0, 100.0) / 100.0).powi(2)) as f32
+}
+
+pub(crate) fn scale(pcm: Vec<f32>, gain: f32) -> Vec<f32> {
+    pcm.into_iter().map(|v| v * gain).collect()
+}
+
+/// Whether Obelisk's sounds should hold back right now: setting `muteInactive` (default on) while another window is in
+/// front.
+pub(crate) fn muted_now(app: &tauri::AppHandle, settings: &serde_json::Value) -> bool {
+    use tauri::Manager;
+    settings.get("muteInactive").and_then(|v| v.as_bool()).unwrap_or(true)
+        && !app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
 
 fn pick(choice: &str) -> Option<Vec<f32>> {

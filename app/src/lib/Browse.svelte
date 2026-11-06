@@ -5,7 +5,7 @@
   import { projectUrl, authorUrl } from "./links";
   import { app, pushOverlay } from "./state.svelte";
   import { tagsOnce, loadersOf as loaderOf, cap, isInstalled } from "./install";
-  import { cfSearchAvailable, cfToHit, mergeHits } from "./cf";
+  import { cfSearchAvailable, cfToHit, mergeHits, sameKey } from "./cf";
   import SourceBadges from "./SourceBadges.svelte";
   import InstallButton from "./InstallButton.svelte";
   import TargetChip from "./TargetChip.svelte";
@@ -121,9 +121,19 @@
       if (mr) { mrOffset += mr.hits.length; mrTotal = mr.total_hits; }
       if (cf) { cfOffset += cf.data.length; cfTotal = Math.min(cf.pagination.totalCount, 10000); }
       const page = mergeHits(mr?.hits ?? [], (cf?.data ?? []).map(cfToHit));
-      // Drop anything already shown (the same project can arrive on a later page from the other site).
-      const seen = new Set(reset ? [] : hits.flatMap((h) => [h.project_id, h.cf_id ? `cf:${h.cf_id}` : ""]));
-      const fresh = page.filter((h) => !seen.has(h.project_id) && !(h.cf_id && seen.has(`cf:${h.cf_id}`)));
+      // The two sites rank differently, so a project's twin often arrives on a later page. Merge it into the card
+      // already shown (both badges, one card) instead of dropping it or showing it twice.
+      const old = reset ? [] : hits;
+      const seen = new Set(old.flatMap((h) => [h.project_id, h.cf_id ? `cf:${h.cf_id}` : ""]));
+      const fresh = page.filter((h) => {
+        if (seen.has(h.project_id) || (h.cf_id && seen.has(`cf:${h.cf_id}`))) return false;
+        const i = old.findIndex((o) => (o.sources ?? []).length < 2 && o.project_type === h.project_type
+          && (sameKey(o.title) === sameKey(h.title) || o.slug === h.slug) && o.project_id.startsWith("cf:") !== h.project_id.startsWith("cf:"));
+        if (i < 0) return true;
+        const [mrHit, cfHit] = h.project_id.startsWith("cf:") ? [old[i], h] : [h, old[i]];
+        old[i] = { ...mrHit, cf_id: cfHit.cf_id, sources: ["modrinth", "curseforge"], downloads: Math.max(mrHit.downloads, cfHit.downloads) };
+        return false;
+      });
       if (sort === "downloads") fresh.sort((a, b) => b.downloads - a.downloads);
       hits = reset ? fresh : [...hits, ...fresh];
       total = mrTotal + (useCf ? cfTotal : 0);
@@ -227,7 +237,7 @@
   </div>
   {#if error}<div class="error">{error}</div>{/if}
   {#if cfOk === false && source !== "modrinth"}
-    <div class="note">CurseForge results are off: {#if hasKey}your API key can't use CurseForge search (other CurseForge features still work){:else}add a CurseForge API key in Settings to search CurseForge too{/if}. <button class="link" onclick={() => { app.page = "settings"; app.settingsSection = "curseforge"; }}>Settings</button></div>
+    <div class="note">CurseForge results are off: {#if hasKey}your API key can't use CurseForge search (other CurseForge features still work){:else}add a CurseForge API key in Settings to search CurseForge too{/if}. <button class="link" onclick={() => { app.page = "settings"; app.settingsSection = "accounts"; }}>Settings</button></div>
   {:else if useCf && categories.size}
     <div class="note">Category filters use Modrinth's categories, so CurseForge results are hidden while one is picked.</div>
   {/if}

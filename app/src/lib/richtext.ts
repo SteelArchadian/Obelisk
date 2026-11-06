@@ -20,6 +20,10 @@ export function renderBody(body: string): string {
   });
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     if (node.tagName === "IMG") {
+      // Old descriptions link images over plain http, which the app's security policy won't load; the same hosts
+      // nearly always serve them over https too (puu.sh, imgur, ...).
+      const src = node.getAttribute("src") ?? "";
+      if (src.startsWith("http://")) node.setAttribute("src", "https://" + src.slice(7));
       node.setAttribute("loading", "lazy");
       node.setAttribute("decoding", "async");
     }

@@ -9,10 +9,10 @@
   import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
-  import { settings, saveSettings, THEMES, JINGLES, TRACKS } from "./settings.svelte";
+  import { settings, saveSettings, THEMES, JINGLES, TRACKS, CUES, UI_SETS, applyTheme } from "./settings.svelte";
   import { music } from "./player.svelte";
+  import { uiSound } from "./uisound.svelte";
   import Resolution from "./Resolution.svelte";
-  import Releases from "./Releases.svelte";
 
   // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
   type SelfUpdate = { version: string; notes: string };
@@ -46,8 +46,8 @@
   type Defaults = { maxMemMb: number; minMemMb: number; jvmArgs: string; width: number; height: number; maximized: boolean };
 
   const SECTIONS = [
-    ["general", "General"], ["sync", "Sync & Import"], ["themes", "Themes"],
-    ["minecraft", "Minecraft & Java"], ["curseforge", "CurseForge"], ["modrinth", "Modrinth account"], ["plugins", "Plugins"], ["about", "About"],
+    ["general", "General"], ["sound", "Sound"], ["accounts", "Accounts"], ["sync", "Sync & Import"], ["themes", "Themes"],
+    ["minecraft", "Minecraft & Java"], ["plugins", "Plugins"], ["about", "About"],
   ] as const;
 
   let mrInput = $state("");
@@ -252,42 +252,6 @@
         <button class="switch" class:on={settings.shadersOffAtStart} role="switch" aria-checked={settings.shadersOffAtStart} aria-label="Start games with shaders off"
           onclick={() => { settings.shadersOffAtStart = !settings.shadersOffAtStart; saveSettings(); }}><i></i></button>
       </label>
-      <div class="field">Sound after an update
-        <div class="row-buttons">
-          <select class="select" bind:value={settings.updateJingle} onchange={saveSettings} aria-label="Sound after an update">
-            {#each JINGLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            <option value="random">A different one each time</option>
-            <option value="off">None</option>
-          </select>
-          <button class="ghost" disabled={settings.updateJingle === "off"} onclick={() => invoke("jingle_preview", { name: settings.updateJingle }).catch(toastError)}>Preview</button>
-        </div>
-        <small class="muted">A short, quiet chime on the first start after Obelisk updates itself.</small>
-      </div>
-      <label class="toggle-row">
-        <span><strong>Background music</strong><small>Soft music while you browse: Obelisk's own original tracks, or your own music files. Pause it any time with the note on the left.</small></span>
-        <button class="switch" class:on={settings.music.on} role="switch" aria-checked={settings.music.on} aria-label="Background music"
-          onclick={() => { settings.music.on = !settings.music.on; music.paused = false; saveSettings(); }}><i></i></button>
-      </label>
-      {#if settings.music.on}
-        <div class="field">
-          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="obelisk" onchange={saveSettings} /> Obelisk's music
-            <select class="select" bind:value={settings.music.track} onchange={() => { settings.music.source = "obelisk"; saveSettings(); }} aria-label="Track">
-              <option value="all">All tracks</option>
-              {#each TRACKS as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            </select></label>
-          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="mine" onchange={saveSettings} /> My own music
-            <button class="ghost" onclick={async (e) => { e.preventDefault(); const dir = await open({ directory: true, title: "Choose your music folder" }); if (typeof dir === "string") { settings.music.folder = dir; settings.music.source = "mine"; saveSettings(); } }}>{settings.music.folder ? "Change folder…" : "Choose folder…"}</button></label>
-          {#if settings.music.source === "mine"}<small class="muted">{settings.music.folder || "No folder chosen yet."} Plays the mp3, ogg, opus, wav, flac and m4a files in it, shuffled. They stay on this PC.</small>{/if}
-          <label class="row-check">Play
-            <select class="select" bind:value={settings.music.focusOnly} onchange={saveSettings} aria-label="When music plays">
-              <option value={true}>only while Obelisk is the active window</option>
-              <option value={false}>the whole time Obelisk is open</option>
-            </select></label>
-          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.music.volume} onchange={saveSettings} aria-label="Music volume" /> {settings.music.volume}%</label>
-          <div class="row-buttons"><button class="ghost" onclick={() => (music.paused = !music.paused)}>{music.paused ? "Resume" : "Pause"}</button>{#if music.title}<small class="muted">Playing {music.title}</small>{/if}</div>
-          {#if music.error}<small class="muted">{music.error}</small>{/if}
-        </div>
-      {/if}
       <label class="toggle-row">
         <span><strong>Offer Fabric mods on NeoForge</strong><small>Shows “Via Connector” for Fabric-only mods (needs Sinytra Connector and Forgified Fabric API).</small></span>
         <button class="switch" class:on={settings.connector} role="switch" aria-checked={settings.connector} aria-label="Offer Fabric mods on NeoForge"
@@ -310,10 +274,92 @@
           {#if dataDir && dataDir.dir !== dataDir.default}<button class="ghost" onclick={() => moveData(dataDir!.default)}>Back to the default</button>{/if}
         </div>
       </div>
-      <div class="field">Accounts
-        <p class="muted">Prism signs you in to Minecraft. Use the avatar menu to view your profile, or manage and log out of accounts in Prism.</p>
-        <div><button class="ghost" onclick={() => invoke("open_prism")}>Open Prism accounts</button></div>
+
+    {:else if app.settingsSection === "sound"}
+      <h1>Sound</h1>
+      <label class="row-check"><input type="checkbox" bind:checked={settings.muteInactive} onchange={saveSettings} /> Mute when Obelisk isn't the active window
+        <small class="muted">Music, the update sound, alerts and menu sounds all hold back while another window is in front.</small></label>
+
+      <h2>Background music</h2>
+      <label class="toggle-row">
+        <span><strong>Background music</strong><small>Soft music while you browse: Obelisk's own original tracks, or your own music files. Pause it any time with the note on the left.</small></span>
+        <button class="switch" class:on={settings.music.on} role="switch" aria-checked={settings.music.on} aria-label="Background music"
+          onclick={() => { settings.music.on = !settings.music.on; music.paused = false; saveSettings(); }}><i></i></button>
+      </label>
+      {#if settings.music.on}
+        <div class="field">
+          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="obelisk" onchange={saveSettings} /> Obelisk's music
+            <select class="select" bind:value={settings.music.track} onchange={() => { settings.music.source = "obelisk"; saveSettings(); }} aria-label="Track">
+              <option value="all">All tracks</option>
+              {#each TRACKS as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            </select></label>
+          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="mine" onchange={saveSettings} /> My own music
+            <button class="ghost" onclick={async (e) => { e.preventDefault(); const dir = await open({ directory: true, title: "Choose your music folder" }); if (typeof dir === "string") { Object.assign(settings.music, { folder: dir, source: "mine", on: true }); music.paused = false; saveSettings(); } }}>{settings.music.folder ? "Change folder…" : "Choose folder…"}</button></label>
+          {#if settings.music.source === "mine"}<small class="muted">{settings.music.folder || "No folder chosen yet."} Plays every mp3, ogg, opus, wav, flac and m4a file in it, shuffled. They stay on this PC.</small>{/if}
+          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.music.volume} onchange={saveSettings} aria-label="Music volume" /> {settings.music.volume}%</label>
+          <div class="row-buttons"><button class="ghost" onclick={() => (music.paused = !music.paused)}>{music.paused ? "Resume" : "Pause"}</button>{#if music.title}<small class="muted">Playing {music.title}</small>{/if}</div>
+          {#if music.error}<small class="muted">{music.error}</small>{/if}
+        </div>
+      {/if}
+
+      <h2>Update sound</h2>
+      <div class="field">Sound after an update
+        <div class="row-buttons">
+          <select class="select" bind:value={settings.updateJingle} onchange={saveSettings} aria-label="Sound after an update">
+            {#each JINGLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            <option value="random">A different one each time</option>
+            <option value="off">None</option>
+          </select>
+          <button class="ghost" data-quiet disabled={settings.updateJingle === "off"} onclick={() => invoke("jingle_preview", { name: settings.updateJingle }).catch(toastError)}>Preview</button>
+        </div>
+        <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.jingleVolume} disabled={settings.updateJingle === "off"} aria-label="Update sound volume"
+          onchange={async () => { await saveSettings(); invoke("jingle_preview", { name: settings.updateJingle }).catch(toastError); }} /> {settings.jingleVolume}%</label>
+        <small class="muted">A short, quiet chime on the first start after Obelisk updates itself.</small>
       </div>
+
+      <h2>Alerts</h2>
+      <label class="toggle-row">
+        <span><strong>Alert sounds</strong><small>Soft chimes for friends, messages and invites. While you play, the small ones are skipped and the rest play quieter.</small></span>
+        <button class="switch" class:on={settings.cues.on} role="switch" aria-checked={settings.cues.on} aria-label="Alert sounds"
+          onclick={() => { settings.cues.on = !settings.cues.on; saveSettings(); }}><i></i></button>
+      </label>
+      {#if settings.cues.on}
+        <div class="field">
+          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.cues.volume} aria-label="Alert volume"
+            onchange={async () => { await saveSettings(); invoke("cue_preview", { id: "message" }).catch(toastError); }} /> {settings.cues.volume}%</label>
+          <label class="row-check"><input type="checkbox" bind:checked={settings.cues.dnd} onchange={saveSettings} /> Do Not Disturb
+            <small class="muted">Only game invites still make a sound.</small></label>
+          <div style="display: grid; grid-template-columns: max-content auto; gap: 2px 16px; align-items: center;">
+            {#each CUES as [id, label] (id)}
+              <label class="row-check"><input type="checkbox" checked={!settings.cues.muted.includes(id)}
+                onchange={(e) => { settings.cues.muted = e.currentTarget.checked ? settings.cues.muted.filter((m) => m !== id) : [...settings.cues.muted, id]; saveSettings(); }} /> {label}</label>
+              <button class="ghost" data-quiet onclick={() => invoke("cue_preview", { id }).catch(toastError)}>Play</button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <h2>Menu sounds</h2>
+      <label class="toggle-row">
+        <span><strong>Menu sounds</strong><small>Little ticks and pops as you point at and press things, and a whoosh in and out of modpacks.</small></span>
+        <button class="switch" class:on={settings.uiSounds.on} role="switch" aria-checked={settings.uiSounds.on} aria-label="Menu sounds"
+          onclick={() => { settings.uiSounds.on = !settings.uiSounds.on; saveSettings(); }}><i></i></button>
+      </label>
+      {#if settings.uiSounds.on}
+        <div class="field">
+          <label class="row-check">Style
+            <select class="select" bind:value={settings.uiSounds.set} onchange={() => { saveSettings(); uiSound("open", settings.uiSounds.set, true); }} aria-label="Menu sound style">
+              {#each UI_SETS as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            </select></label>
+          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.uiSounds.volume} aria-label="Menu sound volume"
+            onchange={() => { saveSettings(); uiSound("click", settings.uiSounds.set, true); }} /> {settings.uiSounds.volume}%</label>
+          <div class="row-buttons">
+            {#each [["hover", "Point"], ["click", "Press"], ["open", "Open"], ["close", "Close"], ["tab", "Tab"]] as const as [kind, label] (kind)}
+              <button class="ghost" data-quiet onclick={() => uiSound(kind, settings.uiSounds.set, true)}>{label}</button>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
     {:else if app.settingsSection === "sync"}
       <h1>Sync & Import</h1>
@@ -372,6 +418,13 @@
           {/each}
         </div>
       {/each}
+      <h3 class="tgroup">Tile effect</h3>
+      <p class="muted small">An experiment: a look laid over the modpack tiles on My Modpacks.</p>
+      <div class="row-buttons">
+        {#each [["none", "None"], ["crt", "CRT shimmer"]] as [id, label] (id)}
+          <button class="ghost" class:on={settings.tileFx === id} aria-pressed={settings.tileFx === id} onclick={() => { settings.tileFx = id as "none" | "crt"; saveSettings(); applyTheme(); }}>{label}{#if settings.tileFx === id} ✓{/if}</button>
+        {/each}
+      </div>
 
     {:else if app.settingsSection === "minecraft"}
       <h1>Minecraft & Java</h1>
@@ -437,10 +490,15 @@
             <button onclick={copyAiLine}>Copy</button>
           </div>
         {/if}
-        <Releases />
       {/if}
-    {:else if app.settingsSection === "curseforge"}
-      <h1>CurseForge API</h1>
+    {:else if app.settingsSection === "accounts"}
+      <h1>Accounts</h1>
+      <div class="field">Minecraft
+        <p class="muted">Prism signs you in to Minecraft. Use the avatar menu to view your profile, or manage and log out of accounts in Prism.</p>
+        <div><button class="ghost" onclick={() => invoke("open_prism")}>Open Prism accounts</button></div>
+      </div>
+
+      <h2>CurseForge API</h2>
       <p class="muted">Obelisk uses Modrinth out of the box. To also search CurseForge, open CurseForge-only mod pages, and update CurseForge mods, add your own API key. It's free from the CurseForge for Studios console. Your key is stored in Windows Credential Manager on this PC only. Obelisk never shows it again or sends it anywhere except CurseForge's API.</p>
       <div><button class="link" onclick={() => openUrl("https://console.curseforge.com/")}>Get a key at console.curseforge.com ↗</button></div>
       <p class="status-line">{hasKey ? "✓ A key is saved." : "No key saved."}</p>
@@ -463,8 +521,7 @@
         <div><button class="primary" onclick={cfSignIn}>{cf.signingIn ? "Show the CurseForge sign-in window" : "Sign in to CurseForge"}</button></div>
       {/if}
 
-    {:else if app.settingsSection === "modrinth"}
-      <h1>Modrinth account</h1>
+      <h2>Modrinth account</h2>
       <p class="muted">Sign in to follow projects from their pages and see your Modrinth notifications under the bell. Modrinth signs other apps in with a personal access token: you make one on Modrinth and paste it here. It's kept in Windows Credential Manager and only ever sent to Modrinth.</p>
       {#if mr.account}
         <div class="launcher">

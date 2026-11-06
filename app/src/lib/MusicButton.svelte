@@ -1,15 +1,22 @@
 <script lang="ts">
   // The note on the left rail while background music is on: click to pause or resume (player.svelte.ts plays it).
+  // Always mounted, so it also runs the menu sounds (uisound.svelte.ts).
   import { onMount } from "svelte";
   import { settings } from "./settings.svelte";
   import { music, sync, watchWindow } from "./player.svelte";
+  import { navSound, watchUi } from "./uisound.svelte";
 
-  onMount(watchWindow);
+  onMount(() => {
+    const window = watchWindow();
+    const ui = watchUi();
+    return () => { window(); ui(); };
+  });
   $effect(() => {
     // Any change to the music settings (or pausing) brings the player in line.
-    void [settings.music.on, settings.music.source, settings.music.track, settings.music.folder, settings.music.focusOnly, settings.music.volume, music.paused];
+    void [settings.music.on, settings.music.source, settings.music.track, settings.music.folder, settings.muteInactive, settings.music.volume, music.paused];
     sync();
   });
+  $effect(navSound);
 </script>
 
 {#if settings.music.on}

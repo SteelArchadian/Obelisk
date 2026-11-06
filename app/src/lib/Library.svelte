@@ -379,6 +379,23 @@
   .art { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 1; padding: 0; border: 0; background: var(--panel-2); font-size: 32px; font-weight: 700; color: var(--muted); }
   /* Play straight from the library: bottom-right corner of the artwork. */
   .artwrap { position: relative; }
+  /* Tile effect "crt" (Settings → Themes): a TV screen's scanlines, a soft glass glare at the edges and a slow band of
+     light rolling down, like a menu of little TVs. Pointer events pass through; it stays still for reduced motion. */
+  :global(html[data-tilefx="crt"]) .art::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+    background:
+      linear-gradient(180deg, transparent 0%, rgb(255 255 255 / 0.10) 46%, rgb(255 255 255 / 0.16) 50%, rgb(255 255 255 / 0.10) 54%, transparent 100%) 0 -100% / 100% 60% no-repeat,
+      repeating-linear-gradient(180deg, rgb(0 0 0 / 0.22) 0 1px, transparent 1px 3px),
+      radial-gradient(120% 100% at 50% 40%, transparent 55%, rgb(0 0 0 / 0.35) 100%),
+      linear-gradient(135deg, rgb(255 255 255 / 0.10), transparent 35%);
+    animation: crt-roll 6s linear infinite;
+  }
+  :global(html[data-tilefx="crt"]) .art img { filter: saturate(1.08) contrast(1.04); }
+  :global(html[data-tilefx="crt"]) .tile:hover .art::after { animation-duration: 2.4s; }
+  :global(html[data-tilefx="crt"]) .tile:hover .art img { animation: crt-flicker 0.18s steps(2) 1; }
+  @keyframes crt-roll { to { background-position: 0 220%, 0 0, 0 0, 0 0; } }
+  @keyframes crt-flicker { 50% { filter: saturate(1.08) contrast(1.04) brightness(1.18); } }
+  @media (prefers-reduced-motion: reduce) { :global(html[data-tilefx="crt"]) .art::after { animation: none; } }
   .dupe-stripe { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); padding: 8px 6px; border: 0; border-radius: 0;
     background: rgb(200 30 30 / 0.92); color: #fff; font-weight: 700; font-size: 12.5px; text-align: center; cursor: pointer;
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.4); }
