@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ctrlWheel } from "./ctrlwheel";
   import { invoke } from "@tauri-apps/api/core";
   import { api, ago, initials, type Instance } from "./api";
   import { app, openBrowse, toast, toastError } from "./state.svelte";
@@ -262,7 +263,7 @@
       {/each}
     </div>
   {:else if view === "tiles"}
-    <div class="grid" style:--tile="{size}px">
+    <div class="grid" style:--tile="{size}px" use:ctrlWheel={(d) => (size = Math.min(300, Math.max(130, size + d * 15)))} title="Ctrl + scroll to resize">
       {#each shown as inst (inst.id)}
         <div class="tile" class:playing={running[inst.id]} role="group" oncontextmenu={(e) => onContext(e, inst)}>
           <div class="artwrap">

@@ -11,7 +11,7 @@
   import { resetCfSearch } from "./cf";
   import { settings, saveSettings, THEMES, JINGLES, TRACKS, CUES, UI_SETS, applyTheme } from "./settings.svelte";
   import { music } from "./player.svelte";
-  import { uiSound } from "./uisound.svelte";
+  import { uiSound, typeSound } from "./uisound.svelte";
   import Resolution from "./Resolution.svelte";
 
   // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
@@ -358,6 +358,20 @@
               <button class="ghost" data-quiet onclick={() => uiSound(kind, settings.uiSounds.set, true)}>{label}</button>
             {/each}
           </div>
+        </div>
+      {/if}
+
+      <h2>Typing sounds</h2>
+      <label class="toggle-row">
+        <span><strong>Typing sounds</strong><small>A tiny tip for each key you type in a text box: each letter has its own note. Never in password fields.</small></span>
+        <button class="switch" class:on={settings.typingSounds.on} role="switch" aria-checked={settings.typingSounds.on} aria-label="Typing sounds"
+          onclick={() => { settings.typingSounds.on = !settings.typingSounds.on; saveSettings(); }}><i></i></button>
+      </label>
+      {#if settings.typingSounds.on}
+        <div class="field">
+          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.typingSounds.volume} aria-label="Typing sound volume"
+            onchange={() => { saveSettings(); typeSound("key", "a", true); }} /> {settings.typingSounds.volume}%</label>
+          <input class="num" style="width: 260px; max-width: 100%;" placeholder="Type here to try them" aria-label="Try typing sounds" />
         </div>
       {/if}
 

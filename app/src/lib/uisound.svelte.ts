@@ -1,6 +1,7 @@
 // Menu sounds (Settings → Sound → Menu sounds): a hover tick, a click, a rising "zoom in" when a modpack or project page
 // opens, a falling one when it closes, and a two-note blip on tabs and pages. Small console-menu sounds in spirit (user,
 // 2026-11-06: "like the DS / Wii menus"), all synthesized here with WebAudio, so every sound is original and nothing ships.
+// Typing sounds too (user: "super light, minimal, and playful"), with their own switch and volume.
 import { settings, soundGain } from "./settings.svelte";
 import { app } from "./state.svelte";
 
@@ -48,17 +49,52 @@ const SETS: Record<string, Record<UiSound, Tone[]>> = {
 /** Plays one menu sound, if menu sounds are on and the window is in front (or the user is previewing in Settings). */
 export function uiSound(kind: UiSound, set = settings.uiSounds.set, force = false) {
   if (!force && (!settings.uiSounds.on || (settings.muteInactive && !document.hasFocus()))) return;
+  // Menu sounds sit a little under the other sounds at the same slider position.
+  playTones((SETS[set] ?? SETS.soft)[kind], soundGain(settings.uiSounds.volume) * 0.6);
+}
+
+function playTones(tones: Tone[], gain: number) {
   try {
     ctx ??= new AudioContext();
     if (ctx.state === "suspended") void ctx.resume();
     const out = ctx.createGain();
-    // Menu sounds sit a little under the other sounds at the same slider position.
-    out.gain.value = soundGain(settings.uiSounds.volume) * 0.6;
+    out.gain.value = gain;
     out.connect(ctx.destination);
     const now = ctx.currentTime + 0.005;
-    for (const t of (SETS[set] ?? SETS.soft)[kind]) tone(ctx, out, now + (t.at ?? 0), t);
-  } catch { /* no audio device: menus stay silent */ }
+    for (const t of tones) tone(ctx, out, now + (t.at ?? 0), t);
+  } catch { /* no audio device: stay silent */ }
 }
+
+export type TypeSound = "key" | "space" | "erase" | "enter";
+
+/** Pentatonic notes for letters: each key always gets the same one, so typing a word plays its own little tune. */
+const KEY_NOTES = [1568, 1760, 1976, 2349, 2637];
+
+function typeTones(kind: TypeSound, key: string): Tone[] {
+  switch (kind) {
+    case "key": return [{ f0: KEY_NOTES[key.charCodeAt(0) % KEY_NOTES.length], dur: 0.022, vol: 0.3 }];
+    case "space": return [{ f0: 880, dur: 0.03, vol: 0.28, wave: "triangle" }];
+    case "erase": return [{ f0: 1400, f1: 900, dur: 0.03, vol: 0.25 }];
+    case "enter": return [{ f0: 1319, dur: 0.035, vol: 0.28 }, { at: 0.04, f0: 1976, dur: 0.05, vol: 0.25 }];
+  }
+}
+
+/** One typing sound, if typing sounds are on and the window is in front (or the user is previewing in Settings). */
+export function typeSound(kind: TypeSound, key = "a", force = false) {
+  if (!force && (!settings.typingSounds.on || (settings.muteInactive && !document.hasFocus()))) return;
+  // Lighter still than the menu sounds: a keystroke is the most frequent sound there is.
+  playTones(typeTones(kind, key), soundGain(settings.typingSounds.volume) * 0.4);
+}
+
+/** Where typing makes sound: text boxes, never password fields (their rhythm shouldn't be heard). */
+function typingInto(el: EventTarget | null) {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLInputElement) return ["text", "search", "email", "url", "number", "tel", ""].includes(el.type);
+  return el.isContentEditable;
+}
+
+let typedAt = 0;
 
 function tone(ctx: AudioContext, out: AudioNode, at: number, t: Tone) {
   const osc = ctx.createOscillator();
@@ -85,7 +121,7 @@ function tone(ctx: AudioContext, out: AudioNode, at: number, t: Tone) {
   osc.stop(at + t.dur + 0.02);
 }
 
-/** Hover ticks and clicks on anything pressable, for the whole window. A click that opens or closes something plays
+/** Hover ticks, clicks on anything pressable and typing sounds, for the whole window. A click that opens or closes something plays
  *  that sound instead (navSound runs first, from the state change the click made). Returns the cleanup. */
 export function watchUi() {
   const pressable = (e: Event) => {
@@ -106,11 +142,23 @@ export function watchUi() {
     const at = performance.now();
     setTimeout(() => { if (navAt < at) uiSound("click"); }, 0);
   };
+  const key = (e: KeyboardEvent) => {
+    // A held key repeats without sound, shortcuts stay quiet, and fast typing gets at most one tick per 30 ms, so the
+    // sounds never pile up.
+    if (e.repeat || e.isComposing || e.ctrlKey || e.metaKey || e.altKey || !typingInto(e.target)) return;
+    const kind: TypeSound | null = e.key === " " ? "space" : e.key === "Backspace" || e.key === "Delete" ? "erase"
+      : e.key === "Enter" ? "enter" : e.key.length === 1 ? "key" : null;
+    if (!kind || performance.now() - typedAt < 30) return;
+    typedAt = performance.now();
+    typeSound(kind, e.key);
+  };
   document.addEventListener("pointerover", over, { passive: true });
   document.addEventListener("click", click, { capture: true, passive: true });
+  document.addEventListener("keydown", key, { capture: true, passive: true });
   return () => {
     document.removeEventListener("pointerover", over);
     document.removeEventListener("click", click, { capture: true });
+    document.removeEventListener("keydown", key, { capture: true });
   };
 }
 

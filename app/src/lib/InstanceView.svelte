@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ctrlWheel } from "./ctrlwheel";
   import { crisp } from "./crisp";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
@@ -98,6 +99,13 @@
   // drops its filters, so a filter can't silently hide rows you can't see the reason for.
   const COLUMNS = [["date", "Installed / Modified"], ["authors", "Author"], ["env", "Client / server"], ["source", "Source"], ["update", "Action"], ["enabled", "Active"]] as const;
   const WIDTH: Record<string, string> = { date: "120px", authors: "minmax(90px, 1fr)", env: "54px", source: "100px", update: "84px", enabled: "60px" };
+  // Ctrl + scroll over the list makes rows and their text bigger or smaller (the whole table scales, so the header
+  // stays lined up and narrow windows drop columns as usual).
+  let rowZoom = $state((() => { const z = Number(localStorage.getItem("obelisk.rowZoom")); return z >= 0.8 && z <= 1.6 ? z : 1; })());
+  function zoomRows(d: 1 | -1) {
+    rowZoom = Math.round(Math.min(1.6, Math.max(0.8, rowZoom + d * 0.1)) * 10) / 10;
+    try { localStorage.setItem("obelisk.rowZoom", String(rowZoom)); } catch { /* ignore */ }
+  }
   let hiddenCols = $state<string[]>((() => { try { return JSON.parse(localStorage.getItem("obelisk.hiddenCols") ?? "[]"); } catch { return []; } })());
   const shown = (c: string) => !hiddenCols.includes(c);
   let colMenu = $state<{ x: number; y: number } | null>(null);
@@ -866,7 +874,7 @@
         <input type="search" class="search" placeholder="Search {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()} or authors…" bind:value={query} />
       </div>
 
-      <div class="table" role="table" style:--cols={colTemplate} bind:clientWidth={tableW}>
+      <div class="table" role="table" style:--cols={colTemplate} style:zoom={rowZoom} bind:clientWidth={tableW} use:ctrlWheel={zoomRows}>
         <div class="thead" role="row" tabindex="-1" title="Right-click to choose columns"
           oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); colMenu = { x: Math.min(e.clientX, innerWidth - 230), y: e.clientY }; }}>
           <span>{#if viewTrash}<input type="checkbox" checked={allChecked} onchange={toggleAll} aria-label="Select all" />{/if}</span>

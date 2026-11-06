@@ -15,6 +15,8 @@ type Settings = {
   theme: Theme;
   /** An effect over the modpack tiles (an experiment, user 2026-11-06): "none", or "crt" for a TV-like shimmer. */
   tileFx: "none" | "crt";
+  /** Typing sounds (uisound.svelte.ts): a tiny tip per key in text boxes. */
+  typingSounds: { on: boolean; volume: number };
   startPage: "library" | "discover";
   /** Launchers Sync looks at. */
   launchers: Record<string, boolean>;
@@ -86,6 +88,7 @@ export const soundGain = (volume: number) => 0.3 * (Math.min(100, Math.max(0, vo
 const DEFAULTS: Settings = {
   theme: "obelisk",
   tileFx: "none",
+  typingSounds: { on: true, volume: 50 },
   startPage: "library",
   launchers: { curseforge: true },
   extraDirs: [],
@@ -118,6 +121,7 @@ export async function loadSettings() {
   settings.plugins = { ...DEFAULTS.plugins, ...((saved as Partial<Settings>).plugins ?? {}) };
   settings.backups = { ...DEFAULTS.backups, ...((saved as Partial<Settings>).backups ?? {}) };
   settings.music = { ...DEFAULTS.music, ...((saved as Partial<Settings>).music ?? {}) };
+  settings.typingSounds = { ...DEFAULTS.typingSounds, ...((saved as Partial<Settings>).typingSounds ?? {}) };
   settings.cues = { ...DEFAULTS.cues, ...((saved as Partial<Settings>).cues ?? {}) };
   settings.uiSounds = { ...DEFAULTS.uiSounds, ...((saved as Partial<Settings>).uiSounds ?? {}) };
   if (!((saved as Partial<Settings>).soundScale! >= 2)) {
