@@ -14,6 +14,7 @@
 
   let comments = $state<Comment[]>([]);
   let total = $state(0);
+  let enabled = $state<boolean | null>(null); // false: the author turned comments off on CurseForge
   let page = $state(0);
   let loading = $state(false);
   let failed = $state("");
@@ -26,9 +27,10 @@
     loading = true;
     failed = "";
     try {
-      const v = await invoke<{ comments: Comment[]; total: number }>("cf_comments", { projectId, projectName, page: p });
+      const v = await invoke<{ comments: Comment[]; total: number; enabled?: boolean | null }>("cf_comments", { projectId, projectName, page: p });
       comments = p === 0 ? v.comments : [...comments, ...v.comments.filter((c) => !comments.some((x) => x.id === c.id))];
       total = v.total ?? comments.length;
+      if (p === 0) enabled = v.enabled ?? null;
       page = p;
     } catch (e) {
       failed = String(e);
@@ -63,7 +65,9 @@
 </script>
 
 <section class="comments">
-  {#if cf.account}
+  {#if enabled === false}
+    <p class="muted">Comments are turned off for this project.</p>
+  {:else if cf.account}
     <div class="compose">
       <textarea rows="3" placeholder={`Comment on ${projectName} as ${cf.account.displayName || cf.account.username}`} bind:value={draft} disabled={posting}></textarea>
       <button class="primary" disabled={!draft.trim() || posting} onclick={() => post(draft, null)}>{posting && replyTo === null ? "Posting…" : "Post"}</button>
@@ -98,7 +102,7 @@
       {/if}
     </article>
   {:else}
-    {#if !loading && !failed}<p class="muted">No comments yet.</p>{/if}
+    {#if !loading && !failed && enabled !== false}<p class="muted">No comments yet.</p>{/if}
   {/each}
 
   {#if loading}<p class="muted">Loading…</p>

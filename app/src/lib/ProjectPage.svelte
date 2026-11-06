@@ -4,7 +4,7 @@
   import { crisp } from "./crisp";
   import { projectUrl, authorUrl } from "./links";
   import { api, compact, ago, versionsLabel, type Hit, type Version } from "./api";
-  import { app, popOverlay, closeOverlays, openBrowse, pushOverlay, toastError } from "./state.svelte";
+  import { app, popOverlay, closeOverlays, openBrowse, pushOverlay, toastError, type ProjectTab } from "./state.svelte";
   import { cap, install, isInstalled, linkTarget, openProjectById } from "./install";
   import { cfFileToVersion } from "./cf";
   import SourceBadges from "./SourceBadges.svelte";
@@ -18,9 +18,12 @@
   import { mr, toggleFollow, openLink, cf, toggleCfFavorite } from "./account.svelte";
   import Comments from "./Comments.svelte";
 
-  let { hit, startTab }: { hit: Hit; startTab?: "comments" | "versions" } = $props();
+  let { hit, startTab }: { hit: Hit; startTab?: ProjectTab } = $props();
 
-  let tab = $state<"overview" | "changelog" | "gallery" | "versions" | "relations" | "comments">(untrack(() => startTab) ?? "overview"); // where it opens; the tabs are the user's after that
+  let tab = $state<ProjectTab>(untrack(() => startTab) ?? "overview"); // where it opens; the tabs are the user's after that
+  // This page's entry in the back stack, which keeps the tab (and the Relations view) for when Back returns here.
+  const entry = untrack(() => app.stack.findLast((o) => o.kind === "project" && o.hit.project_id === hit.project_id));
+  $effect(() => { const t = tab; if (entry?.kind === "project") untrack(() => (entry.tab = t)); });
   let project = $state<any>(null);
   let fetchedAuthor = $state("");
   let author = $derived(hit.author || fetchedAuthor);
@@ -269,8 +272,15 @@
     </div>
     {#if project}
       <div class="links">
-        {#each [["issues_url", "Issues"], ["source_url", "Source"], ["wiki_url", "Wiki"], ["discord_url", "Discord"]] as [k, label] (k)}
-          {#if project[k]}<button class="link" title={project[k]} onclick={() => openLink(project[k])}>{label} ↗</button>{/if}
+        {#each [["issues_url", "Issues"], ["wiki_url", "Wiki"], ["discord_url", "Discord"], ["source_url", "Source"]] as [k, label] (k)}
+          {#if project[k]}
+            {@const icon = k === "discord_url" ? "discord" : k === "source_url" && /^https?:\/\/(www\.)?github\.com\//i.test(project[k]) ? "github" : ""}
+            <button class="link" class:badge={icon} class:discord={icon === "discord"} class:github={icon === "github"} title={project[k]} aria-label={icon ? (icon === "github" ? "Source on GitHub" : "Discord") : undefined} onclick={() => openLink(project[k])}>
+              {#if icon === "github"}<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
+              {:else if icon === "discord"}<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.058a.082.082 0 0 0 .031.056 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .078-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.182 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" /></svg>
+              {:else}{label}{/if}<span class="arrow">↗</span>
+            </button>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -291,7 +301,7 @@
     {:else if tab === "comments" && cfId}
       <Comments projectId={Number(cfId)} projectName={hit.title} />
     {:else if tab === "relations"}
-      <Relations {hit} {cfId} checking={!twin} deps={(versions[0]?.dependencies ?? []).filter((d) => d.project_id) as { project_id: string; dependency_type: string }[]} />
+      <Relations {hit} {cfId} checking={!twin} view={entry?.kind === "project" ? entry.rel : undefined} onview={(v) => { if (entry?.kind === "project") entry.rel = v; }} deps={(versions[0]?.dependencies ?? []).filter((d) => d.project_id) as { project_id: string; dependency_type: string }[]} />
     {:else if tab === "gallery"}
       <div class="gallery">
         {#each gallery as g (g.url)}
@@ -404,7 +414,7 @@
   .chip.plain { border: 0; }
   .stats { margin-left: auto; display: flex; gap: 16px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
   .tabs { display: flex; flex-wrap: wrap; gap: 4px 28px; border-bottom: 1px solid var(--line); margin-top: 14px; align-items: center; }
-  .tablist { flex: 1; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 20px; padding-right: 32px; }
+  .tablist { flex: 1; display: flex; flex-wrap: wrap; gap: 4px 28px; padding-right: 32px; }
   .tablist > button { background: none; border: 0; padding: 8px 0 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 15px; }
   .follow { width: 40px; height: 40px; flex: none; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 20px; line-height: 1; }
   .follow:hover { color: var(--text); }
@@ -417,6 +427,13 @@
   .links { margin-left: auto; display: flex; gap: 12px; }
   .link { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 2px; }
   .link:hover { color: var(--accent); }
+  .link .arrow { margin-left: 3px; }
+  /* GitHub and Discord show as their marks in a tinted chip, like the Modrinth and CurseForge badges up top. */
+  .link.badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 6px; }
+  .link.badge .arrow { font-size: 12px; }
+  .link.github { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .link.discord { color: #5865f2; background: color-mix(in srgb, #5865f2 16%, transparent); }
+  .link.badge:hover { filter: brightness(1.2); }
   .error { background: var(--err-bg); color: var(--err-text); padding: 8px 12px; border-radius: 6px; margin-top: 10px; }
   .content { flex: 1; overflow-y: auto; min-height: 0; padding: 18px 0 40px; }
   .muted { color: var(--muted); }

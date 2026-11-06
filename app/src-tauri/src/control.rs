@@ -427,7 +427,19 @@ fn is_gc_flag(a: &str) -> bool {
         // Some G1 tuning (G1NewSizePercent, G1MaxNewSizePercent) is experimental and needs this first.
         "UnlockExperimentalVMOptions"];
     (name.starts_with("Use") && name.ends_with("GC")) || name.starts_with("G1") || name.starts_with("Shenandoah")
-        || (name.starts_with('Z') && name.len() > 1) || exact.contains(&name)
+        || (name.starts_with('Z') && name.len() > 1) || name.starts_with("ClassUnloading") || exact.contains(&name)
+}
+
+/// Heap size cap for a GC A/B run: the bench's 6 GB memory budget.
+const HEAP_CAP_MB: u64 = 6144;
+
+/// -Xms/-Xmx and its size in megabytes (k, m, g or bytes; None if unreadable), or None if it isn't one.
+fn heap_flag(a: &str) -> Option<(&'static str, Option<u64>)> {
+    let (kind, v) = if let Some(v) = a.strip_prefix("-Xmx") { ("-Xmx", v) } else { ("-Xms", a.strip_prefix("-Xms")?) };
+    let (n, unit) = v.split_at(v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len()));
+    let Ok(n) = n.parse::<u64>() else { return Some((kind, None)) };
+    let mb = match unit.to_ascii_lowercase().as_str() { "" => Some(n >> 20), "k" => Some(n >> 10), "m" => Some(n), "g" => n.checked_mul(1024), _ => None };
+    Some((kind, mb))
 }
 
 /// "gc": this run's garbage collector and its tuning, in place of the profile's and the bench's (for GC A/B runs).
@@ -436,17 +448,28 @@ fn gc_flags(args: &Value) -> Result<Option<Vec<String>>, String> {
     let Some(list) = args.get("gc").filter(|v| !v.is_null()) else { return Ok(None) };
     let list = list.as_array().ok_or("\"gc\" must be a list of -XX GC flags, e.g. [\"-XX:+UseG1GC\", \"-XX:MaxGCPauseMillis=50\"]")?;
     let mut out = vec![];
+    let mut heap: HashMap<&str, u64> = HashMap::new();
     for v in list {
         let a = v.as_str().ok_or("\"gc\" entries must be strings")?;
+        if let Some((kind, mb)) = heap_flag(a) {
+            let mb = mb.ok_or_else(|| format!("{a}: give the size as e.g. 4096m or 4g"))?;
+            if mb == 0 || mb > HEAP_CAP_MB { return Err(format!("{a}: heap sizes go up to {HEAP_CAP_MB}m (the bench's 6 GB budget)")) }
+            if heap.insert(kind, mb).is_some() { return Err(format!("\"gc\" has {kind} twice")) }
+            out.push(a.to_string());
+            continue;
+        }
         let ok = is_gc_flag(a) && a.len() <= 80 && a.chars().all(|c| c.is_ascii_alphanumeric() || ":+-=._".contains(c));
         if !ok {
-            return Err(format!("{a}: not a GC flag (allowed: -XX:+Use...GC, G1*/Z*/Shenandoah* settings, ConcGCThreads, MaxGCPauseMillis and the like)"));
+            return Err(format!("{a}: not a GC flag (allowed: -XX:+Use...GC, G1*/Z*/Shenandoah*/ClassUnloading* settings, ConcGCThreads, MaxGCPauseMillis and the like, -Xms/-Xmx up to {HEAP_CAP_MB}m)"));
         }
         out.push(a.to_string());
     }
     let collectors = out.iter().filter(|a| a.starts_with("-XX:+Use") && a.ends_with("GC")).count();
     if collectors != 1 {
         return Err(format!("\"gc\" needs exactly one collector (-XX:+UseZGC, -XX:+UseG1GC, -XX:+UseShenandoahGC...), got {collectors}"));
+    }
+    if let (Some(ms), Some(mx)) = (heap.get("-Xms"), heap.get("-Xmx")) {
+        if ms > mx { return Err(format!("-Xms ({ms}m) is larger than -Xmx ({mx}m)")) }
     }
     Ok(Some(out))
 }
@@ -1854,7 +1877,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // A GC A/B run: every GC setting from the profile and the bench defaults out, this run's in.
     let gc = gc_flags(args)?;
     if let Some(flags) = &gc {
-        cmd.retain(|a| !is_gc_flag(a) || a == "-XX:+UnlockExperimentalVMOptions");
+        // A heap size given here replaces the profile's and the bench's of the same kind.
+        let kinds: Vec<&str> = flags.iter().filter_map(|f| heap_flag(f).map(|(k, _)| k)).collect();
+        cmd.retain(|a| (!is_gc_flag(a) || a == "-XX:+UnlockExperimentalVMOptions") && !heap_flag(a).is_some_and(|(k, _)| kinds.contains(&k)));
         for (i, a) in flags.iter().enumerate() { cmd.insert(i, a.clone()) }
     }
     let gc_used = gc.map(|f| f.join(" "));

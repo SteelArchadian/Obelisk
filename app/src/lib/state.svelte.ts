@@ -3,7 +3,9 @@ import type { Instance, ProjectType, Hit, Installed } from "./api";
 
 export type Page = "library" | "instance" | "discover" | "browse" | "settings";
 export type ProfileDialog = { kind: "options" | "clone" | "delete" | "purge"; inst: Instance; tab?: "options" | "backups" };
-export type Overlay = { kind: "project"; hit: Hit; tab?: "comments" | "versions" } | { kind: "author"; name: string; cfId?: number };
+/** A project page remembers its tab (and Relations view) here, so Back returns to where the user was. */
+export type ProjectTab = "overview" | "changelog" | "gallery" | "versions" | "relations" | "comments";
+export type Overlay = { kind: "project"; hit: Hit; tab?: ProjectTab; rel?: { mode: string; sort: string } } | { kind: "author"; name: string; cfId?: number };
 /** `world` is the world folder a data pack goes into. */
 export type PendingInstall = { hit: Hit; versionId?: string; loaderOverride?: string; world?: string };
 
