@@ -1597,6 +1597,9 @@ fn essential_no_update(dir: &Path) {
     if let Ok(text) = std::fs::read_to_string(&cfg) {
         let new: Vec<String> = text.lines().map(|l| match l.split('=').next().map(str::trim) {
             Some("enable_essential") => format!("{}enable_essential = false", &l[..l.len() - l.trim_start().len()]),
+            // 1 copies every screenshot to the Windows clipboard, so test shots overwrote what the user had copied
+            // (Overseer, 2026-11-07). The user's own instances keep their choice; copies never touch the clipboard.
+            Some("post_screenshot_action") => format!("{}post_screenshot_action = 0", &l[..l.len() - l.trim_start().len()]),
             _ => l.to_string(),
         }).collect();
         let new = new.join("\n") + "\n";
