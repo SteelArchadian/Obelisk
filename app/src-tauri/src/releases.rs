@@ -139,9 +139,20 @@ fn pack(id: &str) -> Result<Pack, String> {
     packs().into_iter().find(|p| p.id == id).ok_or_else(|| format!("no pack called {id}"))
 }
 
-/// The enabled jar in a pack that provides this mod id.
+/// Mods renamed by their owners, as (new id, old id): a pack with the old mod takes the new one in its place.
+const RENAMED: &[(&str, &str)] = &[("armory", "itemsmod")];
+
+/// The enabled jar in a pack that provides this mod id (or the id it was renamed from).
 fn installed_file(game: &Path, mod_id: &str) -> Option<String> {
-    prism::dupes::index(&game.join("mods")).remove(mod_id).and_then(|v| v.into_iter().next())
+    let mut idx = prism::dupes::index(&game.join("mods"));
+    idx.remove(mod_id)
+        .or_else(|| RENAMED.iter().find(|r| r.0 == mod_id).and_then(|r| idx.remove(r.1)))
+        .and_then(|v| v.into_iter().next())
+}
+
+/// Deletes go to the Recycle Bin, never straight off the disk.
+fn recycle(p: &Path) -> Result<(), String> {
+    trash::delete(p).map_err(|e| format!("couldn't move {} to the Recycle Bin: {e}", p.display()))
 }
 
 /// The settings panel: status and the user's own actions (submitting stays with the chats that build).
@@ -448,11 +459,11 @@ fn install(o: &Rollout, b: &Build, p: &Pack, cur: &str) -> Result<(), String> {
     let tmp = mods.join(format!("{}.obelisk-tmp", b.file));
     std::fs::copy(jar_path(b), &tmp).map_err(|e| e.to_string())?;
     if sha_of(&tmp) != b.sha1 {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = recycle(&tmp);
         return set(o.id, "failed", "the stored build doesn't match its checksum", |_| {});
     }
     if b.file != cur {
-        std::fs::remove_file(mods.join(cur)).map_err(|e| e.to_string())?;
+        recycle(&mods.join(cur))?;
     }
     std::fs::rename(&tmp, mods.join(&b.file)).map_err(|e| e.to_string())?;
     let _ = prism::history::create(&p.game, "safety", &format!("{} {} installed ({} release)", b.mod_id, b.version, b.channel), true);
@@ -485,7 +496,7 @@ fn rollback(id: u64, reason: &str) -> Result<Value, String> {
     prism::history::create(&p.game, "safety", &format!("Before rolling back {} {}", b.mod_id, b.version), true)?;
     std::fs::copy(&o.backup, mods.join(&o.prev_file)).map_err(|e| e.to_string())?;
     if b.file != o.prev_file {
-        std::fs::remove_file(&now_file).map_err(|e| e.to_string())?;
+        recycle(&now_file)?;
     }
     let _ = prism::history::create(&p.game, "safety", &format!("Rolled back {} {}", b.mod_id, b.version), true);
     notice(&b, &p, &format!("rolled back: {reason}"));
