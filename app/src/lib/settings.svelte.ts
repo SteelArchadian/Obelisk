@@ -16,7 +16,8 @@ type Settings = {
   /** An effect over the modpack tiles (an experiment, user 2026-11-06): "none", or "crt" for a TV-like shimmer. */
   tileFx: "none" | "crt";
   /** Typing sounds (uisound.svelte.ts): a tiny tip per key in text boxes. */
-  typingSounds: { on: boolean; volume: number };
+  /** `style`: "" follows the sound theme; else "tick", a TYPE_STYLES id or a sound theme. */
+  typingSounds: { on: boolean; volume: number; style: string };
   startPage: "library" | "discover";
   /** Launchers Sync looks at. */
   launchers: Record<string, boolean>;
@@ -50,8 +51,9 @@ type Settings = {
   updateJingle: string;
   /** Settings → Sound volumes are 0-100 on the scale soundGain gives. */
   jingleVolume: number;
-  /** Background music (player.svelte.ts): Obelisk's own tracks (one of TRACKS or "all") or the user's own folder. */
-  music: { on: boolean; source: "obelisk" | "mine"; track: string; folder: string; volume: number };
+  /** Background music (player.svelte.ts): Obelisk's own tracks (one of TRACKS or "all", the shuffle) or the user's own
+   *  folder. The shuffle leaves out the track ids in `skip` and the file names in `skipFiles` (all left out: all play). */
+  music: { on: boolean; source: "obelisk" | "mine"; track: string; folder: string; volume: number; skip: string[]; skipFiles: string[] };
   /** Every Obelisk sound (music, update sound, alerts, menu sounds) holds back while another window is in front. */
   muteInactive: boolean;
   /** The social alert sounds (cues.rs): ids in `muted` stay silent; Do Not Disturb lets only invites through. */
@@ -104,12 +106,16 @@ export const SOUND_SLOTS: [string, string][] = [
 
 /** The sources a slot can take: its classic sound(s), then every theme. */
 export function slotSources(slot: string): [string, string][] {
-  const classic: [string, string][] = slot === "type" ? [["tick", "Tick"]] : CUES.some((c) => c[0] === slot) ? [["chimes", "Chimes"]] : UI_SETS;
+  const classic: [string, string][] = slot === "type" ? TYPE_STYLES : CUES.some((c) => c[0] === slot) ? [["chimes", "Chimes"]] : UI_SETS;
   return [...classic, ...SOUND_THEMES];
 }
 
+/** Typing styles of their own besides the tick and the themes (uisound.svelte.ts). */
+export const TYPE_STYLES: [string, string][] = [["tick", "Tick"], ["soft", "Soft"], ["glass", "Glass"], ["bubble", "Bubble"]];
+
 /** Where one slot's sound comes from now. */
 export function soundSource(slot: string): string {
+  if (slot === "type" && settings.typingSounds.style) return settings.typingSounds.style;
   const classic = slot === "type" ? "tick" : CUES.some((c) => c[0] === slot) ? "chimes" : settings.uiSounds.set;
   if (settings.soundTheme === "custom") return settings.soundPicks[slot] ?? classic;
   return SOUND_THEMES.some((t) => t[0] === settings.soundTheme) ? settings.soundTheme : classic;
@@ -122,7 +128,7 @@ export const soundGain = (volume: number) => 0.3 * (Math.min(100, Math.max(0, vo
 const DEFAULTS: Settings = {
   theme: "obelisk",
   tileFx: "none",
-  typingSounds: { on: true, volume: 50 },
+  typingSounds: { on: true, volume: 50, style: "" },
   startPage: "library",
   launchers: { curseforge: true },
   extraDirs: [],
@@ -140,7 +146,7 @@ const DEFAULTS: Settings = {
   plugins: { lightning: false },
   updateJingle: "off", // staged: none plays until the user picks the update sound (user, 2026-11-06)
   jingleVolume: 50,
-  music: { on: true, source: "obelisk", track: "all", folder: "", volume: 50 },
+  music: { on: true, source: "obelisk", track: "all", folder: "", volume: 50, skip: [], skipFiles: [] },
   muteInactive: true,
   cues: { on: true, volume: 50, dnd: false, muted: [] },
   uiSounds: { on: true, volume: 50, set: "soft" },

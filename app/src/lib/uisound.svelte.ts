@@ -109,7 +109,15 @@ export type TypeSound = "key" | "space" | "erase" | "enter";
 /** Pentatonic notes for letters: each key always gets the same one, so typing a word plays its own little tune. */
 const KEY_NOTES = [1568, 1760, 1976, 2349, 2637];
 
-function typeTones(kind: TypeSound, key: string): Tone[] {
+function typeTones(kind: TypeSound, key: string, style = "tick"): Tone[] {
+  const f = KEY_NOTES[key.charCodeAt(0) % KEY_NOTES.length];
+  // The menu styles' own ticks: rounder and lower (soft), a tiny bell (glass), a little bend up (bubble).
+  if (style === "soft") return [{ f0: kind === "key" ? f / 2 : kind === "space" ? 523 : 659, dur: 0.035, vol: 0.32, wave: "triangle" }];
+  if (style === "glass") return [{ f0: kind === "key" ? f : kind === "space" ? 1175 : 1568, dur: 0.05, vol: 0.2, fm: 3.5 }];
+  if (style === "bubble") {
+    const top = kind === "key" ? f : 1100;
+    return [kind === "erase" ? { f0: top, f1: top * 0.55, dur: 0.035, vol: 0.28 } : { f0: top * 0.55, f1: top, dur: 0.035, vol: 0.28 }];
+  }
   switch (kind) {
     case "key": return [{ f0: KEY_NOTES[key.charCodeAt(0) % KEY_NOTES.length], dur: 0.022, vol: 0.3 }];
     case "space": return [{ f0: 880, dur: 0.03, vol: 0.28, wave: "triangle" }];
@@ -127,7 +135,7 @@ export function typeSound(kind: TypeSound, key = "a", force = false, source = so
   if (!force && (!settings.typingSounds.on || (settings.muteInactive && !document.hasFocus()))) return;
   // Lighter still than the menu sounds: a keystroke is the most frequent sound there is.
   const gain = soundGain(settings.typingSounds.volume) * 0.4;
-  if (source === "tick") return playTones(typeTones(kind, key), gain);
+  if (["tick", "soft", "glass", "bubble"].includes(source)) return playTones(typeTones(kind, key, source), gain);
   const rates: [number, number][] = kind === "key" ? [[KEY_RATES[key.charCodeAt(0) % KEY_RATES.length], 0]]
     : kind === "space" ? [[0.75, 0]] : kind === "erase" ? [[0.84, 0]] : [[1, 0], [1.5, 0.04]];
   void playTheme(source, "type", gain * THEME_LIFT, rates);

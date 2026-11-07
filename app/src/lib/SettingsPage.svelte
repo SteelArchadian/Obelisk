@@ -9,9 +9,15 @@
   import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
-  import { settings, saveSettings, THEMES, JINGLES, TRACKS, CUES, UI_SETS, SOUND_THEMES, SOUND_SLOTS, slotSources, soundSource, applyTheme } from "./settings.svelte";
+  import { settings, saveSettings, TYPE_STYLES, THEMES, JINGLES, TRACKS, CUES, UI_SETS, SOUND_THEMES, SOUND_SLOTS, slotSources, soundSource, applyTheme } from "./settings.svelte";
   import { music } from "./player.svelte";
   import { uiSound, typeSound } from "./uisound.svelte";
+  /** Ticks or unticks one Shuffle entry: `key` is "skip" (Obelisk tracks) or "skipFiles" (own files). */
+  function toggleSkip(key: "skip" | "skipFiles", id: string) {
+    const list = settings.music[key];
+    settings.music[key] = list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+    saveSettings();
+  }
   import Resolution from "./Resolution.svelte";
 
   // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
@@ -331,12 +337,19 @@
         <div class="field">
           <label class="row-check"><input type="radio" bind:group={settings.music.source} value="obelisk" onchange={saveSettings} /> Obelisk's music
             <select class="select" bind:value={settings.music.track} onchange={() => { settings.music.source = "obelisk"; saveSettings(); }} aria-label="Track">
-              <option value="all">All tracks</option>
+              <option value="all">Shuffle</option>
               {#each TRACKS as [id, label] (id)}<option value={id}>{label}</option>{/each}
             </select></label>
           <label class="row-check"><input type="radio" bind:group={settings.music.source} value="mine" onchange={saveSettings} /> My own music
             <button class="ghost" onclick={async (e) => { e.preventDefault(); const dir = await open({ directory: true, title: "Choose your music folder" }); if (typeof dir === "string") { Object.assign(settings.music, { folder: dir, source: "mine", on: true }); music.paused = false; saveSettings(); } }}>{settings.music.folder ? "Change folder…" : "Choose folder…"}</button></label>
           {#if settings.music.source === "mine"}<small class="muted">{settings.music.folder || "No folder chosen yet."} Plays every mp3, ogg, opus, wav, flac and m4a file in it, shuffled. They stay on this PC.</small>{/if}
+          {#if settings.music.source === "obelisk" && settings.music.track === "all"}
+            <small class="muted">Shuffle plays the ticked tracks.</small>
+            {#each TRACKS as [id, label] (id)}<label class="row-check"><input type="checkbox" checked={!settings.music.skip.includes(id)} onchange={() => toggleSkip("skip", id)} /> {label}</label>{/each}
+          {:else if settings.music.source === "mine" && music.files.length}
+            <small class="muted">Shuffle plays the ticked files.</small>
+            {#each music.files as name (name)}<label class="row-check"><input type="checkbox" checked={!settings.music.skipFiles.includes(name)} onchange={() => toggleSkip("skipFiles", name)} /> {name}</label>{/each}
+          {/if}
           <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.music.volume} onchange={saveSettings} aria-label="Music volume" /> {settings.music.volume}%</label>
           <div class="row-buttons"><button class="ghost" onclick={() => (music.paused = !music.paused)}>{music.paused ? "Resume" : "Pause"}</button>{#if music.title}<small class="muted">Playing {music.title}</small>{/if}</div>
           {#if music.error}<small class="muted">{music.error}</small>{/if}
@@ -413,6 +426,11 @@
       </label>
       {#if settings.typingSounds.on}
         <div class="field">
+          <label class="row-check">Sound <select class="select" bind:value={settings.typingSounds.style} aria-label="Typing sound" onchange={() => { saveSettings(); typeSound("key", "a", true); }}>
+            <option value="">Match theme</option>
+            {#each TYPE_STYLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            {#each SOUND_THEMES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+          </select></label>
           <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.typingSounds.volume} aria-label="Typing sound volume"
             onchange={() => { saveSettings(); typeSound("key", "a", true); }} /> {settings.typingSounds.volume}%</label>
           <input class="num" style="width: 260px; max-width: 100%;" placeholder="Type here to try them" aria-label="Try typing sounds" />

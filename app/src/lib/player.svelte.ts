@@ -5,7 +5,8 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { settings, TRACKS, soundGain } from "./settings.svelte";
 
-export const music = $state({ paused: false, title: "", error: "" });
+/** `files`: every file name in the user's music folder (for the shuffle's checkboxes). */
+export const music = $state({ paused: false, title: "", error: "", files: [] as string[] });
 
 let audio: HTMLAudioElement | null = null;
 let list: { url: string; title: string }[] = [];
@@ -29,14 +30,18 @@ export function watchWindow() {
 /** Brings the player in line with the settings and the window: loads what to play, then fades in or out. */
 export async function sync() {
   const m = settings.music;
-  const key = JSON.stringify([m.source, m.track, m.folder]);
+  const key = JSON.stringify([m.source, m.track, m.folder, m.skip, m.skipFiles]);
   if (wanted() && key !== loaded) {
     loaded = key;
     stop();
     try {
-      list = m.source === "mine"
-        ? shuffle((await invoke<string[]>("music_files", { folder: m.folder })).map((p) => ({ url: convertFileSrc(p), title: name(p) })))
-        : await Promise.all((m.track === "all" ? shuffle(TRACKS.map((t) => t[0])) : [m.track]).map(async (id) =>
+      // The shuffle plays the ticked ones only, or everything if none are ticked.
+      const ticked = <T>(all: T[], skip: (x: T) => boolean) => { const some = all.filter((x) => !skip(x)); return some.length ? some : all; };
+      if (m.source === "mine") {
+        const files = await invoke<string[]>("music_files", { folder: m.folder });
+        music.files = files.map(name);
+        list = shuffle(ticked(files, (p) => m.skipFiles.includes(name(p))).map((p) => ({ url: convertFileSrc(p), title: name(p) })));
+      } else list = await Promise.all((m.track === "all" ? shuffle(ticked(TRACKS.map((t) => t[0]), (id) => m.skip.includes(id))) : [m.track]).map(async (id) =>
             ({ url: convertFileSrc(await invoke<string>("music_track", { id })), title: TRACKS.find((t) => t[0] === id)?.[1] ?? id })));
       music.error = m.source === "mine" && !list.length ? "No music files in that folder (mp3, ogg, opus, wav, flac or m4a)." : "";
     } catch (e) {
