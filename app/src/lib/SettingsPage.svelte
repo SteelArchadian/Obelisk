@@ -9,16 +9,9 @@
   import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
-  import { settings, saveSettings, TYPE_STYLES, THEMES, JINGLES, TRACKS, CUES, UI_SETS, SOUND_THEMES, SOUND_SLOTS, slotSources, soundSource, applyTheme } from "./settings.svelte";
-  import { music } from "./player.svelte";
-  import { uiSound, typeSound } from "./uisound.svelte";
-  /** Ticks or unticks one Shuffle entry: `key` is "skip" (Obelisk tracks) or "skipFiles" (own files). */
-  function toggleSkip(key: "skip" | "skipFiles", id: string) {
-    const list = settings.music[key];
-    settings.music[key] = list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
-    saveSettings();
-  }
+  import { settings, saveSettings, THEMES, applyTheme } from "./settings.svelte";
   import Resolution from "./Resolution.svelte";
+  import SoundSettings from "./SoundSettings.svelte";
 
   // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
   type SelfUpdate = { version: string; notes: string };
@@ -26,24 +19,6 @@
   getVersion().then((v) => (version = v)).catch(() => {});
   let updateState = $state<"" | "checking" | "current" | "installing">("");
   let found = $state<SelfUpdate | null>(null);
-  /** A theme sets every sound at once (the update sound too, unless that's off); custom starts from what plays now. */
-  function pickSoundTheme(next: string) {
-    if (next === "custom") settings.soundPicks = Object.fromEntries(SOUND_SLOTS.map(([slot]) => [slot, soundSource(slot)]));
-    else if (next !== "classic" && settings.updateJingle !== "off") settings.updateJingle = next;
-    else if (next === "classic" && SOUND_THEMES.some((t) => t[0] === settings.updateJingle)) settings.updateJingle = JINGLES[0][0];
-    settings.soundTheme = next;
-    saveSettings();
-    uiSound("open", undefined, true);
-  }
-
-  /** Plays one custom-mode slot's current pick. */
-  function playSlot(slot: string) {
-    const source = soundSource(slot);
-    if (slot === "type") typeSound("key", "a", true, source);
-    else if (CUES.some((c) => c[0] === slot)) invoke("cue_preview", { id: slot, theme: source }).catch(toastError);
-    else uiSound(slot as "hover", source, true);
-  }
-
   async function checkUpdates() {
     updateState = "checking";
     found = null;
@@ -300,142 +275,7 @@
       </div>
 
     {:else if app.settingsSection === "sound"}
-      <h1>Sound</h1>
-      <label class="row-check"><input type="checkbox" bind:checked={settings.muteInactive} onchange={saveSettings} /> Mute when Obelisk isn't the active window
-        <small class="muted">Music, the update sound, alerts and menu sounds all hold back while another window is in front.</small></label>
-
-      <h2>Sound theme</h2>
-      <div class="field">
-        <label class="row-check">Theme
-          <select class="select" value={settings.soundTheme} onchange={(e) => pickSoundTheme(e.currentTarget.value)} aria-label="Sound theme">
-            <option value="classic">Classic</option>
-            {#each SOUND_THEMES as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            <option value="custom">Custom: pick each sound</option>
-          </select></label>
-        <small class="muted">One instrument for the update sound, menu, typing and alert sounds. Music is picked on its own below; each theme has a track of the same name.</small>
-        {#if settings.soundTheme === "custom"}
-          <div style="display: grid; grid-template-columns: max-content auto auto; gap: 2px 12px; align-items: center; justify-content: start;">
-            {#each SOUND_SLOTS as [slot, label] (slot)}
-              <span>{label}</span>
-              <select class="select" value={soundSource(slot)} aria-label="{label} sound"
-                onchange={(e) => { settings.soundPicks = { ...settings.soundPicks, [slot]: e.currentTarget.value }; saveSettings(); playSlot(slot); }}>
-                {#each slotSources(slot) as [id, name] (id)}<option value={id}>{name}</option>{/each}
-              </select>
-              <button class="ghost" data-quiet onclick={() => playSlot(slot)}>Play</button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-
-      <h2>Background music</h2>
-      <label class="toggle-row">
-        <span><strong>Background music</strong><small>Soft music while you browse: Obelisk's own original tracks, or your own music files. Pause it any time with the note on the left.</small></span>
-        <button class="switch" class:on={settings.music.on} role="switch" aria-checked={settings.music.on} aria-label="Background music"
-          onclick={() => { settings.music.on = !settings.music.on; music.paused = false; saveSettings(); }}><i></i></button>
-      </label>
-      {#if settings.music.on}
-        <div class="field">
-          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="obelisk" onchange={saveSettings} /> Obelisk's music
-            <select class="select" bind:value={settings.music.track} onchange={() => { settings.music.source = "obelisk"; saveSettings(); }} aria-label="Track">
-              <option value="all">Shuffle</option>
-              {#each TRACKS as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            </select></label>
-          <label class="row-check"><input type="radio" bind:group={settings.music.source} value="mine" onchange={saveSettings} /> My own music
-            <button class="ghost" onclick={async (e) => { e.preventDefault(); const dir = await open({ directory: true, title: "Choose your music folder" }); if (typeof dir === "string") { Object.assign(settings.music, { folder: dir, source: "mine", on: true }); music.paused = false; saveSettings(); } }}>{settings.music.folder ? "Change folder…" : "Choose folder…"}</button></label>
-          {#if settings.music.source === "mine"}<small class="muted">{settings.music.folder || "No folder chosen yet."} Plays every mp3, ogg, opus, wav, flac and m4a file in it, shuffled. They stay on this PC.</small>{/if}
-          {#if settings.music.source === "obelisk" && settings.music.track === "all"}
-            <small class="muted">Shuffle plays the ticked tracks.</small>
-            {#each TRACKS as [id, label] (id)}<label class="row-check"><input type="checkbox" checked={!settings.music.skip.includes(id)} onchange={() => toggleSkip("skip", id)} /> {label}</label>{/each}
-          {:else if settings.music.source === "mine" && music.files.length}
-            <small class="muted">Shuffle plays the ticked files.</small>
-            {#each music.files as name (name)}<label class="row-check"><input type="checkbox" checked={!settings.music.skipFiles.includes(name)} onchange={() => toggleSkip("skipFiles", name)} /> {name}</label>{/each}
-          {/if}
-          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.music.volume} onchange={saveSettings} aria-label="Music volume" /> {settings.music.volume}%</label>
-          <div class="row-buttons"><button class="ghost" onclick={() => (music.paused = !music.paused)}>{music.paused ? "Resume" : "Pause"}</button>{#if music.title}<small class="muted">Playing {music.title}</small>{/if}</div>
-          {#if music.error}<small class="muted">{music.error}</small>{/if}
-        </div>
-      {/if}
-
-      <h2>Update sound</h2>
-      <div class="field">Sound after an update
-        <div class="row-buttons">
-          <select class="select" bind:value={settings.updateJingle} onchange={saveSettings} aria-label="Sound after an update">
-            {#each JINGLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            {#each SOUND_THEMES as [id, label] (id)}<option value={id}>{label} theme</option>{/each}
-            <option value="random">A different one each time</option>
-            <option value="off">None</option>
-          </select>
-          <button class="ghost" data-quiet disabled={settings.updateJingle === "off"} onclick={() => invoke("jingle_preview", { name: settings.updateJingle }).catch(toastError)}>Preview</button>
-        </div>
-        <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.jingleVolume} disabled={settings.updateJingle === "off"} aria-label="Update sound volume"
-          onchange={async () => { await saveSettings(); invoke("jingle_preview", { name: settings.updateJingle }).catch(toastError); }} /> {settings.jingleVolume}%</label>
-        <small class="muted">A short, quiet chime on the first start after Obelisk updates itself.</small>
-      </div>
-
-      <h2>Alerts</h2>
-      <label class="toggle-row">
-        <span><strong>Alert sounds</strong><small>Soft chimes for friends, messages and invites. While you play, the small ones are skipped and the rest play quieter.</small></span>
-        <button class="switch" class:on={settings.cues.on} role="switch" aria-checked={settings.cues.on} aria-label="Alert sounds"
-          onclick={() => { settings.cues.on = !settings.cues.on; saveSettings(); }}><i></i></button>
-      </label>
-      {#if settings.cues.on}
-        <div class="field">
-          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.cues.volume} aria-label="Alert volume"
-            onchange={async () => { await saveSettings(); invoke("cue_preview", { id: "message" }).catch(toastError); }} /> {settings.cues.volume}%</label>
-          <label class="row-check"><input type="checkbox" bind:checked={settings.cues.dnd} onchange={saveSettings} /> Do Not Disturb
-            <small class="muted">Only game invites still make a sound.</small></label>
-          <div style="display: grid; grid-template-columns: max-content auto; gap: 2px 16px; align-items: center;">
-            {#each CUES as [id, label] (id)}
-              <label class="row-check"><input type="checkbox" checked={!settings.cues.muted.includes(id)}
-                onchange={(e) => { settings.cues.muted = e.currentTarget.checked ? settings.cues.muted.filter((m) => m !== id) : [...settings.cues.muted, id]; saveSettings(); }} /> {label}</label>
-              <button class="ghost" data-quiet onclick={() => invoke("cue_preview", { id }).catch(toastError)}>Play</button>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      <h2>Menu sounds</h2>
-      <label class="toggle-row">
-        <span><strong>Menu sounds</strong><small>Little ticks and pops as you point at and press things, and a whoosh in and out of modpacks.</small></span>
-        <button class="switch" class:on={settings.uiSounds.on} role="switch" aria-checked={settings.uiSounds.on} aria-label="Menu sounds"
-          onclick={() => { settings.uiSounds.on = !settings.uiSounds.on; saveSettings(); }}><i></i></button>
-      </label>
-      {#if settings.uiSounds.on}
-        <div class="field">
-          {#if settings.soundTheme === "classic"}
-            <label class="row-check">Style
-              <select class="select" bind:value={settings.uiSounds.set} onchange={() => { saveSettings(); uiSound("open", settings.uiSounds.set, true); }} aria-label="Menu sound style">
-                {#each UI_SETS as [id, label] (id)}<option value={id}>{label}</option>{/each}
-              </select></label>
-          {/if}
-          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.uiSounds.volume} aria-label="Menu sound volume"
-            onchange={() => { saveSettings(); uiSound("click", undefined, true); }} /> {settings.uiSounds.volume}%</label>
-          <div class="row-buttons">
-            {#each [["hover", "Point"], ["click", "Press"], ["open", "Open"], ["close", "Close"], ["tab", "Tab"]] as const as [kind, label] (kind)}
-              <button class="ghost" data-quiet onclick={() => uiSound(kind, undefined, true)}>{label}</button>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      <h2>Typing sounds</h2>
-      <label class="toggle-row">
-        <span><strong>Typing sounds</strong><small>A tiny tip for each key you type in a text box: each letter has its own note. Never in password fields.</small></span>
-        <button class="switch" class:on={settings.typingSounds.on} role="switch" aria-checked={settings.typingSounds.on} aria-label="Typing sounds"
-          onclick={() => { settings.typingSounds.on = !settings.typingSounds.on; saveSettings(); }}><i></i></button>
-      </label>
-      {#if settings.typingSounds.on}
-        <div class="field">
-          <label class="row-check">Sound <select class="select" bind:value={settings.typingSounds.style} aria-label="Typing sound" onchange={() => { saveSettings(); typeSound("key", "a", true); }}>
-            <option value="">Match theme</option>
-            {#each TYPE_STYLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            {#each SOUND_THEMES as [id, label] (id)}<option value={id}>{label}</option>{/each}
-          </select></label>
-          <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.typingSounds.volume} aria-label="Typing sound volume"
-            onchange={() => { saveSettings(); typeSound("key", "a", true); }} /> {settings.typingSounds.volume}%</label>
-          <input class="num" style="width: 260px; max-width: 100%;" placeholder="Type here to try them" aria-label="Try typing sounds" />
-        </div>
-      {/if}
+      <SoundSettings />
 
     {:else if app.settingsSection === "sync"}
       <h1>Sync & Import</h1>
