@@ -8,6 +8,7 @@ pub mod dupes;
 pub mod guard;
 pub mod held;
 pub mod fit;
+pub mod gameids;
 pub mod instdir;
 pub mod packcode;
 pub mod lightning;

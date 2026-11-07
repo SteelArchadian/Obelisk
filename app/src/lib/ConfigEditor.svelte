@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { toast } from "./state.svelte";
   import { parse, check, same, label, type Setting, type Value } from "./configmodel";
+  import IdList from "./IdList.svelte";
 
   let { instanceId, fileName, name, onclose }: { instanceId: string; fileName: string; name: string; onclose: () => void } = $props();
 
@@ -21,9 +22,17 @@
   /** List settings with their "add" box text. */
   let adding = $state<Record<string, string>>({});
 
+  /** Mob, block and item ids in this pack, for list settings that take them. */
+  let ids = $state<Record<IdKind, [string, string][]> | null>(null);
+  let idSets = $derived(ids && (Object.fromEntries(Object.entries(ids).map(([k, v]) => [k, new Set(v.map((x) => x[0]))])) as Record<IdKind, Set<string>>));
+
   let dirty = $derived(text !== saved);
   let doc = $derived(path ? parse(path, text, defaults) : null);
   let formOk = $derived(!!doc);
+
+  $effect(() => {
+    invoke<Record<IdKind, [string, string][]>>("game_ids", { instanceId }).then((r) => (ids = r)).catch(() => {});
+  });
 
   $effect(() => {
     invoke<{ path: string; size: number }[]>("mod_configs", { instanceId, fileName })
@@ -108,6 +117,24 @@
     const numeric = list.length > 0 && list.every((x) => typeof x === "number");
     setValue(s, [...list, numeric && !Number.isNaN(Number(t)) ? Number(t) : t]);
     adding[s.id] = "";
+  }
+
+  type IdKind = "entity" | "block" | "item";
+  const ID = /^#?[a-z0-9_.-]+:[a-z0-9_/.-]+$/;
+
+  /** Which kind of game id a list setting holds, judged by its values against the pack's ids, else by its wording. */
+  function idKind(s: Setting): IdKind | null {
+    if (!idSets) return null;
+    const all = [...((s.value as Value[]) ?? []), ...(Array.isArray(s.def) ? s.def : [])];
+    if (all.some((v) => typeof v !== "string")) return null;
+    const vals = all as string[];
+    if (vals.length && !vals.some((v) => ID.test(v))) return null;
+    const kinds: IdKind[] = ["entity", "block", "item"];
+    const score = kinds.map((k) => vals.filter((v) => idSets![k].has(v.replace(/^#/, ""))).length);
+    const best = Math.max(...score);
+    if (best > 0) return kinds[score.indexOf(best)];
+    const words = `${s.key} ${s.help}`.toLowerCase();
+    return /entit|mob|animal|creature|monster/.test(words) ? "entity" : /block/.test(words) ? "block" : /item/.test(words) ? "item" : null;
   }
 
   const show = (v: Value) => (typeof v === "string" ? v : JSON.stringify(v));
@@ -216,6 +243,9 @@
                             <input class="val num" inputmode="decimal" value={String(s.value)} onchange={(e) => numberInput(s, e.currentTarget.value)} />
                           {:else if s.kind === "string"}
                             <input class="val" value={String(s.value)} onchange={(e) => setValue(s, e.currentTarget.value)} />
+                          {:else if s.kind === "list" && ids && idKind(s)}
+                            {@const k = idKind(s)!}
+                            <IdList value={(s.value as Value[]) ?? []} kind={k} options={ids[k]} onchange={(v) => setValue(s, v)} />
                           {:else if s.kind === "list"}
                             <div class="list">
                               {#each (s.value as Value[]) as item, i (i)}

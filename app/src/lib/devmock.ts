@@ -31,6 +31,12 @@ const TOML = `# Client settings
 \t#Range: 0.0 ~ 1.0
 \tvolume = 0.8
 \tdisabledSounds = ["create:whistle"]
+
+[carts.supply_cart]
+\t#Entity that are able to pull this cart, such as ["minecraft:horse"]
+\tpullAnimals = ["minecraft:horse", "minecraft:donkey", "minecraft:mule"]
+\t#Blocks the plow turns into farmland
+\ttillable = ["minecraft:dirt", "minecraft:grass_block"]
 `;
 
 const JSON_CFG = JSON.stringify({ allowedCEM: "ALL", logModelCreationData: false, animationLODDistance: 20, modelsNamesDisabled: ["a", "b"], entityRenderModeOverrides: {}, nested: { scale: 1.5, on: true } }, null, 2);
@@ -53,6 +59,10 @@ export function installDevMock() {
       case "delete_content": trash = [...trash, { id: `${Date.now()}`, kind: args.kind, fileName: args.fileName, name: args.name, version: args.version, authors: args.authors, source: args.source, deletedMs: Date.now() }]; return null;
       case "check_updates": return mods.map((m, i) => ({ kind: "mods", fileName: m.fileName, provider: m.source, projectId: String(i), current: "1", downloads: 0, env: ["client", "both", "server", ""][i % 4], update: i % 3 === 0 ? { id: "2", name: "new", fileName: "x.jar", blocked: false } : null }));
       case "mod_configs": return [{ path: "config/create-client.toml", size: 400 }, { path: "config/create-common.toml", size: 100 }, { path: "config/entity_model_features.json", size: 100 }, { path: "defaultconfigs/create-server.toml", size: 100 }];
+      case "game_ids": return {
+        entity: [["astikorcartsredux:supply_cart", "Supply Cart"], ["minecraft:camel", "Camel"], ["minecraft:donkey", "Donkey"], ["minecraft:horse", "Horse"], ["minecraft:mule", "Mule"], ["minecraft:skeleton_horse", "Skeleton Horse"], ["minecraft:sniffer", "Sniffer"], ["minecraft:zombie_horse", "Zombie Horse"]],
+        block: [["minecraft:coarse_dirt", "Coarse Dirt"], ["minecraft:dirt", "Dirt"], ["minecraft:dirt_path", "Dirt Path"], ["minecraft:grass_block", "Grass Block"], ["minecraft:rooted_dirt", "Rooted Dirt"]],
+        item: [["minecraft:wheat", "Wheat"]] };
       case "read_config": return args.path.endsWith(".json") ? JSON_CFG : TOML;
       case "config_default": return args.path.endsWith(".json") ? JSON_CFG : TOML;
       case "orphan_configs": return ["oldmod-common.toml", "spark"];
