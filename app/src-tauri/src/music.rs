@@ -5,9 +5,14 @@
 
 use crate::sound::{m, render_loop, Note, Voice};
 
-/// Obelisk's tracks, in the order Settings lists them: (setting id, synth). Lounge is the default.
-pub const TRACKS: [(&str, fn() -> Vec<f32>); 4] =
-    [("lounge", lounge), ("shopping", window_shopping), ("puddle", puddle), ("boutique", boutique)];
+/// Obelisk's tracks, in the order Settings lists them: (setting id, synth). Lounge is the default. The last four are
+/// the sound themes' own music (Rainy Day and Boutique use Puddle and Boutique).
+pub const TRACKS: [(&str, fn() -> Vec<f32>); 15] = [
+    ("lounge", lounge), ("shopping", window_shopping), ("puddle", puddle), ("boutique", boutique), ("drizzle", drizzle),
+    ("after-hours", after_hours), ("after-hours-harp", after_hours_harp), ("after-hours-keys", after_hours_keys),
+    ("velvet", velvet), ("starlit", starlit_soft), ("breeze", breeze), ("lounge-keys", lounge_keys), ("island", island),
+    ("crystal", crystal), ("bubblegum", bubblegum),
+];
 
 /// Audio files the UI can play from the user's music folder.
 const AUDIO: [&str; 7] = ["mp3", "ogg", "oga", "opus", "wav", "flac", "m4a"];
@@ -182,4 +187,173 @@ fn boutique() -> Vec<f32> {
         shaker(&mut s, *beat, 8);
     }
     s.render(16, 3600.0)
+}
+
+/// After hours: the same bossa guitar and bass as Lounge, in A minor, over a faint warm pad. No tune on top.
+fn after_hours() -> Vec<f32> {
+    let mut s = Song::new(132.0, 0.5);
+    let chords = s.chords("Am9 | Dm9 | G7 | Cmaj9 | Fmaj9 | Dm7 | E7 | Am9 | Am9 | Dm9 | G7 | Cmaj9 | Fmaj9 | Dm9 | E7 | E7");
+    for (bar, (beat, _, notes)) in chords.iter().enumerate() {
+        let (root, fifth) = (notes[0] - 24.0, notes[0] - 17.0);
+        for (off, k, l) in [(0.0, root, 1.4), (1.5, fifth, 0.45), (2.0, fifth, 1.4), (3.5, root, 0.45)] { s.play(beat + off, k, l, 0.6, Voice::Bass) }
+        let slots: &[f64] = if bar % 2 == 0 { &[0.0, 1.5, 3.0] } else { &[1.0, 2.5] };
+        for &off in slots { for &k in &notes[1..] { s.play(beat + off, k, 0.45, 0.16, Voice::Pluck) } }
+        for &k in &notes[1..] { s.play(*beat, k, 4.0, 0.04, Voice::Warm) }
+        for e in 0..8 { s.play(beat + e as f64 * 0.5, 0.0, 0.05, if e % 2 == 1 { 0.1 } else { 0.05 }, Voice::Shaker) }
+    }
+    s.render(16, 3800.0)
+}
+
+/// A sea breeze: a steel drum singing a gentle tune in the middle of its range over guitar, bass and shaker.
+fn breeze() -> Vec<f32> {
+    let mut s = Song::new(104.0, 0.55);
+    let chords = s.chords("Fmaj7 | Gm7 | Am7 | Bb6 | Fmaj7 | Dm7 | Gm7 | C7 | Bbmaj7 | Am7 | Gm7 | C7 | Fmaj7 | Dm7 | Gm7 C7 | Fmaj7");
+    for (beat, len, notes) in &chords {
+        s.play(*beat, notes[0] - 24.0, 1.4, 0.6, Voice::Bass);
+        if *len >= 4.0 { s.play(beat + 2.0, notes[0] - 17.0, 1.4, 0.5, Voice::Bass) }
+        for e in 0..(*len as usize) { for &k in &notes[1..] { s.play(beat + e as f64 + 0.5, k, 0.4, 0.12, Voice::Pluck) } }
+        for e in 0..(*len as usize * 2) { s.play(beat + e as f64 * 0.5, 0.0, 0.05, if e % 2 == 1 { 0.1 } else { 0.05 }, Voice::Shaker) }
+    }
+    s.line(0, "c5/1 f5/1 a5/2 bb5/1 a5/.5 g5/.5 d5/2 e5/1 g5/1 c6/2 bb5/1 g5/1 d5/2 \
+               a5/1.5 g5/.5 f5/1 c5/1 d5/1 f5/1 a5/2 g5/1 f5/.5 d5/.5 bb4/2 c5/3 r/1 \
+               d5/1 f5/1 a5/1.5 c6/.5 c6/1 a5/1 e5/2 f5/1 g5/1 bb5/1 d6/1 c6/2 bb5/1 g5/1 \
+               a5/1 c6/1 a5/1 f5/1 d5/1 e5/1 f5/1 a5/1 g5/1.5 f5/.5 e5/1 g5/1 f5/3 r/1", 0.35, Voice::SteelPan);
+    s.render(16, 3500.0)
+}
+
+/// The bossa bass on beats 1, the and-of-2, 3 and the and-of-4.
+fn bossa_bass(s: &mut Song, beat: f64, root: f64) {
+    for (off, k, l) in [(0.0, root - 24.0, 1.4), (1.5, root - 17.0, 0.45), (2.0, root - 17.0, 1.4), (3.5, root - 24.0, 0.45)] {
+        s.play(beat + off, k, l, 0.6, Voice::Bass)
+    }
+}
+
+/// After Hours with Puddle's electric piano in place of the guitar: long, low chords and a soft answer each bar.
+fn after_hours_keys() -> Vec<f32> {
+    let mut s = Song::new(120.0, 0.5);
+    let chords = s.chords("Am9 | Dm9 | G7 | Cmaj9 | Fmaj9 | Dm7 | E7 | Am9 | Am9 | Dm9 | G7 | Cmaj9 | Fmaj9 | Dm9 | E7 | E7");
+    for (beat, _, notes) in &chords {
+        for &k in &notes[1..] { s.play(*beat, k - 12.0, 2.8, 0.14, Voice::Keys) }
+        for &k in &notes[2..] { s.play(beat + 3.0, k - 12.0, 0.8, 0.08, Voice::Keys) }
+        bossa_bass(&mut s, *beat, notes[0]);
+        shaker(&mut s, *beat, 8);
+    }
+    s.render(16, 3400.0)
+}
+
+/// After Hours with Boutique's harp turning over the chords instead of the strummed guitar.
+fn after_hours_harp() -> Vec<f32> {
+    let mut s = Song::new(120.0, 0.5);
+    let chords = s.chords("Am9 | Dm9 | G7 | Cmaj9 | Fmaj9 | Dm7 | E7 | Am9 | Am9 | Dm9 | G7 | Cmaj9 | Fmaj9 | Dm9 | E7 | E7");
+    for (beat, _, notes) in &chords {
+        for (e, i) in [0, 2, 1, 3, 2, 1, 3, 1].into_iter().enumerate() { s.play(beat + e as f64 * 0.5, notes[i % notes.len()] - 12.0, 1.0, 0.2, Voice::Harp) }
+        bossa_bass(&mut s, *beat, notes[0]);
+        shaker(&mut s, *beat, 8);
+    }
+    s.render(16, 3400.0)
+}
+
+/// Starlit with the celesta halved, an octave lower, on every beat instead of every half beat, and no pad.
+fn starlit_soft() -> Vec<f32> {
+    let mut s = Song::new(80.0, 0.5);
+    let chords = s.chords("Ebmaj7 | Cm7 | Abmaj7 | Bbsus4 Bb | Ebmaj7 | Gm7 | Abmaj7 | Bbsus4 Bb | Cm7 | Abmaj7 | Fm7 | Bb7 | Gm7 | Cm7 | Cb Db | Eb");
+    for (beat, len, notes) in &chords {
+        s.play(*beat, notes[0] - 24.0, len * 0.9, 0.5, Voice::Bass);
+        for &k in &notes[1..] { s.play(*beat, k - 12.0, len * 0.9, 0.07, Voice::Keys) }
+        for e in 0..(*len as usize) {
+            let i = [0, 1, 2, 3][e % 4] % notes.len();
+            s.play(beat + e as f64 + 0.5, notes[i], 1.0, 0.09, Voice::Celesta);
+        }
+    }
+    s.render(16, 3000.0)
+}
+
+/// Drizzle: Puddle's slow keys with a harp turning gently over them, round bass and a soft kick. No tune.
+fn drizzle() -> Vec<f32> {
+    let mut s = Song::new(80.0, 0.6);
+    let chords = s.chords("Fmaj9 | Em7 | Dm9 | Cmaj7 | Bbmaj7 | Am7 | Gm9 | C7 | Fmaj9 | Em7 | Dm9 | Db6 | Cmaj7 | Am7 | Gm9 | C7");
+    for (beat, _, notes) in &chords {
+        for &k in &notes[1..] { s.play(*beat, k - 12.0, 3.6, 0.12, Voice::Keys) }
+        for (q, i) in [(0.5, 1), (1.5, 2), (2.5, 3), (3.5, 2)] { s.play(beat + q, notes[i % notes.len()], 1.0, 0.13, Voice::Harp) }
+        s.play(*beat, notes[0] - 24.0, 1.8, 0.65, Voice::Bass);
+        s.play(beat + 2.5, notes[0] - 17.0, 1.2, 0.45, Voice::Bass);
+        for q in [0.0, 2.5] { s.play(beat + q, 0.0, 0.3, 0.28, Voice::Kick) }
+        for q in [1.0, 3.0] { s.play(beat + q, 0.0, 0.12, 0.08, Voice::Hat) }
+    }
+    s.render(16, 3000.0)
+}
+
+/// Velvet: electric piano on the bossa off-beats over the bossa bass and shaker, in E-flat. No tune.
+fn velvet() -> Vec<f32> {
+    let mut s = Song::new(116.0, 0.5);
+    let chords = s.chords("Ebmaj9 | Abmaj9 | Gm7 | Cm9 | Fm9 | Bb7 | Ebmaj9 | Bb7 | Abmaj9 | Abm6 | Gm7 | C7 | Fm9 | Bb7 | Ebmaj9 | Bb7");
+    for (bar, (beat, _, notes)) in chords.iter().enumerate() {
+        let slots: &[f64] = if bar % 2 == 0 { &[0.0, 1.5, 3.0] } else { &[1.0, 2.5] };
+        for &off in slots { for &k in &notes[1..] { s.play(beat + off, k - 12.0, 0.9, 0.12, Voice::Keys) } }
+        bossa_bass(&mut s, *beat, notes[0]);
+        shaker(&mut s, *beat, 8);
+    }
+    s.render(16, 3400.0)
+}
+
+/// Crystal theme: slow celesta and music-box arpeggios over a glassy pad.
+fn crystal() -> Vec<f32> {
+    let mut s = Song::new(76.0, 0.5);
+    let chords = s.chords("Fmaj7 | Dm7 | Bbmaj7 | Csus4 C | Fmaj7 | Am7 | Bbmaj7 | Csus4 C | Dm7 | Bbmaj7 | Gm7 | C7 | Am7 | Dm7 | Db Eb | F");
+    for (beat, len, notes) in &chords {
+        for &k in &notes[1..] { s.play(*beat, k, *len, 0.05, Voice::Warm) }
+        s.play(*beat, notes[0] - 24.0, len * 0.9, 0.45, Voice::Bass);
+        for e in 0..(len * 2.0) as usize {
+            let i = [0, 2, 1, 3][e % 4] % notes.len();
+            s.play(beat + e as f64 * 0.5, notes[i] + 12.0, 1.0, 0.14, if e % 4 == 0 { Voice::Bell } else { Voice::Celesta });
+        }
+    }
+    s.render(16, 3800.0)
+}
+
+/// Bubblegum theme: a bouncing bass, popping off-beat chords and a light kick and hat. No tune.
+fn bubblegum() -> Vec<f32> {
+    let mut s = Song::new(120.0, 0.5);
+    let chords = s.chords("C | Am | F | G | C | Em | F | G | Am | F | C | G | F | G | C | G");
+    for (beat, _, notes) in &chords {
+        for (q, k) in [notes[0] - 24.0, notes[0] - 12.0, notes[2] - 24.0, notes[0] - 12.0].into_iter().enumerate() {
+            s.play(beat + q as f64, k, 0.6, 0.6, Voice::Bass)
+        }
+        for q in 0..4 { for &k in notes.iter() { s.play(beat + q as f64 + 0.5, k + 12.0, 0.12, 0.08, Voice::Triangle) } }
+        for q in [0.0, 2.0] { s.play(beat + q, 0.0, 0.3, 0.3, Voice::Kick) }
+        for q in 0..8 { s.play(beat + q as f64 * 0.5, 0.0, 0.05, 0.05, Voice::Hat) }
+    }
+    s.render(16, 3500.0)
+}
+
+/// Island theme: guitar on the off-beats, a steel drum on the downbeats, kick, bass and shaker. No tune.
+fn island() -> Vec<f32> {
+    let mut s = Song::new(104.0, 0.58);
+    let chords = s.chords("D | Bm7 | Em7 | A7 | D | F#m7 | G | A7 | Bm7 | G | Em7 | A7 | D | Bm7 | Em7 A7 | D");
+    for (beat, len, notes) in &chords {
+        let len = *len as usize;
+        for q in 0..len { for &k in &notes[1..] { s.play(beat + q as f64 + 0.5, k, 0.3, 0.12, Voice::Pluck) } }
+        s.play(*beat, notes[1] + 12.0, 1.0, 0.16, Voice::SteelPan);
+        if len == 4 { s.play(beat + 2.0, notes[2] + 12.0, 1.0, 0.13, Voice::SteelPan) }
+        s.play(*beat, notes[0] - 24.0, 1.4, 0.6, Voice::Bass);
+        if len == 4 { s.play(beat + 2.0, notes[0] - 17.0, 1.4, 0.5, Voice::Bass) }
+        s.play(*beat, 0.0, 0.3, 0.25, Voice::Kick);
+        shaker(&mut s, *beat, len * 2);
+    }
+    s.render(16, 3500.0)
+}
+
+/// Lounge-keys theme: long electric-piano chords with a vibraphone dropping chord tones in, walking bass and brushes.
+fn lounge_keys() -> Vec<f32> {
+    let mut s = Song::new(88.0, 0.62);
+    let chords = s.chords("Bbmaj9 | Gm9 | Cm9 | F7 | Dm7 | G7 | Cm9 | F7 | Ebmaj9 | Ebm6 | Dm7 | G7 | Cm9 | F7 | Bbmaj9 | F7");
+    for (bar, (beat, _, notes)) in chords.iter().enumerate() {
+        for &k in &notes[1..] { s.play(*beat, k - 12.0, 3.6, 0.15, Voice::Keys) }
+        s.play(beat + 1.5 + (bar % 2) as f64, notes[notes.len() - 1], 1.5, 0.1, Voice::Vibe);
+        let r = notes[0] - 24.0;
+        let third = r + notes[1] - notes[0];
+        for (q, k) in [r, third, r + 7.0, r + 9.0].into_iter().enumerate() { s.play(beat + q as f64, k, 0.9, 0.55, Voice::Bass) }
+        for q in [1.0, 3.0] { s.play(beat + q, 0.0, 0.12, 0.09, Voice::Hat) }
+    }
+    s.render(16, 3200.0)
 }

@@ -1,13 +1,16 @@
 //! Obelisk's sounds: the little jingle that plays on the first start after an update (user, 2026-11-06: "nothing loud
 //! ... cute and Nintendo-y"; it plays after every update, so each is short and soft, never a beepy 8-bit tune). Everything is synthesized here and played from memory through winmm, so no audio files
-//! ship and every tune is original. Settings → Sound picks one of the three, a random one each time, or none, and how loud.
+//! ship and every tune is original. Settings → Sound picks one of them (or a sound theme's own, sfx.rs), a random one each
+//! time, or none, and how loud.
 
 use std::f64::consts::{PI, TAU};
 
-const RATE: u32 = 32_000;
+pub(crate) const RATE: u32 = 32_000;
 
-/// The jingles, in the order Settings lists them: (setting id, synth).
-pub const JINGLES: [(&str, fn() -> Vec<f32>); 3] = [("glow", glow), ("bubbles", bubbles), ("marimba", marimba)];
+/// The jingles, in the order Settings lists them: (setting id, synth). Soft triangle and sine tones in the middle
+/// register, two or three notes (user, 2026-11-06: Glow and Marimba out, "way too busy"; Found It "simple retro").
+pub const JINGLES: [(&str, fn() -> Vec<f32>); 5] =
+    [("found-it", found_it), ("dewdrop-pair", dewdrop_pair), ("hop", hop), ("chirp-warm", chirp_warm), ("bubbles", bubbles)];
 
 /// Plays the jingle the user picked, after an update installed. Settings keys `updateJingle` (an id, "random" or "off")
 /// and `jingleVolume` (0-100, default 50). With "mute when Obelisk isn't the active window" on, it waits up to 15 s for
@@ -60,7 +63,10 @@ fn pick(choice: &str) -> Option<Vec<f32>> {
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
             JINGLES[nanos as usize % JINGLES.len()].1
         }
-        id => JINGLES.iter().find(|j| j.0 == id)?.1,
+        id => match JINGLES.iter().find(|j| j.0 == id) {
+            Some(j) => j.1,
+            None => return crate::sfx::sound(id, "update"),
+        },
     };
     Some(synth())
 }
@@ -103,13 +109,15 @@ pub(crate) enum Voice {
     Triangle,
     /// Sine with fast-dying overtones: a little wooden marimba.
     Wood,
-    /// Three detuned saws that swell in and fade: a warm glow.
-    Pad,
     // The background music's band (music.rs):
+    /// Three detuned saws held: a warm sustained chord.
+    Warm,
     /// Soft FM electric piano.
     Keys,
     /// Round triangle bass.
     Bass,
+    /// Two-operator FM bell: a tiny music box.
+    Bell,
     /// A soft brushed tick.
     Hat,
     /// A soft, low thump.
@@ -118,8 +126,14 @@ pub(crate) enum Voice {
     Pluck,
     /// The same, brighter and ringing longer: a harp.
     Harp,
+    /// Sine with a quick sparkling overtone: a celesta.
+    Celesta,
+    /// A steel drum's round, singing tone.
+    SteelPan,
     /// A soft shaker shake.
     Shaker,
+    /// A sine bar with a soft shimmer: a vibraphone.
+    Vibe,
     /// A glassy sine with a faint fifth and octave above: the social cues' voice (cues.rs).
     Glass,
 }
@@ -130,8 +144,8 @@ pub(crate) struct Note { pub at: f64, pub hz: f64, pub len: f64, pub vol: f64, p
 pub(crate) fn n(at: f64, note: f64, len: f64, vol: f64, voice: Voice) -> Note { Note { at, hz: m(note), len, vol, voice, slide: 0.0 } }
 
 impl Voice {
-    /// One sample at phase `ph` (cycles since the note began), `t` seconds into the note.
-    fn sample(self, ph: f64, t: f64) -> f64 {
+    /// One sample at phase `ph` (cycles since the note began), `t` seconds into a note `len` long.
+    fn sample(self, ph: f64, t: f64, len: f64) -> f64 {
         match self {
             Voice::Sine => (TAU * ph).sin() * (-t * 9.0).exp(),
             Voice::Triangle => (4.0 * (ph.fract() - 0.5).abs() - 1.0) * (-t * 9.0).exp(),
@@ -139,13 +153,14 @@ impl Voice {
                 (TAU * ph).sin() * (-t * 11.0).exp() + 0.25 * (TAU * 4.0 * ph).sin() * (-t * 45.0).exp()
                     + 0.08 * (TAU * 9.8 * ph).sin() * (-t * 120.0).exp()
             }
-            Voice::Pad => {
+            Voice::Warm => {
                 let saw = |p: f64| 2.0 * p.fract() - 1.0;
-                let swell = (PI / 2.0 * (t / 0.42).min(1.0)).sin().powi(2) * if t > 0.42 { (-(t - 0.42) * 2.4).exp() } else { 1.0 };
-                (saw(ph) + saw(ph * 1.0035) + saw(ph * 0.9965)) / 3.0 * swell
+                let swell = (PI / 2.0 * (t / 0.6).min(1.0)).sin().powi(2) * ((len - t) / 0.5).clamp(0.0, 1.0);
+                (saw(ph) + saw(ph * 1.004) + saw(ph * 0.996)) / 3.0 * swell
             }
             Voice::Keys => (TAU * ph + 0.9 * (-t * 4.0).exp() * (TAU * ph).sin()).sin() * (-t * 1.6).exp(),
             Voice::Bass => (4.0 * (ph.fract() - 0.5).abs() - 1.0) * (-t * 2.2).exp(),
+            Voice::Bell => (TAU * ph + 1.6 * (-t * 7.0).exp() * (TAU * 3.5 * ph).sin()).sin() * (-t * 3.2).exp(),
             Voice::Hat => {
                 // A cheap white noise from the sample index (xorshift-style hash).
                 let mut x = (t * RATE as f64) as u64 ^ 0x9E37_79B9_7F4A_7C15;
@@ -154,6 +169,14 @@ impl Voice {
             }
             Voice::Pluck => (1..=6).map(|k| (TAU * k as f64 * ph).sin() / k as f64 * (-t * (2.5 + 2.0 * k as f64)).exp()).sum::<f64>() * 0.7,
             Voice::Harp => (1..=6).map(|k| (TAU * k as f64 * ph).sin() / (k * k) as f64 * (-t * (1.2 + 0.9 * k as f64)).exp()).sum::<f64>(),
+            Voice::Celesta => ((TAU * ph).sin() + 0.3 * (TAU * 4.0 * ph).sin() * (-t * 14.0).exp()) * (-t * 3.0).exp(),
+            Voice::SteelPan => {
+                ((TAU * ph).sin() + 0.45 * (TAU * 2.0 * ph).sin() * (-t * 3.0).exp() + 0.2 * (TAU * 3.0 * ph).sin() * (-t * 7.0).exp())
+                    * (t / 0.006).min(1.0) * (-t * 2.6).exp()
+            }
+            Voice::Vibe => {
+                ((TAU * ph).sin() + 0.06 * (TAU * 4.0 * ph).sin() * (-t * 8.0).exp()) * (-t * 1.2).exp() * (1.0 + 0.25 * (TAU * 5.5 * t).sin())
+            }
             Voice::Shaker => {
                 let mut x = (t * RATE as f64) as u64 ^ 0xD1B5_4A32_D192_ED03;
                 x ^= x << 13; x ^= x >> 7; x ^= x << 17;
@@ -201,10 +224,10 @@ fn mix(notes: &[Note], pcm: &mut [f32]) {
             let t = k as f64 / rate;
             // Slides glide up `slide` semitones over the first 35 ms; held voices drift with a slow gentle vibrato.
             let mut hz = note.hz * 2f64.powf(note.slide * (t / 0.035).min(1.0) / 12.0);
-            if let Voice::Pad = note.voice { hz *= 1.0 + 0.003 * (TAU * 5.0 * t).sin() }
+            if let Voice::Warm = note.voice { hz *= 1.0 + 0.003 * (TAU * 5.0 * t).sin() }
             ph += hz / rate;
             let edges = (t * 400.0).min(1.0) * ((note.len - t) * 200.0).min(1.0); // no clicks at either end
-            pcm[(start + k) % frames] += (note.voice.sample(ph, t) * note.vol * edges) as f32;
+            pcm[(start + k) % frames] += (note.voice.sample(ph, t, note.len) * note.vol * edges) as f32;
         }
     }
 }
@@ -219,25 +242,45 @@ fn low_pass(mut pcm: Vec<f32>, cutoff: f64, looped: bool) -> Vec<f32> {
     pcm
 }
 
+/// Fades a jingle's last 0.4 s to silence, so a ringing tail ends softly instead of being cut.
+pub(crate) fn ring_out(mut pcm: Vec<f32>) -> Vec<f32> {
+    let fade = (0.4 * RATE as f64) as usize;
+    let len = pcm.len();
+    for (i, v) in pcm.iter_mut().enumerate().skip(len.saturating_sub(fade)) {
+        let x = (len - i) as f32 / fade as f32;
+        *v *= x * x;
+    }
+    pcm
+}
+
+/// A note that slides up `slide` semitones as it starts.
+pub(crate) fn bend(at: f64, note: f64, len: f64, vol: f64, voice: Voice, slide: f64) -> Note { Note { slide, ..n(at, note, len, vol, voice) } }
+
+fn jingle(notes: &[Note], cutoff: f64, peak: f32) -> Vec<f32> { ring_out(render(notes, cutoff, peak)) }
+
+/// A soft "found it": a short pickup up a fourth onto a held note.
+fn found_it() -> Vec<f32> {
+    jingle(&[n(0.0, 76.0, 0.09, 0.8, Voice::Triangle), n(0.09, 81.0, 0.5, 1.0, Voice::Triangle), n(0.09, 69.0, 0.5, 0.35, Voice::Sine)], 2800.0, 0.12)
+}
+
+/// Two bubbles rising, the second a fourth higher, and a faint sparkle.
+fn dewdrop_pair() -> Vec<f32> {
+    jingle(&[bend(0.0, 72.0, 0.18, 0.9, Voice::Triangle, 5.0), bend(0.13, 77.0, 0.24, 1.0, Voice::Triangle, 7.0), n(0.28, 89.0, 0.5, 0.25, Voice::Sine)], 2800.0, 0.12)
+}
+
+/// A little hop: up a fifth, then landing on the octave.
+fn hop() -> Vec<f32> {
+    jingle(&[n(0.0, 67.0, 0.12, 0.9, Voice::Triangle), n(0.1, 74.0, 0.12, 0.9, Voice::Triangle), n(0.2, 79.0, 0.35, 1.0, Voice::Triangle)], 2600.0, 0.12)
+}
+
+/// Two bird chirps, low and full enough to be hard to miss.
+fn chirp_warm() -> Vec<f32> {
+    jingle(&[bend(0.0, 79.0, 0.14, 1.0, Voice::Triangle, 3.0), bend(0.12, 84.0, 0.32, 1.0, Voice::Triangle, 2.0)], 2800.0, 0.12)
+}
+
 /// Four round little bloops that each slide up as they pop, with a hop before the last, higher one.
 fn bubbles() -> Vec<f32> {
     let bloop = |at, note, len| Note { slide: 5.0, ..n(at, note, len, 1.0, Voice::Triangle) };
     let notes = [bloop(0.0, 69.0, 0.12), bloop(0.1, 74.0, 0.12), bloop(0.2, 71.0, 0.14), bloop(0.38, 78.0, 0.4)];
     render(&notes, 3000.0, 0.12)
-}
-
-/// Wooden mallets skipping down in triplets, a breath, then a hop up to a low-doubled C.
-fn marimba() -> Vec<f32> {
-    let notes = [
-        n(0.0, 79.0, 0.3, 1.0, Voice::Wood), n(0.09, 77.0, 0.3, 0.9, Voice::Wood), n(0.18, 76.0, 0.3, 0.9, Voice::Wood),
-        n(0.36, 79.0, 0.3, 0.9, Voice::Wood), n(0.45, 84.0, 0.5, 1.0, Voice::Wood), n(0.45, 72.0, 0.5, 0.6, Voice::Wood),
-    ];
-    render(&notes, 4000.0, 0.13)
-}
-
-/// A soft warm chord (Fmaj7) that swells in and fades, with one faint chime at its height.
-fn glow() -> Vec<f32> {
-    let mut notes: Vec<Note> = [53.0, 65.0, 69.0, 72.0, 76.0].iter().map(|&k| n(0.0, k, 1.25, if k < 60.0 { 0.6 } else { 0.8 }, Voice::Pad)).collect();
-    notes.push(n(0.4, 81.0, 0.6, 0.25, Voice::Sine));
-    render(&notes, 1400.0, 0.08)
 }

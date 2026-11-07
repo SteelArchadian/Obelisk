@@ -9,7 +9,7 @@
   import { app, toast, toastError } from "./state.svelte";
   import { syncInstances } from "./install";
   import { resetCfSearch } from "./cf";
-  import { settings, saveSettings, THEMES, JINGLES, TRACKS, CUES, UI_SETS, applyTheme } from "./settings.svelte";
+  import { settings, saveSettings, THEMES, JINGLES, TRACKS, CUES, UI_SETS, SOUND_THEMES, SOUND_SLOTS, slotSources, soundSource, applyTheme } from "./settings.svelte";
   import { music } from "./player.svelte";
   import { uiSound, typeSound } from "./uisound.svelte";
   import Resolution from "./Resolution.svelte";
@@ -20,6 +20,24 @@
   getVersion().then((v) => (version = v)).catch(() => {});
   let updateState = $state<"" | "checking" | "current" | "installing">("");
   let found = $state<SelfUpdate | null>(null);
+  /** A theme sets every sound at once (the update sound too, unless that's off); custom starts from what plays now. */
+  function pickSoundTheme(next: string) {
+    if (next === "custom") settings.soundPicks = Object.fromEntries(SOUND_SLOTS.map(([slot]) => [slot, soundSource(slot)]));
+    else if (next !== "classic" && settings.updateJingle !== "off") settings.updateJingle = next;
+    else if (next === "classic" && SOUND_THEMES.some((t) => t[0] === settings.updateJingle)) settings.updateJingle = JINGLES[0][0];
+    settings.soundTheme = next;
+    saveSettings();
+    uiSound("open", undefined, true);
+  }
+
+  /** Plays one custom-mode slot's current pick. */
+  function playSlot(slot: string) {
+    const source = soundSource(slot);
+    if (slot === "type") typeSound("key", "a", true, source);
+    else if (CUES.some((c) => c[0] === slot)) invoke("cue_preview", { id: slot, theme: source }).catch(toastError);
+    else uiSound(slot as "hover", source, true);
+  }
+
   async function checkUpdates() {
     updateState = "checking";
     found = null;
@@ -280,6 +298,29 @@
       <label class="row-check"><input type="checkbox" bind:checked={settings.muteInactive} onchange={saveSettings} /> Mute when Obelisk isn't the active window
         <small class="muted">Music, the update sound, alerts and menu sounds all hold back while another window is in front.</small></label>
 
+      <h2>Sound theme</h2>
+      <div class="field">
+        <label class="row-check">Theme
+          <select class="select" value={settings.soundTheme} onchange={(e) => pickSoundTheme(e.currentTarget.value)} aria-label="Sound theme">
+            <option value="classic">Classic</option>
+            {#each SOUND_THEMES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            <option value="custom">Custom: pick each sound</option>
+          </select></label>
+        <small class="muted">One instrument for the update sound, menu, typing and alert sounds. Music is picked on its own below; each theme has a track of the same name.</small>
+        {#if settings.soundTheme === "custom"}
+          <div style="display: grid; grid-template-columns: max-content auto auto; gap: 2px 12px; align-items: center; justify-content: start;">
+            {#each SOUND_SLOTS as [slot, label] (slot)}
+              <span>{label}</span>
+              <select class="select" value={soundSource(slot)} aria-label="{label} sound"
+                onchange={(e) => { settings.soundPicks = { ...settings.soundPicks, [slot]: e.currentTarget.value }; saveSettings(); playSlot(slot); }}>
+                {#each slotSources(slot) as [id, name] (id)}<option value={id}>{name}</option>{/each}
+              </select>
+              <button class="ghost" data-quiet onclick={() => playSlot(slot)}>Play</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
       <h2>Background music</h2>
       <label class="toggle-row">
         <span><strong>Background music</strong><small>Soft music while you browse: Obelisk's own original tracks, or your own music files. Pause it any time with the note on the left.</small></span>
@@ -307,6 +348,7 @@
         <div class="row-buttons">
           <select class="select" bind:value={settings.updateJingle} onchange={saveSettings} aria-label="Sound after an update">
             {#each JINGLES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            {#each SOUND_THEMES as [id, label] (id)}<option value={id}>{label} theme</option>{/each}
             <option value="random">A different one each time</option>
             <option value="off">None</option>
           </select>
@@ -347,15 +389,17 @@
       </label>
       {#if settings.uiSounds.on}
         <div class="field">
-          <label class="row-check">Style
-            <select class="select" bind:value={settings.uiSounds.set} onchange={() => { saveSettings(); uiSound("open", settings.uiSounds.set, true); }} aria-label="Menu sound style">
-              {#each UI_SETS as [id, label] (id)}<option value={id}>{label}</option>{/each}
-            </select></label>
+          {#if settings.soundTheme === "classic"}
+            <label class="row-check">Style
+              <select class="select" bind:value={settings.uiSounds.set} onchange={() => { saveSettings(); uiSound("open", settings.uiSounds.set, true); }} aria-label="Menu sound style">
+                {#each UI_SETS as [id, label] (id)}<option value={id}>{label}</option>{/each}
+              </select></label>
+          {/if}
           <label class="row-check">Volume <input type="range" min="1" max="100" bind:value={settings.uiSounds.volume} aria-label="Menu sound volume"
-            onchange={() => { saveSettings(); uiSound("click", settings.uiSounds.set, true); }} /> {settings.uiSounds.volume}%</label>
+            onchange={() => { saveSettings(); uiSound("click", undefined, true); }} /> {settings.uiSounds.volume}%</label>
           <div class="row-buttons">
             {#each [["hover", "Point"], ["click", "Press"], ["open", "Open"], ["close", "Close"], ["tab", "Tab"]] as const as [kind, label] (kind)}
-              <button class="ghost" data-quiet onclick={() => uiSound(kind, settings.uiSounds.set, true)}>{label}</button>
+              <button class="ghost" data-quiet onclick={() => uiSound(kind, undefined, true)}>{label}</button>
             {/each}
           </div>
         </div>

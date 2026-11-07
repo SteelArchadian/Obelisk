@@ -1,8 +1,10 @@
 // Menu sounds (Settings → Sound → Menu sounds): a hover tick, a click, a rising "zoom in" when a modpack or project page
 // opens, a falling one when it closes, and a two-note blip on tabs and pages. Small console-menu sounds in spirit (user,
 // 2026-11-06: "like the DS / Wii menus"), all synthesized here with WebAudio, so every sound is original and nothing ships.
-// Typing sounds too (user: "super light, minimal, and playful"), with their own switch and volume.
-import { settings, soundGain } from "./settings.svelte";
+// Typing sounds too (user: "super light, minimal, and playful"), with their own switch and volume. A sound theme's
+// versions are synthesized in Rust (sfx.rs), fetched once as WAV and kept decoded here.
+import { invoke } from "@tauri-apps/api/core";
+import { settings, soundGain, soundSource, UI_SETS } from "./settings.svelte";
 import { app } from "./state.svelte";
 
 export type UiSound = "hover" | "click" | "open" | "close" | "tab";
@@ -46,11 +48,48 @@ const SETS: Record<string, Record<UiSound, Tone[]>> = {
   },
 };
 
-/** Plays one menu sound, if menu sounds are on and the window is in front (or the user is previewing in Settings). */
-export function uiSound(kind: UiSound, set = settings.uiSounds.set, force = false) {
+/** Plays one menu sound, if menu sounds are on and the window is in front (or the user is previewing in Settings).
+ *  `source` is a menu style or a sound theme; by default the one settings pick for this kind. */
+export function uiSound(kind: UiSound, source = soundSource(kind), force = false) {
   if (!force && (!settings.uiSounds.on || (settings.muteInactive && !document.hasFocus()))) return;
   // Menu sounds sit a little under the other sounds at the same slider position.
-  playTones((SETS[set] ?? SETS.soft)[kind], soundGain(settings.uiSounds.volume) * 0.6);
+  const gain = soundGain(settings.uiSounds.volume) * 0.6;
+  if (UI_SETS.some((s) => s[0] === source)) playTones((SETS[source] ?? SETS.soft)[kind], gain);
+  else playTheme(source, kind, gain * THEME_LIFT);
+}
+
+/** Theme sounds are rendered at their final quiet level; this lifts them to sit with the WebAudio tones. */
+const THEME_LIFT = 6;
+const buffers = new Map<string, Promise<AudioBuffer | null>>();
+
+/** A theme's sound, decoded once and kept. */
+function themeBuffer(theme: string, kind: string) {
+  const id = `${theme}/${kind}`;
+  let b = buffers.get(id);
+  if (!b) {
+    b = invoke<ArrayBuffer>("ui_sfx", { theme, kind }).then((wav) => (ctx ??= new AudioContext()).decodeAudioData(wav)).catch(() => null);
+    buffers.set(id, b);
+  }
+  return b;
+}
+
+/** Plays a theme's sound, each `rates` entry a copy at that speed (pitch) and delay. */
+async function playTheme(theme: string, kind: string, gain: number, rates: [number, number][] = [[1, 0]]) {
+  const buf = await themeBuffer(theme, kind);
+  if (!buf || !ctx) return;
+  try {
+    if (ctx.state === "suspended") void ctx.resume();
+    const out = ctx.createGain();
+    out.gain.value = gain;
+    out.connect(ctx.destination);
+    for (const [rate, at] of rates) {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate;
+      src.connect(out);
+      src.start(ctx.currentTime + 0.005 + at);
+    }
+  } catch { /* no audio device: stay silent */ }
 }
 
 function playTones(tones: Tone[], gain: number) {
@@ -79,11 +118,19 @@ function typeTones(kind: TypeSound, key: string): Tone[] {
   }
 }
 
-/** One typing sound, if typing sounds are on and the window is in front (or the user is previewing in Settings). */
-export function typeSound(kind: TypeSound, key = "a", force = false) {
+/** Pentatonic steps for a theme's typing tick, played faster for higher notes. */
+const KEY_RATES = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3];
+
+/** One typing sound, if typing sounds are on and the window is in front (or the user is previewing in Settings).
+ *  `source` is "tick" or a sound theme; by default the one settings pick. */
+export function typeSound(kind: TypeSound, key = "a", force = false, source = soundSource("type")) {
   if (!force && (!settings.typingSounds.on || (settings.muteInactive && !document.hasFocus()))) return;
   // Lighter still than the menu sounds: a keystroke is the most frequent sound there is.
-  playTones(typeTones(kind, key), soundGain(settings.typingSounds.volume) * 0.4);
+  const gain = soundGain(settings.typingSounds.volume) * 0.4;
+  if (source === "tick") return playTones(typeTones(kind, key), gain);
+  const rates: [number, number][] = kind === "key" ? [[KEY_RATES[key.charCodeAt(0) % KEY_RATES.length], 0]]
+    : kind === "space" ? [[0.75, 0]] : kind === "erase" ? [[0.84, 0]] : [[1, 0], [1.5, 0.04]];
+  void playTheme(source, "type", gain * THEME_LIFT, rates);
 }
 
 /** Where typing makes sound: text boxes, never password fields (their rhythm shouldn't be heard). */

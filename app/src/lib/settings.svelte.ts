@@ -46,7 +46,7 @@ type Settings = {
   shadersOffAtStart: boolean;
   /** Optional integrations, off until ticked in Settings → Plugins. */
   plugins: { lightning: boolean };
-  /** The jingle on the first start after an update (sound.rs): one of JINGLES, "random" or "off". */
+  /** The jingle on the first start after an update (sound.rs): one of JINGLES (a sound theme's own too), "random" or "off". */
   updateJingle: string;
   /** Settings → Sound volumes are 0-100 on the scale soundGain gives. */
   jingleVolume: number;
@@ -58,17 +58,33 @@ type Settings = {
   cues: { on: boolean; volume: number; dnd: boolean; muted: string[] };
   /** Menu clicks, hover ticks and open/close sounds (uisound.svelte.ts), in one of UI_SETS. */
   uiSounds: { on: boolean; volume: number; set: string };
+  /** Where the menu, typing and alert sounds come from (sfx.rs): "classic" (the menu style above, the typing tick and
+   *  the glass chimes), one of SOUND_THEMES for all of them, or "custom", each from its pick in `soundPicks`. */
+  soundTheme: string;
+  /** Custom mode: a source per SOUND_SLOTS id (a menu style, "tick", "chimes" or a theme). */
+  soundPicks: Record<string, string>;
   /** 2 since the quieter volume scale (2026-11-06); older saves get the new sound defaults once. */
   soundScale: number;
 };
 
 /** The update jingles sound.rs synthesizes, by setting id. */
 export const JINGLES: [string, string][] = [
-  ["glow", "Glow"], ["bubbles", "Bubbles"], ["marimba", "Marimba"],
+  ["found-it", "Found It"], ["dewdrop-pair", "Dewdrop"], ["hop", "Hop"], ["chirp-warm", "Chirp"], ["bubbles", "Bubbles"],
+];
+
+/** The sound themes sfx.rs synthesizes, by id. Each shares its name with a track (Rainy Day plays Puddle). */
+export const SOUND_THEMES: [string, string][] = [
+  ["rainy-day", "Rainy Day"], ["boutique", "Boutique"], ["lounge-keys", "Lounge Keys"], ["island", "Island"], ["crystal", "Crystal"],
+  ["bubblegum", "Bubblegum"],
 ];
 
 /** Obelisk's own background music, which music.rs synthesizes, by setting id. */
-export const TRACKS: [string, string][] = [["lounge", "Lounge"], ["shopping", "Window Shopping"], ["puddle", "Puddle"], ["boutique", "Boutique"]];
+export const TRACKS: [string, string][] = [
+  ["lounge", "Lounge"], ["shopping", "Window Shopping"], ["puddle", "Puddle"], ["boutique", "Boutique"], ["drizzle", "Drizzle"],
+  ["after-hours", "After Hours"], ["after-hours-harp", "After Hours: harp"], ["after-hours-keys", "After Hours: keys"],
+  ["velvet", "Velvet"], ["starlit", "Starlit"], ["breeze", "Breeze"], ["lounge-keys", "Lounge Keys"], ["island", "Island"],
+  ["crystal", "Crystal"], ["bubblegum", "Bubblegum"],
+];
 
 /** The social alert sounds cues.rs plays, by id, in its order. */
 export const CUES: [string, string][] = [
@@ -80,6 +96,24 @@ export const CUES: [string, string][] = [
 
 /** The menu sound sets uisound.svelte.ts synthesizes, by setting id. */
 export const UI_SETS: [string, string][] = [["soft", "Soft"], ["glass", "Glass"], ["bubble", "Bubble"]];
+
+/** Every sound custom mode picks on its own: the menu sounds, typing, then each alert. */
+export const SOUND_SLOTS: [string, string][] = [
+  ["hover", "Point"], ["click", "Press"], ["open", "Open"], ["close", "Close"], ["tab", "Tab"], ["type", "Typing"], ...CUES,
+];
+
+/** The sources a slot can take: its classic sound(s), then every theme. */
+export function slotSources(slot: string): [string, string][] {
+  const classic: [string, string][] = slot === "type" ? [["tick", "Tick"]] : CUES.some((c) => c[0] === slot) ? [["chimes", "Chimes"]] : UI_SETS;
+  return [...classic, ...SOUND_THEMES];
+}
+
+/** Where one slot's sound comes from now. */
+export function soundSource(slot: string): string {
+  const classic = slot === "type" ? "tick" : CUES.some((c) => c[0] === slot) ? "chimes" : settings.uiSounds.set;
+  if (settings.soundTheme === "custom") return settings.soundPicks[slot] ?? classic;
+  return SOUND_THEMES.some((t) => t[0] === settings.soundTheme) ? settings.soundTheme : classic;
+}
 
 /** A 0-100 volume setting as a gain. Squared, so the slider spreads the quiet end; 50% is what 7.5% used to be
  *  (user, 2026-11-06: the old 5-10% is the new 50%). Matches gain() in sound.rs. */
@@ -110,6 +144,8 @@ const DEFAULTS: Settings = {
   muteInactive: true,
   cues: { on: true, volume: 50, dnd: false, muted: [] },
   uiSounds: { on: true, volume: 50, set: "soft" },
+  soundTheme: "classic",
+  soundPicks: {},
   soundScale: 2,
 };
 
@@ -133,7 +169,10 @@ export async function loadSettings() {
   }
   delete (settings.music as { focusOnly?: boolean }).focusOnly;
   if (!TRACKS.some((t) => t[0] === settings.music.track) && settings.music.track !== "all") settings.music.track = DEFAULTS.music.track;
-  if (!JINGLES.some((j) => j[0] === settings.updateJingle) && !["random", "off"].includes(settings.updateJingle)) settings.updateJingle = DEFAULTS.updateJingle;
+  // Glow and Marimba are gone (user, 2026-11-06): their fans get Found It.
+  if (["glow", "marimba"].includes(settings.updateJingle)) settings.updateJingle = "found-it";
+  if (![...JINGLES, ...SOUND_THEMES].some((j) => j[0] === settings.updateJingle) && !["random", "off"].includes(settings.updateJingle)) settings.updateJingle = DEFAULTS.updateJingle;
+  if (!["classic", "custom"].includes(settings.soundTheme) && !SOUND_THEMES.some((t) => t[0] === settings.soundTheme)) settings.soundTheme = "classic";
   if (!THEMES.some((t) => t.id === settings.theme)) settings.theme = "obelisk";
   applyTheme();
 }
