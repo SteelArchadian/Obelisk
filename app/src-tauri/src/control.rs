@@ -1643,6 +1643,14 @@ const TEST_RENDER_DISTANCE: &str = "6";
 
 /// Properties that make a launch an FPS measurement (Lightning captures, pack and load benchmarks).
 const FPS_PROPS: &[&str] = &["-Dlightning.capture", "-Dpackbench.", "-Dspeedloader.autobench"];
+/// Packbench settings that only set up a picture (a scene, a world, screenshots), not a measurement: they need a drawn
+/// frame (parked off-screen, full size) but run like any quick test (Overseer, 2026-11-07).
+const CAPTURE_PROPS: &[&str] = &["-Dpackbench.shots", "-Dpackbench.scene", "-Dpackbench.world", "-Dpackbench.tag", "-Dpackbench.idleTicks"];
+
+/// Whether this JVM argument makes the run an FPS measurement.
+fn fps_prop(a: &str) -> bool {
+    FPS_PROPS.iter().any(|p| a.starts_with(p)) && !CAPTURE_PROPS.iter().any(|p| a.starts_with(p))
+}
 /// The frame cap an FPS run uses: high enough that no laptop or desktop here reaches it, so the numbers are the game's.
 const FPS_RUN_MAX: &str = "260";
 
@@ -1971,11 +1979,12 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let perf_run = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
     // game_test records Lightning on every run it can: that alone doesn't make it a measured run.
     let auto_profile = args.get("auto_profile").and_then(|v| v.as_bool()).unwrap_or(false);
-    let fps_props = extra.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)) && !a.starts_with("-Dspeedloader.autobench")
+    let fps_props = extra.iter().any(|a| fps_prop(a) && !a.starts_with("-Dspeedloader.autobench")
         && !(auto_profile && a.starts_with("-Dlightning.")));
     let measured = perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false);
     // Frame times and pictures need a drawn frame: those windows park off-screen instead of minimized.
-    let render = measured || args.get("render").and_then(|v| v.as_bool()).unwrap_or(false);
+    let render = measured || extra.iter().any(|a| CAPTURE_PROPS.iter().any(|p| a.starts_with(p)))
+        || args.get("render").and_then(|v| v.as_bool()).unwrap_or(false);
     let cap = max_hold(&purpose, measured);
     let mut hold = None;
     for a in &extra {
@@ -2120,7 +2129,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         return;
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
-    let fps_run = perf || cmd.iter().any(|a| FPS_PROPS.iter().any(|p| a.starts_with(p)));
+    let fps_run = perf || cmd.iter().any(|a| fps_prop(a));
     let stop_if_playing = stop_if_playing || fps_run;
     let caps = std::sync::Mutex::new(None);
     let run_set = std::sync::Mutex::new(None);

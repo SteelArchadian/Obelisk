@@ -215,7 +215,9 @@ pub fn serve() {
         if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
             break;
         }
-        if method == "tools/call" && listed.is_some() {
+        // Also when the list came from this helper because Obelisk wasn't running at connect time (listed is None):
+        // otherwise that session would keep the helper's own, possibly older, list until it reconnects.
+        if method == "tools/call" {
             let now = call("ping", &json!({})).ok().and_then(|v| v["version"].as_str().map(String::from));
             if now.is_some() && now != listed {
                 listed = now;
