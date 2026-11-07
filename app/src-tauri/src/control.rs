@@ -1346,6 +1346,12 @@ fn user_playing() -> Option<String> {
     Some(String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// A "fullscreen <app> pid N" entry for a browser or video player: what the user watches, not a game they play.
+fn watching_media(entry: &str) -> bool {
+    const MEDIA: &[&str] = &["opera", "chrome", "msedge", "firefox", "brave", "vivaldi", "vlc", "mpv", "mpc-hc64", "potplayermini64", "netflix"];
+    entry.strip_prefix("fullscreen ").and_then(|r| r.split_whitespace().next()).is_some_and(|app| MEDIA.contains(&app.to_ascii_lowercase().as_str()))
+}
+
 /// Why the user isn't away (benchlock.py away: input in the last 10 min, or a game), or None when they are.
 fn user_not_away() -> Option<String> {
     let o = bench(&["away"]).output().ok()?;
@@ -2130,7 +2136,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
     let fps_run = perf || cmd.iter().any(|a| fps_prop(a));
-    let stop_if_playing = stop_if_playing || fps_run;
+    // Joining a world (autobench) uncaps frames like an FPS run, but isn't a measurement: the user playing doesn't void it.
+    let stop_if_playing = stop_if_playing || perf || cmd.iter().any(|a| fps_prop(a) && !a.starts_with("-Dspeedloader.autobench"));
     let caps = std::sync::Mutex::new(None);
     let run_set = std::sync::Mutex::new(None);
     let result = (|| -> Result<String, String> {
@@ -2192,7 +2199,9 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         if stop_if_playing {
             let (playing, watching) = (playing.clone(), watching.clone());
             std::thread::spawn(move || while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(p) = if exclusive { user_not_away() } else { user_playing() } { *playing.lock().expect("playing") = Some(p); break }
+                // A quick run only steps aside for a game: a fullscreen browser or video player isn't one (Boundless, 2026-11-07).
+                let p = if exclusive { user_not_away() } else { user_playing().filter(|p| p.split("; ").any(|e| !watching_media(e))) };
+                if let Some(p) = p { *playing.lock().expect("playing") = Some(p); break }
                 std::thread::sleep(Duration::from_secs(10));
             });
         }
