@@ -65,20 +65,25 @@
   let newCrash = $state(false);
   /** The same mod installed twice (usually once from each site): the game won't start like that. */
   let dupes = $derived(dupeState[current.id]?.dupes ?? []);
+  /** The most copies of any one duplicated mod (the wording differs for two copies and for more). */
+  let most = $derived(Math.max(2, ...dupes.map((d) => d.files.length)));
   /** "Not now" hides the warning until the profile is opened again; Play stays blocked. */
   let dupesHiddenFor = $state("");
   let dupeBusy = $state(false);
   const SITE: Record<string, string> = { modrinth: "Modrinth", curseforge: "CurseForge", local: "added by hand" };
   const dupeItem = (file: string) => content.mods.find((i) => i.fileName === file);
-  /** Move one copy to the profile's trash (restorable from there). */
-  async function removeDupe(file: string) {
+  /** Keep one copy and move the others to the profile's trash (restorable from there). */
+  async function keepDupe(files: string[], keep: string) {
     const id = current.id;
-    const it = dupeItem(file);
+    const extra = files.filter((f) => f !== keep);
     dupeBusy = true;
     let failed = "";
     try {
-      await invoke("delete_content", { instanceId: id, kind: "mods", fileName: file, name: it?.name ?? file, version: it?.version ?? "", authors: it?.authors ?? "", source: it?.source ?? "local" });
-      toast(`Moved ${file} to the trash.`);
+      for (const file of extra) {
+        const it = dupeItem(file);
+        await invoke("delete_content", { instanceId: id, kind: "mods", fileName: file, name: it?.name ?? file, version: it?.version ?? "", authors: it?.authors ?? "", source: it?.source ?? "local" });
+      }
+      toast(extra.length === 1 ? `Moved ${extra[0]} to the trash.` : `Kept ${keep}; moved ${extra.length} other copies to the trash.`);
     } catch (e) {
       failed = String(e);
     }
@@ -732,8 +737,9 @@
   {#if flagged(current.id) && dupesHiddenFor !== current.id}
     <div class="dupes-back" role="presentation">
       <div class="dupes" role="alertdialog" aria-labelledby="dupes-title">
-        <div class="dupes-title" id="dupes-title">⚠ You have {dupes.length === 1 ? "a duplicate mod" : `${dupes.length} duplicate mods`}. Remove one copy.</div>
-        <p>The same mod is installed twice, usually once from Modrinth and once from CurseForge. The game won't start like this, so Play is blocked. Which copy would you like to remove?</p>
+        <div class="dupes-title" id="dupes-title">⚠ You have {dupes.length === 1 ? "a duplicate mod" : `${dupes.length} duplicate mods`}. Keep one copy{dupes.length === 1 ? "" : " of each"}.</div>
+        <p>The same mod is installed {most === 2 ? "twice, usually once from Modrinth and once from CurseForge" : `${most} times`}. The game won't start like this, so Play is blocked.
+          Which copy would you like to keep? The {most === 2 ? "other one goes" : "others go"} to the trash, where you can restore {most === 2 ? "it" : "them"}.</p>
         {#each dupes as d (d.modId)}
           <div class="dupe">
             <strong>{dupeItem(d.files[0])?.name || d.modId}</strong>
@@ -741,7 +747,7 @@
               {@const it = dupeItem(f)}
               <div class="dupe-file">
                 <span><code>{f}</code>{#if it} <small>· {SITE[it.source] ?? it.source}{it.version ? ` · ${it.version}` : ""}</small>{/if}</span>
-                <button class="btn danger" disabled={dupeBusy} onclick={() => removeDupe(f)}>Remove this one</button>
+                <button class="btn" disabled={dupeBusy} onclick={() => keepDupe(d.files, f)}>Keep this one</button>
               </div>
             {/each}
           </div>
@@ -756,8 +762,8 @@
     <div class="error" role="status">
       {#if dupeState[current.id]?.ignored}Ignoring {dupes.length === 1 ? "a duplicate mod" : `${dupes.length} duplicate mods`} ({dupes.map((d) => d.modId).join(", ")}); the game may not start.
         <button class="link" onclick={() => ignoreDupes(current.id, false)}>Stop ignoring</button>
-      {:else}{dupes.length === 1 ? "A mod is" : `${dupes.length} mods are`} installed twice, so Play is blocked.
-        <button class="link" onclick={() => (dupesHiddenFor = "")}>Choose which to remove</button>
+      {:else}{dupes.length === 1 ? "A mod is" : `${dupes.length} mods are`} installed more than once, so Play is blocked.
+        <button class="link" onclick={() => (dupesHiddenFor = "")}>Choose which to keep</button>
       {/if}
     </div>
   {/if}
@@ -1190,7 +1196,7 @@
   .dupes .dupe-file small { opacity: 0.8; }
   .dupes .btn { border-radius: 6px; padding: 7px 14px; font-weight: 600; cursor: pointer; }
   .dupes .btn:disabled { opacity: 0.6; cursor: default; }
-  .dupes .btn.danger { background: #ff4b4b; color: #fff; border: 0; white-space: nowrap; }
+  .dupes .dupe-file .btn { background: #3b82f6; color: #fff; border: 0; white-space: nowrap; }
   .dupes .dupe-actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-top: 16px; }
   .dupes .link, .dupes .btn.ghost { color: #fff; }
   .dupes .btn.ghost { background: transparent; border: 1px solid rgb(255 255 255 / 0.5); }

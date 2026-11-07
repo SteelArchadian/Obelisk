@@ -59,6 +59,8 @@ export function installDevMock() {
       case "delete_content": trash = [...trash, { id: `${Date.now()}`, kind: args.kind, fileName: args.fileName, name: args.name, version: args.version, authors: args.authors, source: args.source, deletedMs: Date.now() }]; return null;
       case "check_updates": return mods.map((m, i) => ({ kind: "mods", fileName: m.fileName, provider: m.source, projectId: String(i), current: "1", downloads: 0, env: ["client", "both", "server", ""][i % 4], update: i % 3 === 0 ? { id: "2", name: "new", fileName: "x.jar", blocked: false } : null }));
       case "mod_configs": return [{ path: "config/create-client.toml", size: 400 }, { path: "config/create-common.toml", size: 100 }, { path: "config/entity_model_features.json", size: 100 }, { path: "defaultconfigs/create-server.toml", size: 100 }];
+      // Set window.__mockDupes = true and reopen a profile to see the duplicate-mod dialog.
+      case "duplicate_mods": return { dupes: (window as any).__mockDupes ? [{ modId: "jei", files: ["jei-1.3.0.jar", "jei-1.2.0.jar", "jei-1.1.0.jar"] }] : [], ignored: false };
       case "game_ids": return {
         entity: [["astikorcartsredux:supply_cart", "Supply Cart"], ["minecraft:camel", "Camel"], ["minecraft:donkey", "Donkey"], ["minecraft:horse", "Horse"], ["minecraft:mule", "Mule"], ["minecraft:skeleton_horse", "Skeleton Horse"], ["minecraft:sniffer", "Sniffer"], ["minecraft:zombie_horse", "Zombie Horse"]],
         block: [["minecraft:coarse_dirt", "Coarse Dirt"], ["minecraft:dirt", "Dirt"], ["minecraft:dirt_path", "Dirt Path"], ["minecraft:grass_block", "Grass Block"], ["minecraft:rooted_dirt", "Rooted Dirt"]],

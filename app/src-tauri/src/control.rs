@@ -1359,7 +1359,7 @@ fn drop_tickets(owner: &str) {
     for e in std::fs::read_dir(bench_root().join("BENCH.queue")).into_iter().flatten().flatten() {
         let t = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
         if t.is_some_and(|t| t["owner"].as_str() == Some(owner) && t["pid"].as_u64() == Some(me)) {
-            let _ = std::fs::remove_file(e.path());
+            let _ = trash::delete(e.path());
         }
     }
 }
@@ -2097,7 +2097,12 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 } else if !exclusive && !perf.is_empty() {
                     format!("waiting for the bench lock: perf runs go first while the user is away ({})", perf.join(", "))
                 } else {
-                    format!("waiting for the bench lock (a game may still be running in {copy})")
+                    // Otherwise it's first come, first served: name the runs queued ahead of this one.
+                    let waiting: Vec<&str> = q["waiting"].as_array().into_iter().flatten().filter_map(|w| w["owner"].as_str()).collect();
+                    match waiting.iter().position(|o| *o == lock.as_str()) {
+                        Some(n) if n > 0 => format!("waiting for the bench lock: {n} run{} queued ahead, first {}", if n == 1 { "" } else { "s" }, waiting[0]),
+                        _ => format!("waiting for the bench lock (checking that no game is running in {copy})"),
+                    }
                 })
             }
             _ => None,
