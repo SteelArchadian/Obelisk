@@ -1558,6 +1558,11 @@ fn test_rules(dir: &Path) {
     // Windowed: a borderless or fullscreen game copied from the play instance covers the desktop and
     // glitches Wallpaper Engine while it's parked off-screen.
     let _ = prism::window::set(dir, prism::window::Mode::Windowed);
+    // Configured Defaults puts its own options.txt back over the game's: a fullscreen:true there put a parked test
+    // window fullscreen on the user's monitor (Overseer, 2026-11-07).
+    let defaults = dir.join("configureddefaults").join("options.txt");
+    if defaults.is_file() { set_option(&defaults, "fullscreen", "false"); }
+    set_option(&options, "fullscreen", "false");
     afk_cinema_off(dir);
     essential_no_update(dir);
 }
