@@ -597,6 +597,51 @@ fn gc_flags(args: &Value) -> Result<Option<Vec<String>>, String> {
     Ok(Some(out))
 }
 
+/// "diag": read-only JVM diagnostics for a test copy's run: safepoint and handshake timeout prints, and -Xlog of
+/// safepoint/handshake tags to a file inside the copy (the game runs in the copy's folder, so a relative path lands there).
+/// Nothing that changes behaviour: AbortVMOnSafepointTimeout and the like are refused.
+fn diag_flags(args: &Value) -> Result<Vec<String>, String> {
+    let Some(list) = args.get("diag").filter(|v| !v.is_null()) else { return Ok(vec![]) };
+    let list = list.as_array().ok_or("\"diag\" must be a list of JVM diagnostic flags")?;
+    let ms = |v: &str| v.parse::<u32>().is_ok_and(|n| (1..=600_000).contains(&n));
+    let mut out = vec![];
+    for v in list {
+        let a = v.as_str().ok_or("\"diag\" entries must be strings")?;
+        let ok = match a {
+            "-XX:+UnlockDiagnosticVMOptions" | "-XX:+SafepointTimeout" => true,
+            _ if a.starts_with("-XX:SafepointTimeoutDelay=") => ms(&a[26..]),
+            _ if a.starts_with("-XX:HandshakeTimeout=") => ms(&a[21..]),
+            _ => xlog_ok(a),
+        };
+        if !ok {
+            return Err(format!("{a}: not an allowed diagnostic flag (allowed: -XX:+UnlockDiagnosticVMOptions, -XX:+SafepointTimeout, \
+                -XX:SafepointTimeoutDelay=<ms>, -XX:HandshakeTimeout=<ms>, -Xlog:safepoint*=info,handshake*=info[:file=<path inside the copy>[:decorators]])"));
+        }
+        out.push(a.to_string());
+    }
+    Ok(out)
+}
+
+fn xlog_ok(a: &str) -> bool {
+    let Some(rest) = a.strip_prefix("-Xlog:") else { return false };
+    let mut parts = rest.splitn(3, ':');
+    let sel = parts.next().unwrap_or("");
+    let sel_ok = !sel.is_empty() && sel.split(',').all(|s| {
+        let (tags, level) = s.split_once('=').unwrap_or((s, "info"));
+        ["info", "debug", "trace"].contains(&level)
+            && tags.trim_end_matches('*').split('+').all(|t| t == "safepoint" || t == "handshake")
+    });
+    let file_ok = match parts.next() {
+        None => true,
+        Some(o) => o.strip_prefix("file=").is_some_and(|p| {
+            !p.is_empty() && p.len() <= 120 && !p.split(['/', '\\']).any(|c| c == "..")
+                && p.chars().all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c))
+        }),
+    };
+    let deco_ok = parts.next().is_none_or(|d| d.split(',').all(|x| ["uptime", "time", "tid", "level", "tags", "uptimemillis", "utctime"].contains(&x)));
+    sel_ok && file_ok && deco_ok
+}
+
 fn jvm_props(args: &Value) -> Result<Vec<String>, String> {
     let Some(list) = args.get("jvm") else { return Ok(vec![]) };
     let list = list.as_array().ok_or("\"jvm\" must be a list of -Dmod.key=value strings")?;
@@ -651,7 +696,7 @@ fn swap_wait(dir: &Path) -> Result<(), String> {
 /// List and object arguments that came as JSON text: an assistant whose tool list predates an option (its MCP helper
 /// started before an update) sends a new list option as a string, e.g. "gc": "[\"-XX:+UseG1GC\"]".
 fn unstring(args: &Value) -> Value {
-    const STRUCTURED: &[&str] = &["gc", "options", "jvm", "add_mods", "disable_mods", "config", "at", "camera", "test_world"];
+    const STRUCTURED: &[&str] = &["gc", "diag", "options", "jvm", "add_mods", "disable_mods", "config", "at", "camera", "test_world"];
     let mut a = args.clone();
     if let Some(map) = a.as_object_mut() {
         for key in STRUCTURED {
@@ -2062,6 +2107,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         cmd.retain(|a| (!is_gc_flag(a) || a == "-XX:+UnlockExperimentalVMOptions") && !heap_flag(a).is_some_and(|(k, _)| kinds.contains(&k)));
         for (i, a) in flags.iter().enumerate() { cmd.insert(i, a.clone()) }
     }
+    for (i, a) in diag_flags(args)?.into_iter().enumerate() { cmd.insert(i, a) }
     let gc_used = gc.map(|f| f.join(" "));
     let set = run_options(args)?;
     let lock = format!("{owner} - {purpose} (obelisk)");
@@ -2992,4 +3038,19 @@ fn copy_pack(args: &Value, jobs: &Shared) -> Result<Value, String> {
         update(&jobs, id, |j| { j.state = state.into(); j.detail = detail; j.ended = Some(now()); });
     });
     Ok(json!({ "job": id, "state": "running" }))
+}
+
+#[cfg(test)]
+mod diag_tests {
+    use super::*;
+    #[test]
+    fn diag_allow_list() {
+        let ok = json!({ "diag": ["-XX:+UnlockDiagnosticVMOptions", "-XX:+SafepointTimeout", "-XX:SafepointTimeoutDelay=200",
+            "-XX:HandshakeTimeout=500", "-Xlog:safepoint*=info,handshake*=info:file=logs/safepoint.log:uptime,tid"] });
+        assert_eq!(diag_flags(&ok).unwrap().len(), 5);
+        for bad in ["-XX:+AbortVMOnSafepointTimeout", "-Xlog:gc*:file=x.log", "-Xlog:safepoint:file=../x.log",
+            "-Xlog:safepoint:file=C:/x.log", "-XX:SafepointTimeoutDelay=abc"] {
+            assert!(diag_flags(&json!({ "diag": [bad] })).is_err(), "{bad}");
+        }
+    }
 }
