@@ -6,8 +6,9 @@ launched: you can read it, and change its mods (each change takes a safety backu
 
 ## Rules
 - Make a test copy with copy_pack {from: "play", to: "<name>"}; list copies with copies.
-- Launches share one bench lock and queue. Measured runs (perf, fps, stress, dyno) wait until the user has been away
-  for 10 minutes and end "invalid" if they come back. Hold <=120 s (up to 600 s only for a non-perf "interaction" run);
+- Launches share one bench lock and queue. Comparisons (perf, a GC A/B, or ab: true for before/after) take the bench
+  alone: they wait until the user has been away for 10 minutes and end "invalid" if they come back. Other runs whose
+  result is a number (fps, Lightning captures) share the PC with at most one other game. Hold <=120 s (up to 600 s only for a non-perf "interaction" run);
   a run is killed as "overtime" at 240 s + hold.
 - Mod changes (mod_set, mod_add, mod_install, mod_update) wait for that instance's game to close.
 - Use wait (it blocks) rather than polling status. End runs with kill when no save is needed.
@@ -22,7 +23,8 @@ background: true returns the job at once; read it with game {op: result}.
   the pack can load.
 - preset "basic": visit four structures. "stress": chests, mobs, hop, flyover. "dyno": Block Dyno's heavy plan.
 - Your own world: test_world {layers [{block,height}], terrain flat|normal, border, platform, spawn, game_mode,
-  setup [commands], events [{at,every,command}]}, or world / new_world.
+  setup [commands], events [{at,every,command}]}, or world / new_world. Test worlds are frozen at noon unless setup
+  sets the time or the daylight cycle, or night: true.
 
 A scene, or any run with shot, punch or record steps, turns off for that run the mods that move the camera or slow
 the window on their own (AFK and respawn cinematics, teleport fly-ins, Dynamic FPS) and hides chat.

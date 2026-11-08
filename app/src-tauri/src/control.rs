@@ -2113,14 +2113,18 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let lock = format!("{owner} - {purpose} (obelisk)");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
-    // Only a measured run (perf, fps, stress, dyno) needs the bench to itself; anything else shares it, one run per
-    // copy. A measured run queues until the user is away and ends "invalid" when they come back (user, KB #36).
+    // A comparison (perf, a GC A/B, or "ab": before/after) needs the bench to itself: it queues until the user is
+    // away and ends "invalid" when they come back (user, KB #36). Any other run whose result is a number (fps,
+    // Lightning captures) shares the PC with at most one other game (benchlock --measured, KB #91); the rest share
+    // it, one run per copy.
     let perf = args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false);
-    let exclusive = measured;
-    let stop_if_playing = exclusive || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
+    let exclusive = measured && (perf || gc_used.is_some() || args.get("ab").and_then(|v| v.as_bool()).unwrap_or(false));
+    let measured_shared = measured && !exclusive;
+    let stop_if_playing = measured || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, render, perf, exclusive, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
-    let lock_note = if exclusive { format!("measured run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
+    let lock_note = if exclusive { format!("comparison run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
+        else if measured_shared { format!("measured run: shares the PC with at most one other game, as \"{owner} - {purpose} (obelisk)\"") }
         else { format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") };
     Ok(json!({ "job": id, "state": "queued", "lock": lock_note, "gc": reply_gc,
         "limit": format!("ended as \"{OVERTIME}\" {timeout} s after the game starts"),
@@ -2128,7 +2132,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, render: bool, perf: bool, exclusive: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
+fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, render: bool, perf: bool, exclusive: bool, measured: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
     build_world: Option<(Value, u64)>) {
     let me = std::process::id().to_string();
@@ -2136,6 +2140,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     let eta_s = eta.to_string();
     let mut acquire = vec!["acquire", &lock, "--pid", &me, "--wait", "--eta", &eta_s];
     if !exclusive { acquire.extend(["--shared", "--copy", &copy]); }
+    if measured { acquire.push("--measured"); }
     let child = bench(&acquire).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     let Ok(mut child) = child else {
         update(&jobs, id, |j| { j.state = "failed".into(); j.detail = "couldn't run benchlock.py".into(); j.ended = Some(now()); });

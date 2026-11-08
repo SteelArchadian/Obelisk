@@ -135,6 +135,13 @@ fn parse(v: &Value) -> Result<Spec, String> {
         Some(Value::Array(a)) => a.iter().enumerate().map(|(i, x)| command(x, &format!("setup[{i}]"))).collect::<Result<_, _>>()?,
         _ => return Err("setup must be a list of commands".into()),
     };
+    // Daytime unless the test says otherwise (user, KB #93): frozen at noon so shots stay readable. A setup that sets
+    // the time or the daylight cycle itself, or "night": true, keeps its own.
+    let own_time = setup.iter().any(|c: &String| c.contains("time set") || c.contains("doDaylightCycle"));
+    let mut setup = setup;
+    if !own_time && !v.get("night").and_then(Value::as_bool).unwrap_or(false) {
+        setup.splice(0..0, ["gamerule doDaylightCycle false".to_string(), "time set noon".to_string()]);
+    }
     let events = match v.get("events") {
         None | Some(Value::Null) => vec![],
         Some(Value::Array(a)) => a.iter().enumerate().map(|(i, e)| {
@@ -384,6 +391,7 @@ mod tests {
         assert!(f("build.mcfunction").contains("fill -100 119 -100 27 119 27 minecraft:barrier
 fill -100 120 -100 27 120 27 minecraft:sand"));
         assert!(f("setup.mcfunction").contains("worldborder set 64"));
+        assert!(f("setup.mcfunction").contains("time set noon"), "daytime by default");
         assert_eq!(f("event_0.mcfunction"), "summon zombie 3 121 3\n");
         assert!(f("tick.mcfunction").contains("matches 101 run function obelisk_test:event_0"));
         assert!(build(t.path(), "1.21.1", &serde_json::json!({ "events": [{ "at": 1, "command": "say a\nop me" }] }), 2).is_err());
