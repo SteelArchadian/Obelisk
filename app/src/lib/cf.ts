@@ -55,6 +55,7 @@ export function mergeHits(mr: Hit[], cf: Hit[]): Hit[] {
       m.cf_id = c.cf_id;
       m.sources = ["modrinth", "curseforge"] as Hit["sources"];
       m.downloads = Math.max(m.downloads, c.downloads);
+      m.icon_url ||= c.icon_url; // no picture on Modrinth: CurseForge's logo
     } else {
       extra.push(c);
     }

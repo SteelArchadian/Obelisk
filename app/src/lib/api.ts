@@ -118,6 +118,13 @@ export function initials(name: string) {
   return words.map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
 }
 
+/** A steady colour per name for a picture-less tile, so projects without an icon don't all look like empty boxes. */
+export function tint(name: string) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.codePointAt(0)!) % 360;
+  return `background: linear-gradient(135deg, hsl(${h} 45% 24%), hsl(${(h + 40) % 360} 50% 14%)); color: hsl(${h} 80% 78%)`;
+}
+
 export function envLabel(client: string, server: string) {
   const c = client !== "unsupported", s = server !== "unsupported";
   return c && s ? "Client and Server" : c ? "Client" : s ? "Server" : "";

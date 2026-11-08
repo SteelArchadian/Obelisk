@@ -2,6 +2,7 @@
   import { settings } from "./settings.svelte";
   import { api, compact, TYPES, type Hit, type ProjectType } from "./api";
   import { projectUrl, authorUrl } from "./links";
+  import NoIcon from "./NoIcon.svelte";
   import { app, openBrowse, pushOverlay } from "./state.svelte";
 
   type Row = { title: string; type: ProjectType; hits: Hit[] };
@@ -69,7 +70,7 @@
       <div class="strip">
         {#each row.hits as h (h.project_id)}
           <button class="card" onclick={() => pushOverlay({ kind: "project", hit: h })}>
-            <div class="art">{#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" />{/if}</div>
+            <div class="art">{#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" />{:else}<NoIcon size="40%" />{/if}</div>
             <strong data-link={projectUrl(h)} data-link-label="link">{h.title}</strong>
             <small data-link={authorUrl(h)} data-link-label="author link">By {h.author}</small>
             <small>⤓ {compact(h.downloads)}</small>

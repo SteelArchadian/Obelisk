@@ -17,6 +17,7 @@
   import { settings } from "./settings.svelte";
   import { mr, toggleFollow, openLink, cf, toggleCfFavorite } from "./account.svelte";
   import Comments from "./Comments.svelte";
+  import NoIcon from "./NoIcon.svelte";
 
   let { hit, startTab }: { hit: Hit; startTab?: ProjectTab } = $props();
 
@@ -225,7 +226,7 @@
   </div>
 
   <header class="head">
-    <div class="icon">{#if hit.icon_url}<img src={hit.icon_url} alt="" />{/if}</div>
+    <div class="icon">{#if hit.icon_url}<img src={hit.icon_url} alt="" />{:else}<NoIcon />{/if}</div>
     <div class="info">
       <div class="row1">
         <h2 data-link={siteLinks.modrinth ?? siteLinks.curseforge ?? projectUrl(hit)} data-link-label="link">{hit.title}</h2>

@@ -167,6 +167,11 @@ export function installDevMock() {
         { id: 4, html: "<p>Love the stoves!<script>alert(1)</script></p>", posted: now - 5 * 86400_000, pinned: true, author: { id: 10, username: "sam", name: "Sam" }, replies: [] },
       ] };
       case "list_accounts": return [];
+      case "mr_search": {
+        const hit = (id: string, title: string, icon: string | null) => ({ project_id: id, slug: id, title, description: "A mod.", author: "Someone", icon_url: icon, downloads: 2900, follows: 1, date_modified: new Date(now).toISOString(), date_created: "", categories: ["utility"], display_categories: ["utility"], versions: ["1.21.1"], client_side: "required", server_side: "optional", project_type: "mod" });
+        const hits = [hit("jeipp", "JEI++--", null), hit("amcdb", "AMCDB", null), hit("bastion", "Bastion Remnant Bridge Reforged", null), hit("jei", "Just Enough Items (JEI)", "https://cdn.modrinth.com/data/u6dRKJwZ/4a3f18ac0d096c9f8e9176984c44be4e58f94c89_96.webp")];
+        return { hits, total_hits: hits.length };
+      }
       case "mr_project": return { id: "LNytGWDc", slug: "create", title: "Create", description: "Aesthetic technology", project_type: "mod", body: "## Create Rotational power.\n\n<center><a href=\"https://modrinth.com/mod/accents\"><img style=\"display: inline;\" src=\"https://i.imgur.com/quXJZzx.png\" width=\"45%\" /></a></center>", gallery: [], loaders: ["neoforge"], issues_url: "github.com/Creators-of-Create/Create/issues", source_url: "https://github.com/Creators-of-Create/Create", downloads: 5_000_000, followers: 1, icon_url: "", categories: ["technology"], game_versions: ["1.21.1"], versions: [], date_modified: new Date(now).toISOString(), published: new Date(now).toISOString(), team: "t" };
       case "mr_versions": case "mr_members": return [];
       case "cross_site": return { mr: "LNytGWDc", cf: 398521 };

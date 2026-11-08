@@ -2,7 +2,7 @@
   import { crisp } from "./crisp";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ago, initials, type FileInfo, type Item } from "./api";
+  import { ago, initials, tint, type FileInfo, type Item } from "./api";
   import { app, toast, toastError } from "./state.svelte";
   import { settings } from "./settings.svelte";
   import Icon from "./Icon.svelte";
@@ -272,7 +272,7 @@
               {@const it = itemFor(s.fileName)}
               {@const info = it ? infoOf(it) : undefined}
               <div class="suspect">
-                {#if it && (icons[it.fileName] || info?.iconUrl)}<img use:crisp src={icons[it.fileName] || info?.iconUrl} alt="" />{:else}<div class="ph">{initials(it?.name ?? s.modId)}</div>{/if}
+                {#if it && (icons[it.fileName] || info?.iconUrl)}<img use:crisp src={icons[it.fileName] || info?.iconUrl} alt="" />{:else}<div class="ph" style={tint(it?.name ?? s.modId)}>{initials(it?.name ?? s.modId)}</div>{/if}
                 <div class="stext">
                   <strong>{it?.name ?? s.modId}{#if i === 0}<span class="tag">Most likely</span>{/if}{#if it && !it.enabled}<span class="tag off">Disabled</span>{/if}</strong>
                   <small>{s.reason}{#if !it} Not installed now.{/if}</small>

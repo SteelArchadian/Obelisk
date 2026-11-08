@@ -3,7 +3,7 @@
   import { crisp } from "./crisp";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { ago, api, initials, type FileInfo, type Item, type Kind, type World } from "./api";
+  import { ago, api, initials, tint, type FileInfo, type Item, type Kind, type World } from "./api";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { cached, markUpdated, recheck, setUpdating, updateState, updatesFor, updating as updatingNow } from "./updates.svelte";
   import { settings } from "./settings.svelte";
@@ -927,7 +927,7 @@
             <div class="row" data-key={keyOf(item)} class:off={!item.enabled} class:picked={selected.has(keyOf(item))} role="row" tabindex="-1" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); dateMenu = false; menu = { item, x: e.clientX, y: e.clientY, author: !!(e.target as HTMLElement).closest(".author") }; }}>
               <span><input type="checkbox" checked={selected.has(item.trashId ?? item.fileName)} onchange={() => toggleRow(item.trashId ?? item.fileName)} aria-label="Select {item.name}" /></span>
               <div class="name">
-                {#if icons[item.fileName] || f?.iconUrl}<img class="thumb" use:crisp src={icons[item.fileName] || f?.iconUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="thumb">{initials(item.name)}</div>{/if}
+                {#if icons[item.fileName] || f?.iconUrl}<img class="thumb" use:crisp src={icons[item.fileName] || f?.iconUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="thumb" style={tint(item.name)}>{initials(item.name)}</div>{/if}
                 <button class="text linkish" onclick={() => openItem(item)} title="Open project page"><strong>{item.name}</strong><small>{item.fileName}</small>{#if item.version}<small class="ver">{item.version}</small>{/if}</button>
               </div>
               {#if vis("date")}<span class="muted small" title={when ? new Date(when).toLocaleString() : ""}>{when ? new Date(when).toLocaleDateString(undefined, { dateStyle: "medium" }) : "–"}</span>{/if}

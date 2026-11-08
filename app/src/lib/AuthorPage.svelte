@@ -4,6 +4,7 @@
   import { cap, loadersOf, projectToHit } from "./install";
   import InstallButton from "./InstallButton.svelte";
   import { cfToHit } from "./cf";
+  import NoIcon from "./NoIcon.svelte";
 
   // Everything the author made for Minecraft, whatever game version it's for (the install button
   // says when a project doesn't fit the profile). Modrinth authors by name, CurseForge by id.
@@ -87,7 +88,7 @@
     {#each shown as h (h.project_id)}
       <div class="card">
         <button class="icon" onclick={() => pushOverlay({ kind: "project", hit: h })} aria-label="Open {h.title}">
-          {#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" />{/if}
+          {#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" />{:else}<NoIcon />{/if}
         </button>
         <div class="body">
           <button class="title" onclick={() => pushOverlay({ kind: "project", hit: h })}>{h.title}</button>

@@ -4,6 +4,7 @@
   import { pushOverlay } from "./state.svelte";
   import { typeName } from "./api";
   import InstallButton from "./InstallButton.svelte";
+  import NoIcon from "./NoIcon.svelte";
   import { collab, loadCollab, toggleWish, type Wish } from "./collab.svelte";
 
   let { instId }: { instId: string } = $props();
@@ -53,7 +54,7 @@
       {@const mine = !!c?.me && r.by.includes(c.me)}
       <div class="item">
         <button class="open" onclick={() => pushOverlay({ kind: "project", hit: r.wish.hit })} title="Open its page">
-          <span class="ic">{#if r.wish.hit.icon_url}<img src={r.wish.hit.icon_url} alt="" loading="lazy" />{/if}</span>
+          <span class="ic">{#if r.wish.hit.icon_url}<img src={r.wish.hit.icon_url} alt="" loading="lazy" />{:else}<NoIcon />{/if}</span>
           <span class="txt"><strong>{r.wish.hit.title}</strong><small>Wished for by {r.by.map(nameOf).join(", ")}</small></span>
         </button>
         <span class="chip">{typeName(r.wish.hit.project_type)}</span>
