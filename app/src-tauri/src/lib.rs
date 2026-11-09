@@ -20,6 +20,7 @@ mod music;
 mod cues;
 mod sfx;
 mod social;
+mod winplace;
 
 /// The build stamp (`obelisk.exe --build-id`, used when publishing an update).
 pub fn build_id() -> &'static str {
@@ -2002,6 +2003,7 @@ async fn kill_game(instance_id: String) -> Result<(), String> {
 /// Bring the main window back (from the tray, or when Obelisk is started a second time).
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        winplace::shown();
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -2269,6 +2271,7 @@ pub fn run() {
                     set_big_icon(hwnd.0 as isize);
                 }
             }
+            winplace::restore(app.handle());
             // Let the UI load icons, screenshots and world thumbnails from these folders only.
             let scope = app.asset_protocol_scope();
             scope.allow_directory(prism::instances_dir(&prism::data_dir()), true)?;
@@ -2276,6 +2279,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            winplace::on_event(window, event);
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let to_tray = settings_value(window.app_handle()).get("closeToTray").and_then(|v| v.as_bool()).unwrap_or(true);
                 if to_tray {

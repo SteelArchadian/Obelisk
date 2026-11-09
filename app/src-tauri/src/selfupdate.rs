@@ -108,6 +108,7 @@ pub fn startup_done(app: tauri::AppHandle) {
 
 fn open_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        crate::winplace::shown();
         let _ = w.show();
         let _ = w.set_focus();
     }
@@ -157,6 +158,7 @@ pub fn resume_window(app: &tauri::AppHandle) -> bool {
             fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
         }
         if let Some(Ok(h)) = app.get_webview_window("main").map(|w| w.hwnd()) {
+            crate::winplace::shown();
             unsafe { ShowWindow(h.0 as isize, cmd) };
         }
     };
