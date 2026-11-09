@@ -131,7 +131,8 @@
   background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 80%, #fff) 0%, var(--danger) 50%, color-mix(in srgb, var(--danger) 75%, #000) 100%) !important;
   box-shadow: inset 2px 2px 0 rgb(255 255 255 / 0.4), inset -2px -3px 0 rgb(0 0 0 / 0.35), var(--outline), 0 0 0 4px color-mix(in srgb, var(--danger) 35%, transparent) !important;
 }
-:root[data-skin="block"] :is(.btn.newer, .upd.newer) {
+/* Update plates: teal. Outranks the accent plate rule above (its .btn:not(.muted):not(.alt) is three classes). */
+:root[data-skin="block"] :is(.btn.newer:not(.muted):not(.alt), .upd.newer:not(.muted):not(.alt)) {
   background: linear-gradient(180deg, var(--update-hover) 0%, var(--update) 50%, color-mix(in srgb, var(--update) 80%, #000) 100%) !important;
   box-shadow: inset 2px 2px 0 rgb(255 255 255 / 0.45), inset -2px -3px 0 rgb(0 0 0 / 0.35), var(--outline), 0 0 0 4px color-mix(in srgb, var(--update) 35%, transparent) !important;
 }
