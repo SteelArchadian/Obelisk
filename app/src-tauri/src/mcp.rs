@@ -23,7 +23,7 @@ pub(crate) fn tools() -> Value {
     json!([
         t("guide", "Read first: everything Obelisk can do for you (simulations, tests, screenshots, bisect, profiling, mod management) and its rules.", obj(json!({}), &[])),
         t("copies", "Test copies and whether a game runs in each.", obj(json!({}), &[])),
-        t("launch", "Launch a test copy (waits for the bench lock; perf/fps runs queue until the user is away and end \"invalid\" when they return; muted, off-screen, test harness). LIMITS: hold <=120 s (perf too); <=600 s only for a non-perf run whose purpose says \"interaction\"; timeout <=600; killed as \"overtime\" at 240 s + hold. Returns a job: use wait; end with kill when no save is needed.",
+        t("launch", "Launch a test copy (waits for the bench lock; perf/fps runs queue until the user is away and end \"invalid\" when they return; muted, off-screen, test harness). HARD CAPS: hold <=120 s; a non-perf run is killed 120 s after reaching the world (375 s in all); a perf run 600 s in all; larger timeout/eta are clamped. Split longer work into several runs. Returns a job: use wait; end with kill when no save is needed.",
             obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
                 "preset": { "type": "string", "enum": ["crosspc"], "description": "Fixed cross-PC profiling run (perf)" },
                 "eta": { "type": "integer", "description": "Minutes" },

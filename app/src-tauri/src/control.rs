@@ -1365,20 +1365,29 @@ fn kill(args: &Value, jobs: &Shared) -> Result<Value, String> {
 }
 
 const KILLED: &str = "kill requested";
-/// Test length limits (user, 2026-11-03; kb/rules/testing.md): a smoke run, and every perf, fps or dyno run, holds the
-/// world 120 s or less; only a non-perf interaction run 600 s; the time limit is 600 s; and no run lives past LOAD_ALLOWANCE + hold, nor RUN_WALL, whatever
-/// the arguments ("overtime").
+/// Test length limits (user, 2026-11-03 and 2026-11-09 "a tool that limits it"; kb/rules/testing.md): every run holds
+/// the world 120 s or less. A non-perf run is killed IN_WORLD_CAP s after it reaches the world (whatever its hold or
+/// steps) and never lives past LOAD_ALLOWANCE + IN_WORLD_CAP; a perf (measured) run never past PERF_WALL. Longer work
+/// is several short runs. Nothing lives past RUN_WALL either ("overtime").
 const SMOKE_HOLD: u64 = 120;
-const LONG_HOLD: u64 = 600;
+const IN_WORLD_CAP: u64 = 120;
+/// Time a run gets after its in-world cap to quit by itself (save, close) before it is killed.
+const QUIT_GRACE: u64 = 15;
+const PERF_WALL: u64 = 600;
 const MAX_TIMEOUT: u64 = 600;
 const LOAD_ALLOWANCE: u64 = 240;
 const RUN_WALL: u64 = 720;
 const OVERTIME: &str = "overtime";
 
-/// The longest hold this run may have: 600 s for a non-perf run whose purpose says "interaction", else 120 s
-/// (perf runs measure 120 s at most, user 2026-11-03).
-fn max_hold(purpose: &str, perf: bool) -> u64 {
-    if !perf && purpose.to_lowercase().contains("interaction") { LONG_HOLD } else { SMOKE_HOLD }
+/// The longest hold any run may have: 120 s (the 600 s "interaction" exception is gone, user 2026-11-09).
+fn max_hold(_purpose: &str, _perf: bool) -> u64 {
+    SMOKE_HOLD
+}
+
+/// The wall clock a run gets (seconds after the game starts): perf runs PERF_WALL, others the load allowance plus the
+/// in-world cap; a smaller timeout asked for wins.
+fn run_cap(measured: bool, asked: u64) -> u64 {
+    asked.min(if measured { PERF_WALL } else { LOAD_ALLOWANCE + IN_WORLD_CAP + QUIT_GRACE })
 }
 /// A run cut short because the user started playing: its numbers don't count.
 const INVALID: &str = "invalid";
@@ -2050,8 +2059,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         let Some(v) = a.strip_prefix("-Dspeedloader.hold=").or_else(|| a.strip_prefix("-Doptimal.hold=")) else { continue };
         let h: u64 = v.trim().parse().map_err(|_| format!("{a}: the hold is whole seconds"))?;
         if h > cap {
-            return Err(format!("hold {h} s is over the limit of {cap} s ({}; kb/rules/testing.md)",
-                if cap == SMOKE_HOLD { "a smoke run; put \"interaction\" and what it checks in purpose for up to 600 s" } else { "interaction or perf" }));
+            return Err(format!("hold {h} s is over the limit of {cap} s for every run (kb/rules/testing.md): split longer work into several short runs"));
         }
         hold = Some(hold.map_or(h, |o: u64| o.max(h)));
     }
@@ -2075,6 +2083,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         }
         None => timeout,
     };
+    let timeout = run_cap(measured, timeout);
+    let world_cap = (!measured).then_some(IN_WORLD_CAP);
+    let eta = eta.min(timeout.div_ceil(60) + 1);
     let (mut java, mut cmd) = game_command(&dir, &extra)?;
     // The pack's own Java and JVM settings (its profile in Prism), unless the run asks for a bench Java.
     let profile = copy_source(&name);
@@ -2122,17 +2133,20 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let measured_shared = measured && !exclusive;
     let stop_if_playing = measured || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, world_cap, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
     let lock_note = if exclusive { format!("comparison run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
         else if measured_shared { format!("measured run: shares the PC with at most one other game, as \"{owner} - {purpose} (obelisk)\"") }
         else { format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") };
     Ok(json!({ "job": id, "state": "queued", "lock": lock_note, "gc": reply_gc,
-        "limit": format!("ended as \"{OVERTIME}\" {timeout} s after the game starts"),
+        "limit": match world_cap {
+            Some(c) => format!("CAP: {c} s in the world (killed {QUIT_GRACE} s later if still there), {timeout} s in all, then \"{OVERTIME}\"; split longer work into several runs"),
+            None => format!("CAP (perf): {timeout} s in all after the game starts, then \"{OVERTIME}\""),
+        },
         "preset": crosspc.then_some(CROSSPC) }))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, render: bool, perf: bool, exclusive: bool, measured: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
+fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, world_cap: Option<u64>, render: bool, perf: bool, exclusive: bool, measured: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
     build_world: Option<(Value, u64)>) {
     let me = std::process::id().to_string();
@@ -2252,6 +2266,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let stdout_file = runs.join(format!("{id}.stdout"));
         let mut stall = Stall::default();
         let mut frozen_since: Option<Instant> = None;
+        let mut entered: Option<Instant> = None;
         // Numbers taken while the user plays are wrong and the run hurts their game (user, 2026-11-03; KB #31).
         let playing = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
         let watching = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(stop_if_playing));
@@ -2334,6 +2349,18 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 stopping = Some(Instant::now());
             }
             let hung_on_exit = stopping.is_some_and(|t| t.elapsed() > Duration::from_secs(30));
+            if entered.is_none() && watch.events.iter().any(|e| e["event"] == "inWorld" || e["event"] == "terrainReady") {
+                entered = Some(Instant::now());
+            }
+            if let (Some(t), Some(c)) = (entered, world_cap) {
+                if t.elapsed() > Duration::from_secs(c + QUIT_GRACE) {
+                    let v = screenshot(pid, &runs, id, "overtime", (prism::timeline::now_ms() - click_ms) as f64 / 1000.0);
+                    update(&jobs, id, |j| j.shots.push(v));
+                    super::kill_tree(pid);
+                    let _ = game.wait();
+                    break format!("{OVERTIME}: killed {c} s after reaching the world (the cap for every non-perf run; split longer work into several runs)");
+                }
+            }
             if hung_on_exit || t0.elapsed() > Duration::from_secs(timeout) {
                 let v = screenshot(pid, &runs, id, if hung_on_exit { "hung on exit" } else { "overtime" },
                     (prism::timeline::now_ms() - click_ms) as f64 / 1000.0);
