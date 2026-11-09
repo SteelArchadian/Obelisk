@@ -948,7 +948,7 @@
                     Pinned{#if f?.update}<i class="pdot"></i>{/if}
                   </button>
                 {:else if f?.update}
-                  <button class="upd" disabled={updating.has(`${f.kind}/${f.fileName}`)} onclick={() => update(f)}
+                  <button class="upd newer" disabled={updating.has(`${f.kind}/${f.fileName}`)} onclick={() => update(f)}
                     title="{f.update.name || f.update.fileName}{f.update.blocked ? ' (download from curseforge.com)' : ''}">{updating.has(`${f.kind}/${f.fileName}`) ? "…" : "Update"}</button>
                 {:else if checking}
                   <span class="muted small">…</span>
@@ -1152,6 +1152,8 @@
   .upd { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 5px 12px; font-weight: 600; font-size: 12.5px; }
   .upd:hover:not(:disabled) { background: var(--accent-hover); }
   .upd:disabled { opacity: 0.6; }
+  .upd.newer { background: var(--update); }
+  .upd.newer:hover:not(:disabled) { background: var(--update-hover); }
   .count { background: var(--accent); color: #fff; border-radius: 999px; font-size: 11px; padding: 1px 7px; margin-left: 6px; }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

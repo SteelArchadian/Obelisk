@@ -9,6 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 const API: &str = "https://api.modrinth.com/v2";
+/// Organizations only exist in v3.
+const API3: &str = "https://api.modrinth.com/v3";
 const USER_AGENT: &str = "Obelisk/0.1 (Prism Launcher front end)";
 
 pub struct Client {
@@ -185,9 +187,13 @@ impl Client {
     }
 
     fn get(&self, path: &str) -> Result<Value, String> {
+        self.get_at(API, path)
+    }
+
+    fn get_at(&self, base: &str, path: &str) -> Result<Value, String> {
         let mut wait = 400;
         for attempt in 1.. {
-            match self.agent.get(&format!("{API}{path}")).call() {
+            match self.agent.get(&format!("{base}{path}")).call() {
                 Ok(r) => return r.into_json().map_err(|e| e.to_string()),
                 Err(e) if attempt < 3 && passing(&e) => { std::thread::sleep(std::time::Duration::from_millis(wait)); wait *= 3; }
                 Err(e) => return Err(format!("Modrinth: {e}")),
@@ -292,6 +298,32 @@ impl Client {
 
     pub fn user_projects(&self, name: &str) -> Result<Value, String> {
         self.get(&format!("/user/{}/projects", enc(name)))
+    }
+
+    /// The organizations a user belongs to (BetterX for quiqueck): their projects are the user's work too.
+    pub fn user_organizations(&self, name: &str) -> Result<Value, String> {
+        self.get_at(API3, &format!("/user/{}/organizations", enc(name)))
+    }
+
+    pub fn organization(&self, id: &str) -> Result<Value, String> {
+        self.get_at(API3, &format!("/organization/{}", enc(id)))
+    }
+
+    /// An organization's projects, in the v2 shape every other list uses.
+    pub fn organization_projects(&self, id: &str) -> Result<Vec<Value>, String> {
+        let v = self.get_at(API3, &format!("/organization/{}/projects", enc(id)))?;
+        let ids: Vec<String> = v.as_array().into_iter().flatten().filter_map(|p| p["id"].as_str().map(String::from)).collect();
+        if ids.is_empty() { Ok(vec![]) } else { self.projects(&ids) }
+    }
+
+    /// Where a link really goes after its redirects (mod authors use shorteners like slabfi.sh/mr/blueprint).
+    pub fn resolve(&self, url: &str) -> Result<String, String> {
+        if !url.starts_with("https://") && !url.starts_with("http://") { return Err("not a web link".into()) }
+        let r = match self.agent.head(url).timeout(std::time::Duration::from_secs(6)).call() {
+            Ok(r) | Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(e.to_string()),
+        };
+        Ok(r.get_url().to_string())
     }
 
     pub fn members(&self, project: &str) -> Result<Value, String> {

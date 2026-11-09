@@ -435,7 +435,7 @@
       {#if app.stack.length}
         {@const top = app.stack[app.stack.length - 1]}
         {#key top}
-          {#if top.kind === "project"}<ProjectPage hit={top.hit} startTab={top.tab} />{:else}<AuthorPage name={top.name} cfId={top.cfId} />{/if}
+          {#if top.kind === "project"}<ProjectPage hit={top.hit} startTab={top.tab} />{:else}<AuthorPage name={top.name} cfId={top.cfId} orgId={top.orgId} />{/if}
         {/key}
       {/if}
     </div>
@@ -473,6 +473,8 @@
     --accent: #9b87f5; --accent-hover: #b3a3ff;
     --err-bg: #3a1d1d; --err-text: #ffb4a6;
     --cf: #f16436; --mr: #1bd96a; --danger: #e5484d;
+    /* Update buttons: teal, so they read apart from Install (accent) at a glance (user, 2026-11-09). */
+    --update: #1f9d8a; --update-hover: #27b9a3;
     color-scheme: dark;
   }
   :global(:root[data-theme="light"]) {
@@ -533,7 +535,7 @@
   .drag { flex: 1; align-self: stretch; }
   .clear { background: none; border: 0; color: var(--muted); padding: 2px 4px; }
   .clear:hover { color: var(--text); }
-  .self-update { align-self: flex-start; height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 12px; margin-right: 8px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; font-weight: 700; box-shadow: 0 2px 6px rgb(0 0 0 / 0.3); }
+  .self-update { align-self: flex-start; height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 12px; margin-right: 8px; background: var(--update); color: #fff; border: 0; border-radius: 6px; font-weight: 700; box-shadow: 0 2px 6px rgb(0 0 0 / 0.3); }
   .self-update:hover:not(:disabled) { filter: brightness(1.1); }
   .self-update:disabled { opacity: 0.7; }
   .winctl { display: flex; gap: 6px; align-self: flex-start; }

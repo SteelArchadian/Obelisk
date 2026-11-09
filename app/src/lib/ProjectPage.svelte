@@ -27,6 +27,8 @@
   $effect(() => { const t = tab; if (entry?.kind === "project") untrack(() => (entry.tab = t)); });
   let project = $state<any>(null);
   let fetchedAuthor = $state("");
+  /** Set when the project belongs to a Modrinth organization: its name is the author shown, its page opens. */
+  let orgId = $state("");
   let author = $derived(hit.author || fetchedAuthor);
   let versions = $state<Version[]>([]);
   let showAll = $state(false);
@@ -95,12 +97,18 @@
       api.cfFiles(cfId).then((f) => (versions = f.map((x) => cfFileToVersion(x, cfId)))).catch(() => {});
       return;
     }
-    api.project(id).then((p) => (project = p)).catch((e) => (error = String(e)));
+    api.project(id).then((p) => {
+      project = p;
+      // Organization projects have no owner among their members: the organization is the author.
+      if (!hit.author && p?.organization) {
+        api.org(p.organization).then((o) => { orgId = p.organization; fetchedAuthor = o.user.username; }).catch(() => {});
+      }
+    }).catch((e) => (error = String(e)));
     api.versions(id, true).then((v) => (versions = v)).catch(() => {});
     if (!hit.author) {
       api.members(id).then((m) => {
         const owner = m.find((x) => x.role === "Owner") ?? m[0];
-        if (owner) fetchedAuthor = owner.user.username;
+        if (owner && !orgId) fetchedAuthor = owner.user.username;
       }).catch(() => {});
     }
   });
@@ -161,7 +169,7 @@
   });
 
   async function openAuthor() {
-    if (!isCf) return pushOverlay({ kind: "author", name: author });
+    if (!isCf) return pushOverlay({ kind: "author", name: author, orgId: orgId || undefined });
     const a = (await api.cfProject(hit.cf_id!).catch(() => null))?.project?.authors?.[0];
     if (a?.id) pushOverlay({ kind: "author", name: a.name, cfId: a.id });
     else openLink(`https://www.curseforge.com/members/${encodeURIComponent(author)}/projects`);

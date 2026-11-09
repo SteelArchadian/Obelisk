@@ -4,6 +4,7 @@
   import { api, compact, ago, envLabel, versionsLabel, TYPES, type Hit, type Tags, type ProjectType } from "./api";
   import { projectUrl, authorUrl } from "./links";
   import { app, pushOverlay } from "./state.svelte";
+  import { openLink } from "./account.svelte";
   import { tagsOnce, loadersOf as loaderOf, cap, isInstalled } from "./install";
   import { cfSearchAvailable, cfToHit, mergeHits, sameKey } from "./cf";
   import NoIcon from "./NoIcon.svelte";
@@ -159,6 +160,14 @@
 
   const shownCats = (h: Hit) => (h.display_categories ?? h.categories).filter((c) => !loaderNames.has(c)).slice(0, 4);
   const open = (h: Hit) => pushOverlay({ kind: "project", hit: h });
+  /** The author's page in the app: by name on Modrinth; CurseForge needs the member id from the project. */
+  async function openAuthor(h: Hit) {
+    if (!h.author) return;
+    if (!h.project_id.startsWith("cf:")) return pushOverlay({ kind: "author", name: h.author });
+    const a = (await api.cfProject(h.cf_id!).catch(() => null))?.project?.authors?.[0];
+    if (a?.id) pushOverlay({ kind: "author", name: a.name, cfId: a.id });
+    else openLink(`https://www.curseforge.com/members/${encodeURIComponent(h.author)}/projects`);
+  }
 </script>
 
 <svelte:window onclick={() => { showFilters = false; showSort = false; }} />
@@ -251,7 +260,8 @@
           <button class="tilecard" onclick={() => open(h)}>
             <div class="art">{#if h.icon_url}<img src={h.icon_url} alt="" loading="lazy" decoding="async" />{:else}<NoIcon />{/if}</div>
             <span class="tile-src"><SourceBadges hit={h} /></span>
-            <strong data-link={projectUrl(h)} data-link-label="link">{h.title}</strong><small data-link={authorUrl(h)} data-link-label="author link">By {h.author}</small>
+            <strong data-link={projectUrl(h)} data-link-label="link">{h.title}</strong><small class="by-link" role="link" tabindex="0" title="Open the author's page" data-link={authorUrl(h)} data-link-label="author link"
+              onclick={(e) => { e.stopPropagation(); openAuthor(h); }} onkeydown={(e) => { if (e.key === "Enter") { e.stopPropagation(); openAuthor(h); } }}>By {h.author}</small>
           </button>
         {/each}
       </div>
@@ -264,7 +274,7 @@
           <div class="body">
             <div class="title-row">
               <button class="title" onclick={() => open(h)} data-link={projectUrl(h)} data-link-label="link">{h.title}</button>
-              <span class="by" data-link={authorUrl(h)} data-link-label="author link">by {h.author}</span>
+              <button class="by" title="Open the author's page" onclick={() => openAuthor(h)} data-link={authorUrl(h)} data-link-label="author link">by {h.author}</button>
               <SourceBadges hit={h} />
             </div>
             {#if view === "list"}<p class="desc">{h.description}</p>{/if}
@@ -329,7 +339,8 @@
   .title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .title { background: none; border: 0; padding: 0; font-size: 17px; font-weight: 600; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .title:hover { color: var(--accent); }
-  .by { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .by { color: var(--muted); font-size: 13px; white-space: nowrap; background: none; border: 0; padding: 0; }
+  .by:hover, .by-link:hover { color: var(--accent); text-decoration: underline; }
   .desc { margin: 0; color: var(--text-2); font-size: 13.5px; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 7px; }
   .compact .meta { border: 0; padding: 0; }

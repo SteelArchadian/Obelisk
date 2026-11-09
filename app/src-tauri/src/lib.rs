@@ -203,7 +203,34 @@ async fn active_account() -> Option<prism::Account> {
 #[tauri::command]
 async fn mr_user(mr: tauri::State<'_, Mr>, name: String) -> Result<serde_json::Value, String> {
     let mr = mr.inner().clone();
-    blocking(move || Ok(serde_json::json!({ "user": mr.user(&name)?, "projects": mr.user_projects(&name)? }))).await
+    blocking(move || {
+        // Projects owned by the user's organizations count too (BetterNether is BetterX's, not quiqueck's).
+        let mut projects: Vec<serde_json::Value> = mr.user_projects(&name)?.as_array().cloned().unwrap_or_default();
+        let orgs = mr.user_organizations(&name).unwrap_or_default();
+        for o in orgs.as_array().into_iter().flatten() {
+            for p in o["id"].as_str().map(|id| mr.organization_projects(id).unwrap_or_default()).unwrap_or_default() {
+                if !projects.iter().any(|q| q["id"] == p["id"]) { projects.push(p) }
+            }
+        }
+        Ok(serde_json::json!({ "user": mr.user(&name)?, "projects": projects, "orgs": orgs }))
+    }).await
+}
+
+#[tauri::command]
+async fn resolve_url(mr: tauri::State<'_, Mr>, url: String) -> Result<String, String> {
+    let mr = mr.inner().clone();
+    blocking(move || mr.resolve(&url)).await
+}
+
+/// A Modrinth organization as an author: { user: {username, avatar_url, bio, org}, projects }.
+#[tauri::command]
+async fn mr_org(mr: tauri::State<'_, Mr>, id: String) -> Result<serde_json::Value, String> {
+    let mr = mr.inner().clone();
+    blocking(move || {
+        let o = mr.organization(&id)?;
+        let projects = mr.organization_projects(&id)?;
+        Ok(serde_json::json!({ "user": { "username": o["name"], "avatar_url": o["icon_url"], "bio": o["description"], "org": true, "slug": o["slug"] }, "projects": projects }))
+    }).await
 }
 
 #[tauri::command]
@@ -2292,7 +2319,7 @@ pub fn run() {
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, cues::cue_preview, sfx::ui_sfx, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
-            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism,
+            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,

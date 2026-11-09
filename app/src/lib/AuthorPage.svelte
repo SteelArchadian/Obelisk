@@ -8,7 +8,7 @@
 
   // Everything the author made for Minecraft, whatever game version it's for (the install button
   // says when a project doesn't fit the profile). Modrinth authors by name, CurseForge by id.
-  let { name, cfId }: { name: string; cfId?: number } = $props();
+  let { name, cfId, orgId }: { name: string; cfId?: number; orgId?: string } = $props();
 
   let user = $state<any>(null);
   let projects = $state<ReturnType<typeof projectToHit>[]>([]);
@@ -32,7 +32,7 @@
       }).catch((e) => (error = String(e)));
       return;
     }
-    api.user(name).then((r) => {
+    (orgId ? api.org(orgId) : api.user(name)).then((r) => {
       user = r.user;
       projects = r.projects.map((p) => projectToHit(p, r.user.username));
       done();
@@ -63,9 +63,10 @@
   <header class="head">
     <div class="avatar">{#if user?.avatar_url}<img src={user.avatar_url} alt="" />{/if}</div>
     <div>
-      <h2>{user?.username ?? name} <span class="role">Author</span></h2>
+      <h2>{user?.username ?? name} <span class="role">{user?.org ? "Organization" : "Author"}</span></h2>
       <p class="muted">{compact(totalFollows)} followers · {compact(totalDownloads)} downloads</p>
       {#if user?.cf}<p class="muted">On CurseForge · every Minecraft project, all game versions</p>
+      {:else if user?.org}{#if user.bio}<p class="muted">{user.bio}</p>{/if}
       {:else if user}<p class="muted">Member since {new Date(user.created).toLocaleDateString()}{user.bio ? ` · ${user.bio}` : ""}</p>{/if}
     </div>
   </header>

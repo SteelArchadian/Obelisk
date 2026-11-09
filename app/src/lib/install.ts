@@ -202,14 +202,23 @@ const MR_TYPES: Record<string, ProjectType> = { mod: "mod", mods: "mod", modpack
 const CF_SECTIONS: Record<string, ProjectType> = { "mc-mods": "mod", modpacks: "modpack", "texture-packs": "resourcepack",
   shaders: "shader", "data-packs": "datapack" };
 
+/** Sites whose links are never short links to a mod page: no need to ask where they lead. */
+const KNOWN_HOSTS = ["modrinth.com", "curseforge.com", "github.com", "youtube.com", "youtu.be", "discord.gg", "discord.com",
+  "patreon.com", "ko-fi.com", "twitter.com", "x.com", "reddit.com", "wikipedia.org", "minecraft.wiki", "fandom.com", "imgur.com", "gitlab.com"];
+
 /**
  * Modrinth and CurseForge mod, author and search pages map to Obelisk's own pages; anything else is null.
  * CurseForge's linkout redirects are unwrapped first.
  */
-export async function linkTarget(href: string): Promise<LinkTarget | null> {
+export async function linkTarget(href: string, hops = 0): Promise<LinkTarget | null> {
   let u: URL;
   try { u = new URL(href); } catch { return null; }
   const host = u.hostname.replace(/^www\.|^legacy\./, "");
+  // Short links (slabfi.sh/mr/blueprint, bit.ly...) are followed to where they land, once.
+  if (!hops && !KNOWN_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) {
+    const to = await api.resolveUrl(href).catch(() => href);
+    return to !== href ? linkTarget(to, 1) : null;
+  }
   const parts = u.pathname.split("/").filter(Boolean);
   if (host === "curseforge.com" && parts[0] === "linkout") {
     const inner = u.searchParams.get("remoteUrl");

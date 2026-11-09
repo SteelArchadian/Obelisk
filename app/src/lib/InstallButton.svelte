@@ -42,7 +42,7 @@
 </script>
 
 {#if has && upd && !busy}
-  <button class="btn" class:big title="Installed: {upd.fileName}. Newer: {upd.update?.name || upd.update?.fileName}" onclick={update}>Update</button>
+  <button class="btn newer" class:big title="Installed: {upd.fileName}. Newer: {upd.update?.name || upd.update?.fileName}" onclick={update}>Update</button>
 {:else if has && busy}
   <button class="btn" class:big disabled>Updating…</button>
 {:else if has && hit.project_type !== "datapack"}
@@ -64,6 +64,8 @@
   .btn { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 7px 18px; font-weight: 600; white-space: nowrap; }
   .btn:hover:not(:disabled) { background: var(--accent-hover); }
   .btn:disabled { opacity: 0.6; }
+  .btn.newer { background: var(--update); }
+  .btn.newer:hover:not(:disabled) { background: var(--update-hover); }
   .btn.alt { background: none; border: 1px solid #f0a35e; color: #f0a35e; }
   .btn.alt:hover { background: rgb(240 163 94 / 0.1); }
   .big { padding: 9px 24px; font-size: 15px; }
