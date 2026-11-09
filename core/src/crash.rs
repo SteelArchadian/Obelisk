@@ -148,9 +148,9 @@ fn mod_files(game: &Path) -> HashMap<String, String> {
 const NOT_MODS: [&str; 12] = ["minecraft", "neoforge", "fml_loader", "fml", "forge", "java.base", "java.desktop", "mixinextras", "mixin", "bus", "jdk.internal", "datafixerupper"];
 
 const RAN: &str = "The crash happened inside this mod's code.";
-const RAN_MIXIN: &str = "This mod injected the code that crashed (mixin).";
-const ON_STACK: &str = "Also on the stack: this mod's code was in the call chain, but wasn't what was running.";
-const ON_STACK_MIXIN: &str = "Also on the stack: one of this mod's mixins was in the call chain, but wasn't what was running.";
+const RAN_MIXIN: &str = "The crash happened in code this mod adds to another mod or to the game.";
+const ON_STACK: &str = "Involved, but the crash wasn't in its code: the game was only passing through this mod at the time.";
+const ON_STACK_MIXIN: &str = "Involved, but the crash wasn't in its code: something this mod adds was only part of the path.";
 
 /// The suspect's own code (or its mixin) was what was running, not just somewhere in the call chain.
 pub fn ran(s: &Suspect) -> bool {
@@ -204,13 +204,15 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         }
         if let Some((id, jar)) = owner {
             let ran = top && owners.is_empty();
+            // A mod's closest frame counts, not how many it has: a big mod deep in the chain mustn't outscore the
+            // one whose code threw.
             let e = score.entry(id).or_insert((0, jar, String::new()));
-            e.0 += w + if ran { 60 } else { 0 };
+            e.0 = e.0.max(w) + if ran { 60 } else { 0 };
             if ran { e.2 = RAN.into() } else if e.2.is_empty() { e.2 = ON_STACK.into() }
         }
         for id in owners {
             let e = score.entry(id).or_insert((0, String::new(), String::new()));
-            e.0 += w + if top { 60 } else { 0 };
+            e.0 = e.0.max(w) + if top { 60 } else { 0 };
             if top { e.2 = RAN_MIXIN.into() } else if e.2.is_empty() { e.2 = ON_STACK_MIXIN.into() }
         }
     }
@@ -283,14 +285,54 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         let thread = lines.iter().find(|l| l.starts_with("Current thread")).map(|l| l.to_string()).unwrap_or_default();
         d.error = lines.iter().find(|l| l.contains("EXCEPTION_") || l.contains("SIGSEGV")).map(|l| l.trim_start_matches('#').trim().to_string()).unwrap_or_default();
         d.excerpt = lines.iter().filter(|l| l.starts_with("# ") || l.starts_with("Current thread") || l.starts_with("j  ") || l.starts_with("J ")).take(30).map(|l| l.to_string()).collect();
+        // The top Java frame is the call into native code; the first mod frame under it made that call.
+        let jframes: Vec<(String, String)> = lines.iter().filter(|l| l.starts_with("j  ") || l.starts_with("J ")).filter_map(|l| jvm_frame(l)).collect();
+        let call = jframes.first().map(|(m, _)| m.clone()).unwrap_or_default();
+        let (what, func) = native_call(&call);
+        let caller = jframes.iter().find(|(_, module)| !game_module(module)).cloned();
+        let caller_file = caller.as_ref().map(|(_, id)| match_file("", id, mods)).unwrap_or_default();
+        let lib = frame.split_once('[').and_then(|(_, r)| r.split(['+', ']']).next()).unwrap_or("").to_string();
+        let addr = lines.iter().find(|l| l.starts_with("siginfo:")).and_then(|l| l.split("address 0x").nth(1))
+            .and_then(|h| u64::from_str_radix(h.split_whitespace().next().unwrap_or(""), 16).ok());
+        let bad_mem = match addr {
+            Some(a) if a < 0x10000 => "tried to read memory that doesn't exist (address 0, a null pointer)".to_string(),
+            Some(a) => format!("tried to use memory it had no access to (address 0x{a:x})"),
+            None => "crashed".to_string(),
+        };
         if let Some(v) = vendor {
             let render = thread.contains("Render thread");
+            let from = match &caller { Some((m, id)) => format!(" The call came from {} ({}).", title_case(id), short_method(m)), None => String::new() };
             f.push(Finding {
                 severity: "critical".into(),
                 title: format!("The {v} graphics driver crashed"),
-                detail: format!("Java crashed inside the {v} driver ({frame}){}. Minecraft itself didn't throw an error; the driver did.", if render { " while drawing the game" } else { "" }),
+                detail: format!("Java crashed inside the {v} driver ({frame}){}. Minecraft itself didn't throw an error; the driver did.{from}", if render { " while drawing the game" } else { "" }),
                 fix: format!("Update your {v} driver (a clean install helps). If it keeps happening, try without the shaderpack, or turn off mods that change rendering (the suspects below)."),
                 action: "driver".into(), target: v.to_string(), ..Default::default()
+            });
+        } else if let (Some((m, id)), false, false) = (&caller, fl.contains("jvm.dll") || fl.contains("libjvm"), native_oom) {
+            let name = title_case(id);
+            let place = if lib.is_empty() {
+                " The exact spot has no file name: it's code the graphics driver builds while the game runs.".to_string()
+            } else { format!(" The exact spot is in {lib}.") };
+            let (title, meaning) = if what == "drawing" {
+                (format!("{name} made the graphics driver crash"),
+                 format!("That means the draw was handed bad data, such as a buffer that was already freed or never filled. Your graphics driver and the other mods are almost certainly fine: this is a bug in {name}."))
+            } else {
+                (format!("{name} crashed in native code"), format!("That's almost always a bug in {name}, not in Java or your PC."))
+            };
+            let asked = match what {
+                "drawing" => format!("asked the graphics card to draw ({func})"),
+                "" => "called into native code".to_string(),
+                w => format!("made a {w} call ({func})"),
+            };
+            f.push(Finding {
+                severity: "critical".into(),
+                title,
+                detail: format!("What happened: {name} ({}) {asked}, and the driver {bad_mem}.{place}\n{meaning}", short_method(m)),
+                fix: format!("Update {name}, or disable it to confirm the crash stops.{}", if func.is_empty() { String::new() } else {
+                    format!(" If you make this mod: check what {func} is given (buffers freed or not uploaded yet, wrong counts or offsets, or a call from another thread).")
+                }),
+                action: if caller_file.is_empty() { String::new() } else { "disable".into() }, target: caller_file.clone(), ..Default::default()
             });
         } else if fl.contains("jvm.dll") || fl.contains("libjvm") {
             f.push(Finding {
@@ -303,20 +345,29 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         } else if !frame.is_empty() && !native_oom {
             f.push(Finding {
                 severity: "critical".into(),
-                title: "Native code crashed".into(),
-                detail: format!("The game crashed outside Java, in {frame}."),
-                fix: "If that file belongs to a mod (a .dll it ships), update or remove that mod. Otherwise update your graphics driver.".into(),
+                title: "The game crashed outside Java".into(),
+                detail: format!("Minecraft runs on Java, but some work is handed to other programs on your PC, like the graphics driver. One of those {bad_mem}, {}.{}",
+                    if lib.is_empty() { "in code with no file name (usually code the graphics driver builds while the game runs)".to_string() } else { format!("in {lib}") },
+                    if what.is_empty() { String::new() } else { format!(" The game was making a {what} call ({func}) at the time.") }),
+                fix: if lib.is_empty() || what == "drawing" { "Update your graphics driver. If it keeps happening, try without the shaderpack, or turn off mods that change rendering.".into() }
+                    else { format!("If {lib} came with a mod, update or remove that mod. Otherwise update your graphics driver.") },
                 ..Default::default()
             });
         }
-        // Java frames in hs_err name packages; match them to installed mods by file name.
-        for l in lines.iter().filter(|l| l.starts_with("j  ") || l.starts_with("J ")) {
-            if let Some(pkg) = l.split_whitespace().find(|w| w.contains('.') && w.contains('(')) {
-                let pkg = pkg.split('(').next().unwrap_or("").to_lowercase();
-                if let Some((id, file)) = guess_from_package(&pkg, mods) {
-                    if !d.suspects.iter().any(|s| s.mod_id == id) {
-                        d.suspects.push(Suspect { mod_id: id, file_name: file, reason: "This mod's code was running when the crash happened.".into(), score: 10 });
-                    }
+        // Java frames name the mod (module id) or at least its package; the mod that made the native call is the suspect,
+        // mods further down only started or wrap the game loop.
+        if let Some((m, id)) = &caller {
+            d.suspects.retain(|s| s.mod_id != *id);
+            let did = if what.is_empty() { "called the native code that crashed".to_string() } else { format!("made the {what} call that crashed") };
+            d.suspects.insert(0, Suspect { mod_id: id.clone(), file_name: caller_file.clone(), reason: format!("It {did} (in {}).", short_method(m)), score: 10 });
+        }
+        for (m, module) in &jframes {
+            let found = if !module.is_empty() && !game_module(module) { Some((module.clone(), match_file("", module, mods))) }
+                else { guess_from_package(&m.to_lowercase(), mods) };
+            if let Some((id, file)) = found {
+                if !d.suspects.iter().any(|s| s.mod_id == id) {
+                    let reason = if caller.is_some() { "Further down the call chain only (it starts or wraps the game loop), so probably not the cause." } else { "This mod's code was running when the crash happened." };
+                    d.suspects.push(Suspect { mod_id: id, file_name: file, reason: reason.into(), score: if caller.is_some() { 1 } else { 10 } });
                 }
             }
         }
@@ -510,11 +561,27 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
     }
     if kind == "crash" && f.iter().all(|x| x.severity != "critical") {
         if let Some(s) = &top {
+            let name = title_case(&s.mod_id);
+            let (detail, fix) = match missing_part(&d.error, &frames) {
+                Some((owner, part, class)) if owner == s.mod_id => (
+                    format!("{name} tried to use a part of itself ({part}, in {class}) that isn't there. The mod's file is probably damaged or only half updated."),
+                    format!("Reinstall {name} (remove it, then add it again from Browse). If that doesn't help, report the crash (this file) to {name}'s author."),
+                ),
+                Some((owner, part, class)) => {
+                    let other = if owner.is_empty() { "another mod".to_string() } else { title_case(&owner) };
+                    (format!("{name} tried to use a part of {other} ({part}, in {class}) that the installed {other} doesn't have. \
+                        That almost always means {name} was made for a different version of {other}: the two don't fit together."),
+                     format!("Update {name} first; its page says which {other} version it needs. If it's already up to date, install the {other} version it asks for, or disable {name} until they match."))
+                }
+                None => (
+                    format!("{}{}", plain_error(&d.error), if s.reason == RAN || s.reason == RAN_MIXIN { " The crash happened in this mod's own code." } else { "" }),
+                    format!("Update {name}. If it's already up to date, disable it to confirm, and report the crash (this file) to {name}'s author."),
+                ),
+            };
             f.push(Finding {
                 severity: "critical".into(),
-                title: format!("{} crashed the game", s.mod_id),
-                detail: format!("{}{}", plain_error(&d.error), if s.reason == RAN || s.reason == RAN_MIXIN { " The crash happened in this mod's own code." } else { "" }),
-                fix: format!("Update {0}. If it's already up to date, disable it to confirm, and report the crash (this file) to {0}'s author.", s.mod_id),
+                title: format!("{name} crashed the game"),
+                detail, fix,
                 action: "disable".into(), target: s.file_name.clone(), ..Default::default()
             });
         }
@@ -611,6 +678,69 @@ fn match_file(jar: &str, id: &str, mods: &HashMap<String, String>) -> String {
     best.cloned().unwrap_or_default()
 }
 
+/// hs_err Java frame → (method, module id): "j  dev.boundless.render.VoxelRenderer.submit(...)V+1623 boundless@0.1.0"
+/// gives ("dev.boundless.render.VoxelRenderer.submit", "boundless"). Older Javas print no module: "".
+fn jvm_frame(l: &str) -> Option<(String, String)> {
+    let mut it = l.split_whitespace().skip_while(|w| !w.contains('('));
+    let m = it.next()?.split('(').next()?.to_string();
+    let module = it.next().filter(|w| w.contains('@')).map(|w| w.split('@').next().unwrap_or("").to_string()).unwrap_or_default();
+    Some((m, module))
+}
+
+/// Java, the game, the loader and libraries: never the mod to blame. An unknown ("") module isn't a mod either.
+fn game_module(m: &str) -> bool {
+    m.is_empty() || m.starts_with("java.") || m.starts_with("jdk.") || m.starts_with("org.lwjgl") || NOT_MODS.contains(&m)
+        || matches!(m, "fabricloader" | "org.spongepowered.mixin")
+}
+
+/// What kind of native call a frame is, in plain words, and the function: ("drawing", "glDrawElements").
+fn native_call(m: &str) -> (&'static str, String) {
+    let func = m.rsplit('.').next().unwrap_or("");
+    // LWJGL's "nglFoo" is the raw form of "glFoo".
+    let func = func.strip_prefix('n').filter(|f| f.starts_with("gl") || f.starts_with("vk") || f.starts_with("al")).unwrap_or(func).to_string();
+    let what = if m.starts_with("org.lwjgl.opengl") || m.starts_with("org.lwjgl.vulkan") { "drawing" }
+        else if m.starts_with("org.lwjgl.glfw") { "window or input" }
+        else if m.starts_with("org.lwjgl.openal") { "sound" }
+        else { "" };
+    (what, if what.is_empty() { String::new() } else { func })
+}
+
+/// A NoSuchField/NoSuchMethodError, as (mod that owns the class, missing part, class short name). The owner comes from
+/// the frames that run that class ("" when none do), "minecraft" for the game's classes.
+/// "Class a.b.ShaderLoader does not have member field 'boolean noMaterial'" → ("sodium", "noMaterial", "ShaderLoader").
+fn missing_part(error: &str, frames: &[&str]) -> Option<(String, String, String)> {
+    let (kind, msg) = error.split_once(':')?;
+    let msg = msg.trim();
+    let (class, part) = if kind.ends_with("NoSuchFieldError") && msg.starts_with("Class ") {
+        let class = msg.strip_prefix("Class ")?.split_whitespace().next()?;
+        (class.to_string(), msg.rsplit(' ').next()?.trim_matches('\'').to_string())
+    } else if kind.ends_with("NoSuchFieldError") || kind.ends_with("NoSuchMethodError") {
+        // "'void a.b.Foo.bar(int)'" or "'boolean a.b.Foo.baz'"
+        let sig = msg.trim_matches('\'').split_whitespace().last()?.split('(').next()?;
+        let (class, part) = sig.rsplit_once('.')?;
+        (class.to_string(), part.to_string())
+    } else {
+        return None;
+    };
+    let class = class.replace('/', ".");
+    let owner = if class.starts_with("net.minecraft.") || class.starts_with("com.mojang.") { "minecraft".to_string() } else {
+        frames.iter().find(|f| f.contains(&format!("/{class}."))).and_then(|f| frame_mod(f)).map(|(id, _)| id).unwrap_or_default()
+    };
+    let short = class.rsplit('.').next().unwrap_or(&class).to_string();
+    Some((owner, part, short))
+}
+
+/// "dev.boundless.render.VoxelRenderer.submit" → "VoxelRenderer.submit".
+fn short_method(m: &str) -> String {
+    let p: Vec<&str> = m.rsplitn(3, '.').collect();
+    if p.len() >= 2 { format!("{}.{}", p[1], p[0]) } else { m.to_string() }
+}
+
+fn title_case(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
 /// hs_err Java frame "me.cortex.voxy.client.Foo.bar" → an installed file whose name contains a package word.
 fn guess_from_package(pkg: &str, mods: &HashMap<String, String>) -> Option<(String, String)> {
     let parts: Vec<&str> = pkg.split('.').collect();
@@ -686,7 +816,7 @@ mod tests {
         assert_eq!(d.suspects[0].file_name, "advancedcompassplus-1.0.0.jar");
         let ac = d.suspects.iter().find(|s| s.mod_id == "advancedcompass").unwrap();
         assert_eq!(ac.file_name, "advancedcompass.fabric.1.21.1-1.2.18.jar");
-        assert!(d.headline.contains("advancedcompassplus"), "{}", d.headline);
+        assert!(d.headline.to_lowercase().contains("advancedcompassplus"), "{}", d.headline);
         assert!(d.suspects[0].score > d.suspects[1].score + 20);
         assert!(d.findings.iter().any(|f| f.action == "disable" && f.target == "advancedcompassplus-1.0.0.jar"));
         assert!(d.error.starts_with("java.lang.NullPointerException"));
@@ -765,5 +895,44 @@ mod tests {
         assert!(resolve(g, "hs_err_pid1.log").is_ok());
         assert!(resolve(g, "crash-reports/../options.txt").is_err());
         assert!(resolve(g, "config/a.txt").is_err());
+    }
+
+    fn files(names: &[&str]) -> HashMap<String, String> {
+        names.iter().map(|n| (n.to_string(), n.to_string())).collect()
+    }
+
+    #[test]
+    fn a_native_crash_names_the_mod_that_made_the_draw_call() {
+        let t = "#  EXCEPTION_ACCESS_VIOLATION (0xc0000005) at pc=0x000001c94a85fb5a, pid=57996, tid=54740\n\
+# Problematic frame:\n# C  0x000001c94a85fb5a\n#\n\
+Current thread (0x000001c89e49b040):  JavaThread \"Render thread\"        [_thread_in_native, id=54740]\n\
+J 78332  org.lwjgl.opengl.GL32C.nglMultiDrawElementsBaseVertex(IJIJIJ)V org.lwjgl.opengl@3.3.3+5 (0 bytes) @ 0x1\n\
+j  dev.boundless.render.VoxelRenderer.submit(Ldev/boundless/render/VoxelRenderer$DrawList;IIZDDD)V+1623 boundless@0.1.0-prototype\n\
+J 86338 c1 net.minecraft.client.Minecraft.runTick(Z)V minecraft@1.21.1 (1277 bytes) @ 0x2\n\
+j  me.decce.ixeris.RenderThreadStarter+0x0000000008a04000.run()V+13 ixeris@4.6.11+1.21.1-neoforge\n\
+siginfo: EXCEPTION_ACCESS_VIOLATION (0xc0000005), reading address 0x0000000000000000\n";
+        let d = analyze("jvm", t, &files(&["boundless-0.1.0-prototype.jar", "ixeris-4.6.11.jar"]));
+        assert_eq!(d.findings[0].title, "Boundless made the graphics driver crash");
+        assert!(d.findings[0].detail.contains("glMultiDrawElementsBaseVertex") && d.findings[0].detail.contains("null pointer"), "{}", d.findings[0].detail);
+        assert_eq!(d.findings[0].target, "boundless-0.1.0-prototype.jar");
+        assert_eq!(d.suspects[0].mod_id, "boundless");
+        assert_eq!(d.suspects[1].mod_id, "ixeris");
+        assert!(d.suspects[1].reason.contains("probably not the cause"));
+    }
+
+    #[test]
+    fn a_missing_field_blames_the_mod_that_wanted_it() {
+        let t = "Description: Unexpected error\n\njava.lang.NoSuchFieldError: Class net.caffeinemc.mods.sodium.client.gl.shader.ShaderLoader does not have member field 'boolean noMaterial'\n\
+\tat TRANSFORMER/sodium@0.8.13+mc1.21.1/net.caffeinemc.mods.sodium.client.gl.shader.ShaderLoader.handler$gno000$windowportals$noMaterial(ShaderLoader.java:1020) ~[sodium.jar%23497!/:?] {re:mixin}\n\
+\tat TRANSFORMER/sodium@0.8.13+mc1.21.1/net.caffeinemc.mods.sodium.client.gl.shader.ShaderLoader.getShaderSource(ShaderLoader.java:48) ~[sodium.jar%23497!/:?] {re:mixin}\n\
+\tat TRANSFORMER/sodium@0.8.13+mc1.21.1/net.caffeinemc.mods.sodium.client.gl.shader.ShaderLoader.loadShader(ShaderLoader.java:30) ~[sodium.jar%23497!/:?] {re:mixin}\n\
+\tat TRANSFORMER/sodium@0.8.13+mc1.21.1/net.caffeinemc.mods.sodium.client.render.chunk.ShaderChunkRenderer.createShader(ShaderChunkRenderer.java:44) ~[sodium.jar%23497!/:?] {re:mixin}\n\
+\tat TRANSFORMER/sodium@0.8.13+mc1.21.1/net.caffeinemc.mods.sodium.client.render.chunk.ShaderChunkRenderer.begin(ShaderChunkRenderer.java:85) ~[sodium.jar%23497!/:?] {re:mixin}\n\
+\tat TRANSFORMER/minecraft@1.21.1/net.minecraft.client.renderer.LevelRenderer.renderLevel(LevelRenderer.java:965) ~[client.jar%23495!/:?] {re:mixin}\n\
+\tat TRANSFORMER/windowportals@0.1.0-test/dev.windowportals.client.PortalRenderer.pass(PortalRenderer.java:333) ~[windowportals-0.1.0-test.jar%23792!/:?] {re:mixin}\n";
+        let d = analyze("crash", t, &files(&["sodium.jar", "windowportals-0.1.0-test.jar"]));
+        assert_eq!(d.suspects[0].mod_id, "windowportals");
+        assert_eq!(d.findings[0].title, "Windowportals crashed the game");
+        assert!(d.findings[0].detail.contains("a part of Sodium (noMaterial, in ShaderLoader)"), "{}", d.findings[0].detail);
     }
 }

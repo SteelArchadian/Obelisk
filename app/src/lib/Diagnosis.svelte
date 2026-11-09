@@ -109,6 +109,14 @@
   const PHASE_COLOR: Record<string, string> = { launcher: "#8a7cf0", jvm: "#5aa2f2", mods: "#e5c84a", resources: "#f0a35e", join: "#4cc38a", leave: "#c47be0", quit: "#f2555a" };
   let run = $derived(pick?.type === "run" ? runs.find((r) => r.id === (pick as any).id) ?? null : null);
   const itemFor = (file: string) => mods.find((m) => m.fileName === file);
+  // The analysis only knows mod ids ("windowportals"); show the names this profile uses ("Wormhole").
+  const named = (text: string) => {
+    for (const s of diag?.suspects ?? []) {
+      const name = itemFor(s.fileName)?.name;
+      if (name && s.modId) text = text.replace(new RegExp(`\\b${s.modId.replace(/\W/g, "\\$&")}\\b`, "gi"), () => name);
+    }
+    return text;
+  };
   const DRIVERS: Record<string, string> = {
     NVIDIA: "https://www.nvidia.com/en-us/drivers/",
     AMD: "https://www.amd.com/en/support/download/drivers.html",
@@ -137,15 +145,15 @@
     const inst = app.instances.find((i) => i.id === instanceId);
     const out: string[] = [];
     out.push(`Obelisk diagnosis: ${inst?.name ?? instanceId}`);
-    out.push(`${KIND_LABEL[d.kind as keyof typeof KIND_LABEL]} · ${when(d.timeMs)} · ${d.file}`, "", d.headline);
+    out.push(`${KIND_LABEL[d.kind as keyof typeof KIND_LABEL]} · ${when(d.timeMs)} · ${d.file}`, "", named(d.headline));
     if (d.error) out.push(`Error: ${d.error}`);
     const fs = [...d.findings].sort((a, b) => RANK[a.severity] - RANK[b.severity]);
     if (fs.length) {
       out.push("", "What Obelisk found:");
       for (const f of fs) {
-        out.push(`- [${f.severity}] ${f.title}`);
-        if (f.detail) out.push(...f.detail.split("\n").map((l) => `    ${l}`));
-        if (f.fix) out.push(`    What to do: ${f.fix}`);
+        out.push(`- [${f.severity}] ${named(f.title)}`);
+        if (f.detail) out.push(...named(f.detail).split("\n").map((l) => `    ${l}`));
+        if (f.fix) out.push(`    What to do: ${named(f.fix)}`);
       }
     }
     if (d.suspects.length) {
@@ -245,7 +253,7 @@
         <header class="hero" class:ok={!diag.findings.some((f) => f.severity === "critical")}>
           <div>
             <small>{KIND_LABEL[diag.kind as keyof typeof KIND_LABEL]} · {when(diag.timeMs)}</small>
-            <h2>{diag.headline}</h2>
+            <h2>{named(diag.headline)}</h2>
             {#if diag.error}<code class="err-line">{diag.error}</code>{/if}
           </div>
           <button class="ghost" onclick={() => invoke("open_game_file", { instanceId, rel: diag!.file }).catch((e) => toastError(e))}>Open file</button>
@@ -254,9 +262,9 @@
         {#each [...diag.findings].sort((a, b) => RANK[a.severity] - RANK[b.severity]) as f, i (i)}
           <article class="finding {f.severity}">
             <div class="ftext">
-              <strong>{f.title}</strong>
-              {#if f.detail}<p>{f.detail}</p>{/if}
-              {#if f.fix}<p class="fix"><b>What to do:</b> {f.fix}</p>{/if}
+              <strong>{named(f.title)}</strong>
+              {#if f.detail}<p>{named(f.detail)}</p>{/if}
+              {#if f.fix}<p class="fix"><b>What to do:</b> {named(f.fix)}</p>{/if}
             </div>
             {#if f.action && (f.action !== "disable" || itemFor(f.target)?.enabled)}
               <button class="primary" onclick={() => act(f)}>{f.action === "disable" ? `Disable ${itemFor(f.target)?.name ?? "mod"}` : ACTION_LABEL[f.action]}</button>
