@@ -1724,6 +1724,8 @@ const FPS_RUN_MAX: &str = "260";
 /// Every other test: a light window and frame cap so tests don't eat the PC (user, KB #139).
 const TEST_FPS: &str = "60";
 const TEST_SIZE: (u32, u32) = (1280, 720);
+/// Where a full-pack check run's heap tries to stay (it may still grow to its -Xmx).
+const FULL_PACK_SOFT_MB: u64 = 4096;
 
 /// A lean copy's heap in MB (leancopy.py writes heap_gb to lean.json; 2 GB if it doesn't say). None for other copies.
 fn lean_heap_mb(dir: &Path) -> Option<u64> {
@@ -2120,6 +2122,10 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
             cmd.retain(|a| !heap_flag(a).is_some_and(|(k, _)| k == "-Xmx" || (k == "-Xms" && ms.is_none_or(|m| m > mx))));
             cmd.insert(0, format!("-Xmx{mx}m"));
             if !cmd.iter().any(|a| a.starts_with("-Xms")) { cmd.insert(0, "-Xms256m".into()) }
+        } else if cmd.iter().any(|a| a == "-XX:+UseZGC") && !cmd.iter().any(|a| a.starts_with("-XX:SoftMaxHeapSize")) {
+            // A full pack in the world uses up to about 4 GB (jobs 581-597): ZGC keeps under that and gives memory
+            // back, and still grows to -Xmx rather than run out.
+            cmd.insert(0, format!("-XX:SoftMaxHeapSize={FULL_PACK_SOFT_MB}m"));
         }
     }
     if prism::java::at(Path::new(&java)).is_some_and(|j| j.major >= 24) {
@@ -2152,8 +2158,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let measured_shared = measured && !exclusive;
     let stop_if_playing = measured || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    // Joining a world (autobench) uncaps frames like an FPS run.
-    let fps_run = measured || extra.iter().any(|a| a.starts_with("-Dspeedloader.autobench"));
+    // Only measurements uncap frames. Joining a world (autobench) is how every game_test gets in, so it isn't one
+    // (Overseer blind test, run 616: check runs were left at 260 fps).
+    let fps_run = measured;
     std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, world_cap, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world, fps_run));
     let lock_note = if exclusive { format!("comparison run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
         else if measured_shared { format!("measured run: shares the PC with at most one other game, as \"{owner} - {purpose} (obelisk)\"") }
