@@ -10,7 +10,8 @@ use tauri::Manager;
 
 const FILE: &str = "window.json";
 /// How long after showing a move that isn't the user's is undone.
-const SETTLE: Duration = Duration::from_secs(4);
+/// FancyZones snapped a window shown after an update about 8 s in (user, 11-10).
+const SETTLE: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Place { x: i32, y: i32, w: u32, h: u32, #[serde(default)] max: bool }

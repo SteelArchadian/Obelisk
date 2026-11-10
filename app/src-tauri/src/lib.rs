@@ -2209,6 +2209,9 @@ pub fn run() {
             // Obelisk's window starts hidden. Started with Windows it stays in the tray until opened; otherwise the
             // small update window comes first (selfupdate.rs) and opens it.
             let hidden = std::env::args().any(|a| a == "--hidden");
+            // Its saved place first: after an update the window shows straight away (resume_window), and a window
+            // shown at the default place got snapped to a zone by the window manager and saved there (user, 11-10).
+            winplace::restore(app.handle());
             if !hidden && !selfupdate::resume_window(app.handle()) {
                 selfupdate::start_window(app.handle());
             }
@@ -2298,7 +2301,6 @@ pub fn run() {
                     set_big_icon(hwnd.0 as isize);
                 }
             }
-            winplace::restore(app.handle());
             // Let the UI load icons, screenshots and world thumbnails from these folders only.
             let scope = app.asset_protocol_scope();
             scope.allow_directory(prism::instances_dir(&prism::data_dir()), true)?;
