@@ -1721,6 +1721,15 @@ fn fps_prop(a: &str) -> bool {
 }
 /// The frame cap an FPS run uses: high enough that no laptop or desktop here reaches it, so the numbers are the game's.
 const FPS_RUN_MAX: &str = "260";
+/// Every other test: a light window and frame cap so tests don't eat the PC (user, KB #139).
+const TEST_FPS: &str = "60";
+const TEST_SIZE: (u32, u32) = (1280, 720);
+
+/// A lean copy's heap in MB (leancopy.py writes heap_gb to lean.json; 2 GB if it doesn't say). None for other copies.
+fn lean_heap_mb(dir: &Path) -> Option<u64> {
+    let meta: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("lean.json")).ok()?).unwrap_or(Value::Null);
+    Some((meta["heap_gb"].as_f64().filter(|g| *g >= 1.0).unwrap_or(2.0) * 1024.0) as u64)
+}
 
 fn get_option(path: &Path, key: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()?.lines().find_map(|l| l.strip_prefix(&format!("{key}:")).map(str::to_string))
@@ -2102,6 +2111,16 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         if let Some((w, h)) = native_resolution() {
             cmd.extend(["--width".into(), w.to_string(), "--height".into(), h.to_string()]);
         }
+    } else {
+        // Tests must not eat the PC (user, KB #139): a 1280x720 window, and a lean copy's own small heap (lean.json
+        // heap_gb, else 2 GB) unless the chat set -Xmx itself. Full-pack copies keep their 6 GB budget.
+        cmd.extend(["--width".into(), TEST_SIZE.0.to_string(), "--height".into(), TEST_SIZE.1.to_string()]);
+        if let Some(mx) = lean_heap_mb(&dir).filter(|_| !extra.iter().any(|a| a.starts_with("-Xmx"))) {
+            let ms = cmd.iter().find_map(|a| heap_flag(a).filter(|(k, _)| *k == "-Xms").and_then(|(_, v)| v));
+            cmd.retain(|a| !heap_flag(a).is_some_and(|(k, _)| k == "-Xmx" || (k == "-Xms" && ms.is_none_or(|m| m > mx))));
+            cmd.insert(0, format!("-Xmx{mx}m"));
+            if !cmd.iter().any(|a| a.starts_with("-Xms")) { cmd.insert(0, "-Xms256m".into()) }
+        }
     }
     if prism::java::at(Path::new(&java)).is_some_and(|j| j.major >= 24) {
         cmd.retain(|a| a != "-XX:+ZGenerational"); // ZGC is generational-only from Java 24
@@ -2133,7 +2152,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let measured_shared = measured && !exclusive;
     let stop_if_playing = measured || args.get("stop_if_playing").and_then(|v| v.as_bool()).unwrap_or(false);
     let reply_gc = gc_used.clone();
-    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, world_cap, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world));
+    // Joining a world (autobench) uncaps frames like an FPS run.
+    let fps_run = measured || extra.iter().any(|a| a.starts_with("-Dspeedloader.autobench"));
+    std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, world_cap, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world, fps_run));
     let lock_note = if exclusive { format!("comparison run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
         else if measured_shared { format!("measured run: shares the PC with at most one other game, as \"{owner} - {purpose} (obelisk)\"") }
         else { format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") };
@@ -2148,7 +2169,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
 #[allow(clippy::too_many_arguments)]
 fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, world_cap: Option<u64>, render: bool, perf: bool, exclusive: bool, measured: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
-    build_world: Option<(Value, u64)>) {
+    build_world: Option<(Value, u64)>, fps_run: bool) {
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
@@ -2208,7 +2229,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         return;
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
-    let fps_run = perf || cmd.iter().any(|a| fps_prop(a));
+    let fps_run = perf || fps_run;
     // Only real measurements stop when the user starts playing; the caller already worked that out (`measured` covers
     // FPS props). Re-scanning cmd here also caught game_test's automatic Lightning recording, so every check run with
     // Lightning was killed the moment the user launched their game (user 11-10: chats waiting on runs that never come).
@@ -2243,14 +2264,18 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             dir.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or(copy)
         } else { copy };
         if pc_overrides { for p in super::apply_pc_overrides(&dir, &[&copy]) { eprintln!("pc override: {p}") } }
-        if fps_run { *caps.lock().expect("caps") = Some(uncap(&dir.join("options.txt"))); }
+        let opts = dir.join("options.txt");
+        *caps.lock().expect("caps") = Some(if fps_run { uncap(&opts) } else {
+            set_for_run(&opts, &[("enableVsync".into(), "false".into()), ("maxFps".into(), TEST_FPS.into())])
+        });
         if !set.is_empty() { *run_set.lock().expect("run options") = Some(set_for_run(&dir.join("options.txt"), &set)); }
         // Run logs live beside the copies, never inside one: a copy's folder must match the pack it came from.
         let runs = tb().root.join("obelisk-runs").join(dir.file_name().unwrap_or_default());
         let _ = std::fs::create_dir_all(&runs);
         let out = std::fs::File::create(runs.join(format!("{id}.stdout"))).map_err(|e| e.to_string())?;
         // The exact Java and arguments, for when a run dies before the game writes any log.
-        let _ = std::fs::write(runs.join(format!("{id}.cmd.txt")), format!("{java}\n{}\n", cmd.join("\n")));
+        let used = ["maxFps", "enableVsync"].map(|k| format!("{k}:{}", get_option(&opts, k).unwrap_or("?".into()))).join(" ");
+        let _ = std::fs::write(runs.join(format!("{id}.cmd.txt")), format!("{java}\n{}\n# options for this run: {used}\n", cmd.join("\n")));
         let started = SystemTime::now();
         let click_ms = prism::timeline::now_ms();
         let mut game = Command::new(&java).args(&cmd).current_dir(&dir).stdout(out.try_clone().map_err(|e| e.to_string())?).stderr(out)
@@ -2286,7 +2311,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
                 break format!("exited ({})", status.code().map(|c| c.to_string()).unwrap_or("?".into()));
             }
-            park_windows(pid, &mut parked, render, perf.then(native_resolution).flatten(), prev_fg);
+            park_windows(pid, &mut parked, render, if perf { native_resolution() } else { Some(TEST_SIZE) }, prev_fg);
             if window_ms.is_none() && super::top_windows().iter().any(|w| w.1 == pid && w.2) {
                 let ms = prism::timeline::now_ms();
                 window_ms = Some(ms);
@@ -2762,7 +2787,7 @@ impl ModSwap {
             }
         };
         let mods = dir.join("mods");
-        let disable = list("disable_mods")?;
+        let mut disable = list("disable_mods")?;
         for f in &disable {
             let plain = !f.contains(['/', '\\']) && !f.starts_with('.') && f.to_ascii_lowercase().ends_with(".jar");
             if !plain || !mods.join(f).is_file() { return Err(format!("disable_mods: no {f} in mods/")); }
@@ -2798,6 +2823,26 @@ impl ModSwap {
                 }
             };
             configs[i].2 = prism::tomlset::set_key(&configs[i].2, key, value).map_err(|e| format!("config: {file}: {e}"))?;
+        }
+        // The light test profile (user, KB #143): shaders and Boundless' far terrain off for this run, unless the test
+        // is about them ("shaders" / "boundless") or is a perf run, which measures the pack as the user plays it.
+        let flag = |k: &str| args.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+        if !flag("perf") && !flag("shaders") {
+            for f in ["iris.properties", "oculus.properties"] {
+                let path = dir.join("config").join(f);
+                let Ok(bytes) = std::fs::read(&path) else { continue };
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if text.lines().any(|l| l.trim() == "enableShaders=true") {
+                    configs.push((path, bytes, text.replace("enableShaders=true", "enableShaders=false")));
+                }
+            }
+        }
+        if !flag("perf") && !flag("boundless") {
+            for e in std::fs::read_dir(&mods).into_iter().flatten().flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                let l = n.to_ascii_lowercase();
+                if l.starts_with("boundless") && l.ends_with(".jar") && !disable.contains(&n) { disable.push(n) }
+            }
         }
         Ok(ModSwap { mods, disable, add, configs, ..Default::default() })
     }
