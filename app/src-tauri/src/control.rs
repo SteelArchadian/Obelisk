@@ -2209,8 +2209,10 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
     let fps_run = perf || cmd.iter().any(|a| fps_prop(a));
-    // Joining a world (autobench) uncaps frames like an FPS run, but isn't a measurement: the user playing doesn't void it.
-    let stop_if_playing = stop_if_playing || perf || cmd.iter().any(|a| fps_prop(a) && !a.starts_with("-Dspeedloader.autobench"));
+    // Only real measurements stop when the user starts playing; the caller already worked that out (`measured` covers
+    // FPS props). Re-scanning cmd here also caught game_test's automatic Lightning recording, so every check run with
+    // Lightning was killed the moment the user launched their game (user 11-10: chats waiting on runs that never come).
+    let stop_if_playing = stop_if_playing || perf;
     let caps = std::sync::Mutex::new(None);
     let run_set = std::sync::Mutex::new(None);
     let result = (|| -> Result<String, String> {
