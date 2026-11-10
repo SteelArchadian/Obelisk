@@ -2126,6 +2126,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
             // A full pack in the world uses up to about 4 GB (jobs 581-597): ZGC keeps under that and gives memory
             // back, and still grows to -Xmx rather than run out.
             cmd.insert(0, format!("-XX:SoftMaxHeapSize={FULL_PACK_SOFT_MB}m"));
+        } else if cmd.iter().any(|a| a == "-XX:+UseG1GC") && !cmd.iter().any(|a| a.starts_with("-XX:G1PeriodicGCInterval")) {
+            // G1 has no soft limit: a collection every 30 s when it's quiet hands unused memory back (Overseer, run 618).
+            cmd.insert(0, "-XX:G1PeriodicGCInterval=30000".into());
         }
     }
     if prism::java::at(Path::new(&java)).is_some_and(|j| j.major >= 24) {
@@ -2291,7 +2294,19 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         update(&jobs, id, |j| { j.state = "running".into(); j.pid = Some(pid); j.java = Some(java.clone()); });
         let t0 = Instant::now();
         let mut parked = std::collections::HashSet::new();
-        let prev_fg = foreground_window();
+        let mut prev_fg = foreground_window();
+        // Whether the user is in their own game: then a test window never keeps the focus (user, 11-10: keys stuck
+        // mid-play when one grabbed it). Checked every 15 s while this run lasts.
+        let user_game = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let run_live = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        {
+            let (user_game, run_live) = (user_game.clone(), run_live.clone());
+            std::thread::spawn(move || while run_live.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = user_playing().is_some_and(|p| p.split("; ").any(|e| !watching_media(e)));
+                user_game.store(p, std::sync::atomic::Ordering::Relaxed);
+                std::thread::sleep(Duration::from_secs(15));
+            });
+        }
         let mut stopping: Option<Instant> = None;
         let mut window_ms = None;
         let mut watch = super::devrun::Sampler::new(pid, &dir, &runs, id, click_ms, super::devrun::jcmd_for(&java).ok());
@@ -2318,7 +2333,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 let _ = std::fs::write(runs.join(format!("{id}.exit")), status.code().map(|c| c.to_string()).unwrap_or("?".into()));
                 break format!("exited ({})", status.code().map(|c| c.to_string()).unwrap_or("?".into()));
             }
-            park_windows(pid, &mut parked, render, if perf { native_resolution() } else { Some(TEST_SIZE) }, prev_fg);
+            let guard = t0.elapsed() < FOCUS_GUARD || user_game.load(std::sync::atomic::Ordering::Relaxed);
+            park_windows(pid, &mut parked, render, if perf { native_resolution() } else { Some(TEST_SIZE) }, &mut prev_fg, guard);
             if window_ms.is_none() && super::top_windows().iter().any(|w| w.1 == pid && w.2) {
                 let ms = prism::timeline::now_ms();
                 window_ms = Some(ms);
@@ -2406,6 +2422,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             std::thread::sleep(Duration::from_millis(250));
         };
         watching.store(false, std::sync::atomic::Ordering::Relaxed);
+        run_live.store(false, std::sync::atomic::Ordering::Relaxed);
         let t = prism::timeline::record(&dir, prism::timeline::Session { source: "test".into(), label: lock.clone(), click_ms,
             java_ms: Some(click_ms), window_ms, exit_ms: Some(prism::timeline::now_ms()), ..Default::default() });
         let times: Vec<String> = prism::timeline::phases(&t).iter().filter(|p| !p.idle && p.key != "launcher")
@@ -2943,7 +2960,12 @@ fn native_resolution() -> Option<(u32, u32)> {
 /// pictures or frame times are the test (`render`) needs a drawn frame instead: beyond every monitor at the bottom of
 /// the z-order, still on the taskbar; with `size` (perf) it also loses its frame and takes that size, so the game
 /// renders full screen's pixels. Once the user brings a window up it is theirs and left alone.
-fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render: bool, size: Option<(u32, u32)>, prev: isize) {
+/// How long after start a test window that takes the focus is always sent back (it's the game, not the user).
+const FOCUS_GUARD: Duration = Duration::from_secs(180);
+
+/// `prev`: the user's last window that isn't this test's, kept current. `guard`: early in the run or the user is in
+/// their own game, so a test window in front is never the user opening it: it goes back down and they get theirs back.
+fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render: bool, size: Option<(u32, u32)>, prev: &mut isize, guard: bool) {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
@@ -2957,11 +2979,23 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
         fn ShowWindow(h: isize, cmd: i32) -> i32;
     }
     let fg = unsafe { GetForegroundWindow() };
+    if fg != 0 && !parked.contains(&fg) && !parked.contains(&-fg) && !super::top_windows().iter().any(|w| w.0 == fg && w.1 == pid) {
+        *prev = fg;
+    }
+    let prev = *prev;
     // Checked every time, not once: the game restores and centres its own window when it sets its display mode after
     // start-up, which would leave a full-size window over the user's desktop.
     for (h, p, vis, _, _) in super::top_windows() {
         if p != pid || !vis || parked.contains(&-h) { continue }
         if parked.contains(&h) && fg == h && fg != prev {
+            if guard {
+                // The game took the focus by itself: keys the user holds would go to it. Down it goes, theirs back.
+                unsafe {
+                    if !render { ShowWindow(h, 6 /* SW_MINIMIZE */); }
+                    if prev != 0 && IsWindow(prev) != 0 { SetForegroundWindow(prev); }
+                }
+                continue;
+            }
             parked.insert(-h); // the user opened it: never moved or minimized again
             continue;
         }
