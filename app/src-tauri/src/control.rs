@@ -2143,6 +2143,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         },
     }
     profile.apply(&mut cmd);
+    // Tells the game itself not to take the focus when its window appears (Optimal reads it: GLFW focus-on-show off,
+    // and iconified right after creation unless it has to draw). Obelisk then touches each window once at most.
+    cmd.insert(0, format!("-Dobelisk.background={}", if render { "unfocused" } else { "minimized" }));
     if args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let Some((w, h)) = native_resolution() {
             cmd.extend(["--width".into(), w.to_string(), "--height".into(), h.to_string()]);
@@ -3006,9 +3009,6 @@ fn native_resolution() -> Option<(u32, u32)> {
 /// renders full screen's pixels. Once the user brings a window up it is theirs and left alone.
 /// How long after start a test window that takes the focus is always sent back (it's the game, not the user).
 const FOCUS_GUARD: Duration = Duration::from_secs(180);
-/// Times one test window's focus is taken back. Past this the game wins: fighting it every tick made taskbar buttons
-/// hop and the mouse lag (Overseer, 11-11).
-const MAX_RETAKES: u32 = 2;
 /// Every running test game: one test's window is never "the user's window" to give the focus back to, or two runs
 /// hand it to each other forever.
 static TEST_PIDS: std::sync::LazyLock<Mutex<std::collections::HashSet<u32>>> = std::sync::LazyLock::new(Default::default);
@@ -3022,8 +3022,6 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
         fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
         fn SetWindowLongPtrW(h: isize, index: i32, value: isize) -> isize;
         fn GetForegroundWindow() -> isize;
-        fn SetForegroundWindow(h: isize) -> i32;
-        fn IsWindow(h: isize) -> i32;
         fn GetWindowRect(h: isize, r: *mut super::shot::Rect) -> i32;
         fn GetWindowLongPtrW(h: isize, index: i32) -> isize;
         fn IsIconic(h: isize) -> i32;
@@ -3038,15 +3036,10 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
     // Take the focus back from window h, at most MAX_RETAKES times. Minimizing hands it to the next window down (the
     // user's: parked ones sit at the bottom); SetForegroundWindow from a background app is usually refused and flashes
     // a taskbar button instead, so it's only for render windows, which have to stay up.
-    let mut retake = |h: isize| {
-        let n = retakes.entry(h).or_insert(0);
-        if *n >= MAX_RETAKES { return }
-        *n += 1;
-        unsafe {
-            if !render { ShowWindow(h, 6 /* SW_MINIMIZE */); }
-            else if prev != 0 && IsWindow(prev) != 0 { SetForegroundWindow(prev); }
-        }
-    };
+    // Obelisk never takes the focus back any more (user, 11-11: "repeatedly minimizing a window is not a good idea"):
+    // the game is told not to take it (-Dobelisk.background, Optimal), and each window is touched once. This only
+    // counts the times a game took it anyway, for the run log.
+    let mut retake = |h: isize| { *retakes.entry(h).or_insert(0) += 1; };
     // Checked every time, not once: the game restores and centres its own window when it sets its display mode after
     // start-up, which would leave a full-size window over the user's desktop.
     for (h, p, vis, _, _) in super::top_windows() {
@@ -3060,7 +3053,8 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
             parked.insert(-h); // the user opened it: never moved or minimized again
             continue;
         }
-        if parked.insert(h) {
+        let first = parked.insert(h);
+        if first {
             // WS_EX_APPWINDOW, minus TOOLWINDOW and NOACTIVATE: a normal taskbar button and Win+Tab entry.
             unsafe {
                 let ex = GetWindowLongPtrW(h, -20 /* GWL_EXSTYLE */);
@@ -3068,7 +3062,8 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
             }
         }
         if !render {
-            if unsafe { IsIconic(h) } == 0 { unsafe { ShowWindow(h, 7 /* SW_SHOWMINNOACTIVE */) }; }
+            // Once, like a command prompt that starts minimized; never again, whatever the game does after.
+            if first && unsafe { IsIconic(h) } == 0 { unsafe { ShowWindow(h, 7 /* SW_SHOWMINNOACTIVE */) }; }
             continue;
         }
         // A minimized window draws nothing; moving one back would also look to Windows and window managers like
