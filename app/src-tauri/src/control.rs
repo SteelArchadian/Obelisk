@@ -2329,6 +2329,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let mut game = game.spawn().map_err(|e| format!("couldn't start Java: {e}"))?;
         let pid = game.id();
         cap_test_game(&game);
+        TEST_PIDS.lock().expect("test pids").insert(pid);
+        let mut retakes = HashMap::new();
         update(&jobs, id, |j| { j.state = "running".into(); j.pid = Some(pid); j.java = Some(java.clone()); });
         let t0 = Instant::now();
         let mut parked = std::collections::HashSet::new();
@@ -2372,7 +2374,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                 break format!("exited ({})", status.code().map(|c| c.to_string()).unwrap_or("?".into()));
             }
             let guard = t0.elapsed() < FOCUS_GUARD || user_game.load(std::sync::atomic::Ordering::Relaxed);
-            park_windows(pid, &mut parked, render, if perf { native_resolution() } else { Some(TEST_SIZE) }, &mut prev_fg, guard);
+            park_windows(pid, &mut parked, render, if perf { native_resolution() } else { Some(TEST_SIZE) }, &mut prev_fg, guard, &mut retakes);
             if window_ms.is_none() && super::top_windows().iter().any(|w| w.1 == pid && w.2) {
                 let ms = prism::timeline::now_ms();
                 window_ms = Some(ms);
@@ -2461,6 +2463,10 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         };
         watching.store(false, std::sync::atomic::Ordering::Relaxed);
         run_live.store(false, std::sync::atomic::Ordering::Relaxed);
+        TEST_PIDS.lock().expect("test pids").remove(&pid);
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(runs.join(format!("{id}.cmd.txt"))) {
+            let _ = writeln!(f, "# focus taken back: {} time(s) over {} window(s)", retakes.values().sum::<u32>(), retakes.len());
+        }
         let t = prism::timeline::record(&dir, prism::timeline::Session { source: "test".into(), label: lock.clone(), click_ms,
             java_ms: Some(click_ms), window_ms, exit_ms: Some(prism::timeline::now_ms()), ..Default::default() });
         let times: Vec<String> = prism::timeline::phases(&t).iter().filter(|p| !p.idle && p.key != "launcher")
@@ -3000,10 +3006,17 @@ fn native_resolution() -> Option<(u32, u32)> {
 /// renders full screen's pixels. Once the user brings a window up it is theirs and left alone.
 /// How long after start a test window that takes the focus is always sent back (it's the game, not the user).
 const FOCUS_GUARD: Duration = Duration::from_secs(180);
+/// Times one test window's focus is taken back. Past this the game wins: fighting it every tick made taskbar buttons
+/// hop and the mouse lag (Overseer, 11-11).
+const MAX_RETAKES: u32 = 2;
+/// Every running test game: one test's window is never "the user's window" to give the focus back to, or two runs
+/// hand it to each other forever.
+static TEST_PIDS: std::sync::LazyLock<Mutex<std::collections::HashSet<u32>>> = std::sync::LazyLock::new(Default::default);
 
 /// `prev`: the user's last window that isn't this test's, kept current. `guard`: early in the run or the user is in
 /// their own game, so a test window in front is never the user opening it: it goes back down and they get theirs back.
-fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render: bool, size: Option<(u32, u32)>, prev: &mut isize, guard: bool) {
+fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render: bool, size: Option<(u32, u32)>, prev: &mut isize, guard: bool,
+    retakes: &mut HashMap<isize, u32>) {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn SetWindowPos(h: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
@@ -3017,10 +3030,23 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
         fn ShowWindow(h: isize, cmd: i32) -> i32;
     }
     let fg = unsafe { GetForegroundWindow() };
-    if fg != 0 && !parked.contains(&fg) && !parked.contains(&-fg) && !super::top_windows().iter().any(|w| w.0 == fg && w.1 == pid) {
+    let tests = TEST_PIDS.lock().expect("test pids").clone();
+    if fg != 0 && !parked.contains(&fg) && !parked.contains(&-fg) && !super::top_windows().iter().any(|w| w.0 == fg && (w.1 == pid || tests.contains(&w.1))) {
         *prev = fg;
     }
     let prev = *prev;
+    // Take the focus back from window h, at most MAX_RETAKES times. Minimizing hands it to the next window down (the
+    // user's: parked ones sit at the bottom); SetForegroundWindow from a background app is usually refused and flashes
+    // a taskbar button instead, so it's only for render windows, which have to stay up.
+    let mut retake = |h: isize| {
+        let n = retakes.entry(h).or_insert(0);
+        if *n >= MAX_RETAKES { return }
+        *n += 1;
+        unsafe {
+            if !render { ShowWindow(h, 6 /* SW_MINIMIZE */); }
+            else if prev != 0 && IsWindow(prev) != 0 { SetForegroundWindow(prev); }
+        }
+    };
     // Checked every time, not once: the game restores and centres its own window when it sets its display mode after
     // start-up, which would leave a full-size window over the user's desktop.
     for (h, p, vis, _, _) in super::top_windows() {
@@ -3028,10 +3054,7 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
         if parked.contains(&h) && fg == h && fg != prev {
             if guard {
                 // The game took the focus by itself: keys the user holds would go to it. Down it goes, theirs back.
-                unsafe {
-                    if !render { ShowWindow(h, 6 /* SW_MINIMIZE */); }
-                    if prev != 0 && IsWindow(prev) != 0 { SetForegroundWindow(prev); }
-                }
+                retake(h);
                 continue;
             }
             parked.insert(-h); // the user opened it: never moved or minimized again
@@ -3069,12 +3092,8 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
         }
     }
     // The game shows itself focused when it starts: the foreground goes back to what the user had.
-    unsafe {
-        let fg = GetForegroundWindow();
-        if prev != 0 && fg != prev && parked.contains(&fg) && !parked.contains(&-fg) && IsWindow(prev) != 0 {
-            SetForegroundWindow(prev);
-        }
-    }
+    let fg = unsafe { GetForegroundWindow() };
+    if fg != prev && parked.contains(&fg) && !parked.contains(&-fg) { retake(fg) }
 }
 
 fn foreground_window() -> isize {
