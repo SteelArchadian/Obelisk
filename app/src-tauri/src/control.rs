@@ -2145,7 +2145,8 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     profile.apply(&mut cmd);
     // Tells the game itself not to take the focus when its window appears (Optimal reads it: GLFW focus-on-show off,
     // and iconified right after creation unless it has to draw). Obelisk then touches each window once at most.
-    cmd.insert(0, format!("-Dobelisk.background={}", if render { "unfocused" } else { "minimized" }));
+    // Always "unfocused", never "minimized": the taskbar preview has to stay live (user, 11-11).
+    cmd.insert(0, "-Dobelisk.background=unfocused".to_string());
     if args.get("perf").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let Some((w, h)) = native_resolution() {
             cmd.extend(["--width".into(), w.to_string(), "--height".into(), h.to_string()]);
@@ -3025,7 +3026,6 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
         fn GetWindowRect(h: isize, r: *mut super::shot::Rect) -> i32;
         fn GetWindowLongPtrW(h: isize, index: i32) -> isize;
         fn IsIconic(h: isize) -> i32;
-        fn ShowWindow(h: isize, cmd: i32) -> i32;
     }
     let fg = unsafe { GetForegroundWindow() };
     let tests = TEST_PIDS.lock().expect("test pids").clone();
@@ -3061,11 +3061,9 @@ fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render:
                 SetWindowLongPtrW(h, -20, (ex | 0x0004_0000) & !(0x80 | 0x0800_0000));
             }
         }
-        if !render {
-            // Once, like a command prompt that starts minimized; never again, whatever the game does after.
-            if first && unsafe { IsIconic(h) } == 0 { unsafe { ShowWindow(h, 7 /* SW_SHOWMINNOACTIVE */) }; }
-            continue;
-        }
+        // Every test window is parked off-screen, never minimized: a minimized game stops drawing, and the user
+        // watches tests through the taskbar button's live preview (user, 11-11). Moving uses NOACTIVATE: no focus.
+        let _ = (first, render);
         // A minimized window draws nothing; moving one back would also look to Windows and window managers like
         // FancyZones as a window dragged back while the user works (user, 2026-11-04).
         if unsafe { IsIconic(h) } != 0 { continue }
