@@ -1394,40 +1394,6 @@ const INVALID: &str = "invalid";
 
 /// What the user is playing (benchlock.py playing: their launcher's Minecraft outside the bench, or any fullscreen
 /// app), or None.
-/// A test game's CPU share of the whole PC (KB #138): 20%, 12% and the second half of the cores while the user plays.
-/// Set at start, before the load spike (user, 11-11: a run on all 24 cores at normal priority lagged their mouse;
-/// ResCap skipped it because its Java lives in Prism's folder). ResCap keeps adjusting it as the user starts/stops.
-fn cap_test_game(game: &std::process::Child) {
-    use std::os::windows::io::AsRawHandle;
-    #[repr(C)]
-    struct CpuRate { flags: u32, rate: u32 }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn CreateJobObjectW(attr: *const u8, name: *const u16) -> isize;
-        fn SetInformationJobObject(job: isize, class: i32, info: *const CpuRate, len: u32) -> i32;
-        fn AssignProcessToJobObject(job: isize, process: isize) -> i32;
-        fn SetProcessAffinityMask(process: isize, mask: usize) -> i32;
-        fn CloseHandle(h: isize) -> i32;
-    }
-    let playing = user_playing().is_some_and(|p| p.split("; ").any(|e| !watching_media(e)));
-    let h = game.as_raw_handle() as isize;
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).min(usize::BITS as usize);
-    unsafe {
-        if playing && cores >= 2 {
-            let all: usize = if cores == usize::BITS as usize { usize::MAX } else { (1 << cores) - 1 };
-            SetProcessAffinityMask(h, all & !((1usize << (cores / 2)) - 1));
-        }
-        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if job != 0 {
-            // JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | HARD_CAP; rate in 1/100 of a percent. The job outlives its handle.
-            let info = CpuRate { flags: 1 | 4, rate: if playing { 1200 } else { 2000 } };
-            SetInformationJobObject(job, 15 /* JobObjectCpuRateControlInformation */, &info, 8);
-            AssignProcessToJobObject(job, h);
-            CloseHandle(job);
-        }
-    }
-}
-
 fn user_playing() -> Option<String> {
     let o = bench(&["playing"]).output().ok()?;
     if o.status.code() != Some(0) { return None }
@@ -2332,7 +2298,8 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         { use std::os::windows::process::CommandExt; game.creation_flags(0x0800_0000 /* CREATE_NO_WINDOW */ | 0x4000 /* BELOW_NORMAL */); }
         let mut game = game.spawn().map_err(|e| format!("couldn't start Java: {e}"))?;
         let pid = game.id();
-        cap_test_game(&game);
+        // The CPU ceiling (KB #138) is ResCap's job, not Obelisk's: job objects and affinity changes on a child
+        // process got Obelisk quarantined as a trojan (Defender ML, 11-12). Below-normal priority stays (creation flag).
         TEST_PIDS.lock().expect("test pids").insert(pid);
         let mut retakes = HashMap::new();
         update(&jobs, id, |j| { j.state = "running".into(); j.pid = Some(pid); j.java = Some(java.clone()); });
