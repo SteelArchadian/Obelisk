@@ -6,6 +6,10 @@ fn main() {
     if std::env::args().any(|a| a == "--mcp") {
         return obelisk_lib::mcp_serve();
     }
+    // Any assistant tool from a shell, for when the assistant's MCP link dropped: obelisk-mcp.exe --call <tool> [json].
+    if std::env::args().nth(1).as_deref() == Some("--call") {
+        std::process::exit(obelisk_lib::mcp_call_cli(std::env::args().skip(2).collect()));
+    }
     // Asked by the installer (clean install) and the uninstaller, while no Obelisk window runs.
     if std::env::args().any(|a| a == "--reset-data") {
         return obelisk_lib::reset_data();

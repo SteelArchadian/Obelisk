@@ -170,6 +170,24 @@ fn live_tools() -> (Value, Option<String>) {
     }
 }
 
+/// `--call <tool> [json args]`: one tool, answer printed as JSON. The same tools as the MCP link, so an assistant whose
+/// link dropped (Obelisk updated, reinstalled, quarantined) carries on from its shell instead of being stuck.
+pub fn call_cli(args: Vec<String>) -> i32 {
+    let Some(tool) = args.first() else {
+        eprintln!("usage: obelisk-mcp.exe --call <tool> [json args]");
+        return 2;
+    };
+    let a: Value = match args.get(1).map(|s| serde_json::from_str(s)) {
+        None => json!({}),
+        Some(Ok(v)) => v,
+        Some(Err(e)) => { eprintln!("args aren't JSON: {e}"); return 2; }
+    };
+    match call(tool, &a) {
+        Ok(v) => { println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()); 0 }
+        Err(e) => { eprintln!("{tool}: {e}"); 1 }
+    }
+}
+
 pub fn serve() {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -186,7 +204,7 @@ pub fn serve() {
                 "protocolVersion": msg.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18")),
                 "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "obelisk", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management)."
+                "instructions": "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management). If these tools ever stop answering (Obelisk was updated or reinstalled), run the same tool from a shell: \"<this exe> --call <tool> <json args>\" (path in your MCP config), then reconnect."
             })),
             "ping" => Ok(json!({})),
             "tools/list" => {

@@ -32,6 +32,10 @@ pub fn mcp_serve() {
     mcp::serve()
 }
 
+pub fn mcp_call_cli(args: Vec<String>) -> i32 {
+    mcp::call_cli(args)
+}
+
 /// `obelisk.exe --reset-data` (the installer's clean install) and `--uninstall-cleanup` (the uninstaller); see cleanup.rs.
 pub fn reset_data() {
     cleanup::reset_data()
