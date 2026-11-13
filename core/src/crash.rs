@@ -125,11 +125,58 @@ pub fn diagnose(game: &Path, rel: &str) -> Result<Diagnosis, String> {
     let mods = mod_files(game);
     let kind = if rel.starts_with("hs_err") { "jvm" } else if rel.starts_with("logs/") { "log" } else { "crash" };
     let mut d = analyze(kind, &text, &mods);
-    crate::insight::enrich(&mut d, kind, &text, &crate::insight::Index::build(game));
+    let ix = crate::insight::Index::build(game);
+    crate::insight::enrich(&mut d, kind, &text, &ix);
+    display_names(&mut d, &ix);
     d.file = rel.to_string();
     d.kind = kind.into();
     d.time_ms = modified_ms(&path);
     Ok(d)
+}
+
+/// Findings name mods by their id; swap in the name the mod gives itself ("Obe" → "Obe Entity Model Features").
+fn display_names(d: &mut Diagnosis, ix: &crate::insight::Index) {
+    for s in d.suspects.clone() {
+        let Some((name, file)) = ix.who(&s.mod_id) else { continue };
+        let id = pretty(&s.mod_id);
+        // Matched by id inside the jar, not by file name: it is installed after all.
+        if s.file_name.is_empty() && !file.is_empty() {
+            let gone = format!("{id} isn't installed any more");
+            d.findings.retain(|f| f.title != gone);
+            for f in d.findings.iter_mut().filter(|f| f.action == "disable" && f.target.is_empty()) {
+                f.target = file.clone();
+            }
+            if let Some(x) = d.suspects.iter_mut().find(|x| x.mod_id == s.mod_id) {
+                x.file_name = file.clone();
+            }
+        }
+        if name.trim().is_empty() || name == id {
+            continue;
+        }
+        let swap = |t: &mut String| *t = replace_word(t, &id, &name);
+        swap(&mut d.headline);
+        for f in &mut d.findings {
+            swap(&mut f.title);
+            swap(&mut f.detail);
+            swap(&mut f.fix);
+        }
+    }
+}
+
+/// Every whole-word `from` in `t` replaced with `to`.
+fn replace_word(t: &str, from: &str, to: &str) -> String {
+    let mut out = String::new();
+    let mut rest = t;
+    while let Some(i) = rest.find(from) {
+        let before = rest[..i].chars().last();
+        let after = rest[i + from.len()..].chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..i]);
+        out.push_str(if word(before) || word(after) { from } else { to });
+        rest = &rest[i + from.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Files in mods/ by lowercase name (with and without .disabled), for matching stack frames.
@@ -159,8 +206,19 @@ pub fn ran(s: &Suspect) -> bool {
 
 /// The analysis itself (no file access), so it can be tested on text.
 pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagnosis {
-    let lines: Vec<&str> = text.lines().collect();
     let mut d = Diagnosis::default();
+    if text.trim().is_empty() {
+        d.headline = "This file is empty".into();
+        d.findings.push(Finding {
+            severity: "info".into(),
+            title: "This file is empty".into(),
+            detail: "The game started writing it but nothing got in, usually because the game was closed or the PC shut down right then.".into(),
+            fix: "Nothing to read here. If the game crashed, open the newest log or crash report instead.".into(),
+            ..Default::default()
+        });
+        return d;
+    }
+    let lines: Vec<&str> = text.lines().collect();
     let lower = text.to_lowercase();
 
     // ---- the error line
@@ -291,7 +349,7 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         let (what, func) = native_call(&call);
         let caller = jframes.iter().find(|(_, module)| !game_module(module)).cloned();
         let caller_file = caller.as_ref().map(|(_, id)| match_file("", id, mods)).unwrap_or_default();
-        let lib = frame.split_once('[').and_then(|(_, r)| r.split(['+', ']']).next()).unwrap_or("").to_string();
+        let lib = frame.split_once('[').and_then(|(_, r)| r.split(['+', ']']).next()).filter(|l| !l.starts_with("0x")).unwrap_or("").to_string();
         let addr = lines.iter().find(|l| l.starts_with("siginfo:")).and_then(|l| l.split("address 0x").nth(1))
             .and_then(|h| u64::from_str_radix(h.split_whitespace().next().unwrap_or(""), 16).ok());
         let bad_mem = match addr {
@@ -301,7 +359,7 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         };
         if let Some(v) = vendor {
             let render = thread.contains("Render thread");
-            let from = match &caller { Some((m, id)) => format!(" The call came from {} ({}).", title_case(id), short_method(m)), None => String::new() };
+            let from = match &caller { Some((m, id)) => format!(" The call came from {} ({}).", pretty(id), short_method(m)), None => String::new() };
             f.push(Finding {
                 severity: "critical".into(),
                 title: format!("The {v} graphics driver crashed"),
@@ -310,7 +368,7 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
                 action: "driver".into(), target: v.to_string(), ..Default::default()
             });
         } else if let (Some((m, id)), false, false) = (&caller, fl.contains("jvm.dll") || fl.contains("libjvm"), native_oom) {
-            let name = title_case(id);
+            let name = pretty(id);
             let place = if lib.is_empty() {
                 " The exact spot has no file name: it's code the graphics driver builds while the game runs.".to_string()
             } else { format!(" The exact spot is in {lib}.") };
@@ -341,6 +399,16 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
                 detail: format!("The crash is inside Java ({frame}). That's usually a Java bug or bad RAM/overclock, rarely a mod."),
                 fix: "Update Java (Temurin 21 for 1.21), and if you overclock your RAM or CPU, try stock settings.".into(),
                 action: "java".into(), ..Default::default()
+            });
+        } else if (frame.starts_with("J ") || frame.starts_with("j ")) && !native_oom {
+            // Java code that writes raw memory (LWJGL's MemoryUtil and the like) was handed a bad address.
+            let at = jvm_frame(&frame).map(|(m, _)| short_method(&m)).unwrap_or_default();
+            f.push(Finding {
+                severity: "critical".into(),
+                title: "The game wrote to memory it didn't own".into(),
+                detail: format!("Code that works with memory directly ({at}) {bad_mem}. It was handed a bad memory address, usually by a mod that draws things itself or manages its own memory."),
+                fix: "Update the mods that change rendering or memory use (performance and shader mods first). If it keeps happening, disable them one at a time to find which one.".into(),
+                ..Default::default()
             });
         } else if !frame.is_empty() && !native_oom {
             f.push(Finding {
@@ -434,10 +502,14 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
     let mixin_fail: Vec<String> = lines.iter().filter(|l| l.contains("Mixin apply") && l.contains("failed") || l.contains("InvalidInjectionException") || l.contains("MixinTransformerError"))
         .take(3).map(|l| l.trim().to_string()).collect();
     if !mixin_fail.is_empty() {
-        let owner = lines.iter().find_map(|l| l.split("from mod ").nth(1).map(|s| s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("").to_string())).filter(|s| !s.is_empty());
+        // "Mixin apply for mod X failed ... from mod X", or the handler$abc000$X$method name in the exception.
+        let owner = mixin_fail.iter().find_map(|l| ["Mixin apply for mod ", "from mod "].iter().find_map(|k| l.split(k).nth(1))
+                .map(|s| s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("").to_lowercase())
+                .filter(|o| !o.is_empty() && o != "file")
+                .or_else(|| mixin_owners(l).into_iter().next()));
         f.push(Finding {
             severity: "critical".into(),
-            title: match &owner { Some(o) => format!("{o} couldn't patch the game (mixin failed)"), None => "A mod couldn't patch the game (mixin failed)".into() },
+            title: match &owner { Some(o) => format!("{} couldn't patch the game (mixin failed)", pretty(o)), None => "A mod couldn't patch the game (mixin failed)".into() },
             detail: "Mods change Minecraft's code with mixins. One of them no longer fits, usually because it's the wrong version for your Minecraft or clashes with another mod.".into(),
             fix: "Update that mod, or check it's the build for your Minecraft and loader version.".into(),
             action: if owner.is_some() { "page".into() } else { String::new() },
@@ -477,8 +549,8 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
     if let Some(s) = d.suspects.iter().take(2).find(|s| connector_ids.contains(&s.mod_id)) {
         f.push(Finding {
             severity: "info".into(),
-            title: format!("{} is a Fabric mod running through Connector", s.mod_id),
-            detail: format!("{} is loaded through Sinytra Connector. Connector works with most Fabric mods, but not all.", s.mod_id),
+            title: format!("{} is a Fabric mod running through Connector", pretty(&s.mod_id)),
+            detail: format!("{} is loaded through Sinytra Connector. Connector works with most Fabric mods, but not all.", pretty(&s.mod_id)),
             fix: "If there's a NeoForge version of that mod, use it instead. Otherwise report it to Connector's issue tracker too.".into(),
             ..Default::default()
         });
@@ -488,17 +560,17 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         if s.file_name.ends_with(".disabled") {
             f.push(Finding {
                 severity: "info".into(),
-                title: format!("{} is disabled now", s.mod_id),
+                title: format!("{} is disabled now", pretty(&s.mod_id)),
                 detail: "The mod that crashed here has been turned off since. If the game runs fine now, this crash is already dealt with.".into(),
-                fix: String::new(),
+                fix: "Nothing to do unless the crash comes back.".into(),
                 ..Default::default()
             });
         } else if s.file_name.is_empty() {
             f.push(Finding {
                 severity: "info".into(),
-                title: format!("{} isn't installed any more", s.mod_id),
+                title: format!("{} isn't installed any more", pretty(&s.mod_id)),
                 detail: "The mod that crashed here is no longer in this profile, so this crash is probably old news.".into(),
-                fix: String::new(),
+                fix: "Nothing to do unless the crash comes back.".into(),
                 ..Default::default()
             });
         }
@@ -551,7 +623,7 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
             detail: format!("{} Minecraft itself hit the error, not a mod, so a mod most likely handed it bad data or left something in a bad state.{}",
                 plain_error(&d.error), if top.is_some() { " The mods below were in the call chain, the first one most closely; it's a lead, not proof." } else { "" }),
             fix: match &top {
-                Some(s) => format!("Disable {} to see whether the crash stops. If it does, update it or report the crash (this file) to its author.", s.mod_id),
+                Some(s) => format!("Disable {} to see whether the crash stops. If it does, update it or report the crash (this file) to its author.", pretty(&s.mod_id)),
                 None => "Nothing in the crash points at a mod. Think back to what changed last (a mod added or updated, a config edited) and undo that first.".into(),
             },
             action: if top.is_some() { "disable".into() } else { String::new() },
@@ -561,14 +633,14 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
     }
     if kind == "crash" && f.iter().all(|x| x.severity != "critical") {
         if let Some(s) = &top {
-            let name = title_case(&s.mod_id);
+            let name = pretty(&s.mod_id);
             let (detail, fix) = match missing_part(&d.error, &frames) {
                 Some((owner, part, class)) if owner == s.mod_id => (
                     format!("{name} tried to use a part of itself ({part}, in {class}) that isn't there. The mod's file is probably damaged or only half updated."),
                     format!("Reinstall {name} (remove it, then add it again from Browse). If that doesn't help, report the crash (this file) to {name}'s author."),
                 ),
                 Some((owner, part, class)) => {
-                    let other = if owner.is_empty() { "another mod".to_string() } else { title_case(&owner) };
+                    let other = if owner.is_empty() { "another mod".to_string() } else { pretty(&owner) };
                     (format!("{name} tried to use a part of {other} ({part}, in {class}) that the installed {other} doesn't have. \
                         That almost always means {name} was made for a different version of {other}: the two don't fit together."),
                      format!("Update {name} first; its page says which {other} version it needs. If it's already up to date, install the {other} version it asks for, or disable {name} until they match."))
@@ -689,8 +761,14 @@ fn jvm_frame(l: &str) -> Option<(String, String)> {
 
 /// Java, the game, the loader and libraries: never the mod to blame. An unknown ("") module isn't a mod either.
 fn game_module(m: &str) -> bool {
-    m.is_empty() || m.starts_with("java.") || m.starts_with("jdk.") || m.starts_with("org.lwjgl") || NOT_MODS.contains(&m)
+    m.is_empty() || m.starts_with("java.") || m.starts_with("jdk.") || NOT_MODS.contains(&m) || library(m)
         || matches!(m, "fabricloader" | "org.spongepowered.mixin")
+}
+
+/// Libraries the game and loader ship (by module or package): a frame in one only passes the call along.
+fn library(m: &str) -> bool {
+    ["org.lwjgl", "it.unimi.dsi", "com.google", "org.apache", "io.netty", "com.mojang", "org.joml", "org.slf4j", "com.electronwill",
+        "org.objectweb", "net.jodah", "oshi", "com.ibm.icu", "org.jline", "org.antlr", "cpw.mods", "sun."].iter().any(|p| m.starts_with(p))
 }
 
 /// What kind of native call a frame is, in plain words, and the function: ("drawing", "glDrawElements").
@@ -736,15 +814,19 @@ fn short_method(m: &str) -> String {
     if p.len() >= 2 { format!("{}.{}", p[1], p[0]) } else { m.to_string() }
 }
 
-fn title_case(s: &str) -> String {
-    let mut c = s.chars();
-    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+/// A mod id as a name people read: "seamless_loading_screen" → "Seamless Loading Screen". diagnose() swaps in the
+/// mod's own display name where the mods folder has one.
+pub fn pretty(s: &str) -> String {
+    s.split(['_', '-']).filter(|w| !w.is_empty()).map(|w| {
+        let mut c = w.chars();
+        c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default()
+    }).collect::<Vec<_>>().join(" ")
 }
 
 /// hs_err Java frame "me.cortex.voxy.client.Foo.bar" → an installed file whose name contains a package word.
 fn guess_from_package(pkg: &str, mods: &HashMap<String, String>) -> Option<(String, String)> {
     let parts: Vec<&str> = pkg.split('.').collect();
-    if parts.len() < 3 || matches!(parts[0], "java" | "jdk" | "sun") || pkg.starts_with("net.minecraft") || pkg.starts_with("com.mojang") || pkg.starts_with("net.neoforged") || pkg.starts_with("org.lwjgl") {
+    if parts.len() < 3 || matches!(parts[0], "java" | "jdk" | "sun") || pkg.starts_with("net.minecraft") || pkg.starts_with("net.neoforged") || library(pkg) {
         return None;
     }
     for word in parts.iter().skip(1).take(3) {
@@ -764,7 +846,14 @@ fn plain_error(e: &str) -> String {
         return String::new();
     }
     let (kind, msg) = e.split_once(':').unwrap_or((e, ""));
-    let short = kind.rsplit('.').next().unwrap_or(kind);
+    let short = kind.rsplit(['.', '$']).next().unwrap_or(kind);
+    let msg = msg.trim();
+    // A wrapper ("RuntimeException: java.lang.IllegalStateException: ...") says nothing; the error inside does.
+    let inner = msg.split(':').next().unwrap_or("").trim();
+    if matches!(short, "RuntimeException" | "ExecutionException" | "CompletionException" | "ReportedException" | "InvocationTargetException")
+        && inner.contains('.') && !inner.contains(' ') && (inner.ends_with("Exception") || inner.ends_with("Error")) {
+        return plain_error(msg);
+    }
     let what = match short {
         "NullPointerException" => "It tried to use something that wasn't there (a null value).",
         "ConcurrentModificationException" => "Two parts of the game changed the same list at the same time.",
@@ -773,10 +862,22 @@ fn plain_error(e: &str) -> String {
         "IllegalStateException" => "It found the game in a state it didn't expect.",
         "NoSuchMethodError" | "NoSuchFieldError" | "NoClassDefFoundError" | "ClassNotFoundException" => "It expected code that isn't there: usually a missing library or a version mismatch.",
         "StackOverflowError" => "It got stuck calling itself in a loop.",
+        "ExceptionInInitializerError" => "It failed while setting itself up.",
+        "IllegalArgumentException" => "It was handed a value it can't work with.",
+        "UnsupportedOperationException" => "It asked for something that isn't allowed there, usually a clash between two mods.",
+        "IllegalClassLoadError" | "MixinApplyError" | "MixinTransformerError" | "InvalidInjectionException" | "InvalidMixinException" =>
+            "One of its mixins (the patches it makes to the game's code) is broken or no longer fits.",
+        "ModLoadingCrashException" | "ModLoadingException" | "LoadingFailedException" => "It failed while the game was loading mods.",
+        "OutOfMemoryError" => "The game ran out of memory.",
+        "IOException" | "FileNotFoundException" | "NoSuchFileException" | "AccessDeniedException" => "It couldn't read or write a file it needed.",
+        "NumberFormatException" => "It read a number that wasn't a number, usually from a config file.",
+        "JsonSyntaxException" | "JsonParseException" | "MalformedJsonException" => "It read a data or config file that's broken.",
         _ => "",
     };
-    let msg = msg.trim();
-    if what.is_empty() { format!("Error: {short}{}", if msg.is_empty() { String::new() } else { format!(" ({msg})") }) } else { what.to_string() }
+    if what.is_empty() {
+        // Still say it in words; the exact error stays in the excerpt for the mod's author.
+        "It hit an error it didn't handle.".to_string()
+    } else { what.to_string() }
 }
 
 fn headline(kind: &str, f: &[Finding], desc: &str, top: Option<&Suspect>) -> String {
@@ -786,7 +887,7 @@ fn headline(kind: &str, f: &[Finding], desc: &str, top: Option<&Suspect>) -> Str
     match kind {
         "log" => if f.is_empty() { "The last session looks clean".into() } else { "The last session ran, with some warnings".into() },
         _ => match top {
-            Some(s) => format!("Crash involving {}", s.mod_id),
+            Some(s) => format!("Crash involving {}", pretty(&s.mod_id)),
             None if !desc.is_empty() => format!("Crash: {desc}"),
             None => "Crash with no clear cause".into(),
         },
@@ -796,6 +897,15 @@ fn headline(kind: &str, f: &[Finding], desc: &str, top: Option<&Suspect>) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_and_errors_read_as_words() {
+        assert_eq!(pretty("seamless_loading_screen"), "Seamless Loading Screen");
+        assert_eq!(replace_word("Obe crashed; Obelisk didn't", "Obe", "Obe EMF"), "Obe EMF crashed; Obelisk didn't");
+        assert_eq!(plain_error("java.lang.RuntimeException: java.lang.IllegalStateException: bad"), "It found the game in a state it didn't expect.");
+        assert!(!plain_error("a.b.WeirdException: x").contains("Weird"));
+        assert!(game_module("it.unimi.dsi.fastutil"));
+    }
 
     fn mods() -> HashMap<String, String> {
         [("advancedcompassplus-1.0.0.jar", "advancedcompassplus-1.0.0.jar"),

@@ -40,8 +40,11 @@ fn stopped(job: u32) -> bool {
 }
 
 /// One request to the game in `dir` (started at unix second `started`, so an old run's probe file isn't used).
-pub(crate) fn ask(dir: &Path, started: u64, mut req: Value) -> Result<Value, String> {
-    let file = dir.join(".obelisk").join("probe.json");
+pub(crate) fn ask(dir: &Path, started: u64, req: Value) -> Result<Value, String> { ask_at(dir, "probe.json", started, req) }
+
+/// The same line protocol to whichever in-game listener wrote `name` (probe.json: test harness, bridge.json: MC Control Bridge).
+fn ask_at(dir: &Path, name: &str, started: u64, mut req: Value) -> Result<Value, String> {
+    let file = dir.join(".obelisk").join(name);
     let fresh = std::fs::metadata(&file).and_then(|m| m.modified()).ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|t| t.as_secs() + 5 >= started);
     if !fresh {
@@ -182,6 +185,15 @@ impl Game<'_> {
             let r = self.cmd(format!("tp @s {} {} {}{look}", p[0], p[1], p[2]))?;
             (self.pause)(0.25)?; // the client sees the new position a tick later
             return Ok(r);
+        }
+        if let Some(script) = step.get("bridge").and_then(|b| b.as_str()) {
+            // MC Control Bridge (separate mod, on for game_test runs with bridge steps): screens, clicks, keys.
+            let r = ask_at(self.dir, "bridge.json", self.started, json!({ "op": "do", "script": script }))
+                .map_err(|e| e.replace("probe", "control bridge"))?;
+            if r["ok"] == false {
+                return Err(format!("bridge script stopped at {}: {} (screen: {})", r["failedAt"], r["error"].as_str().unwrap_or("failed"), r["screen"]));
+            }
+            return Ok(json!({ "out": r["out"], "screen": r["screen"] }));
         }
         if let Some(w) = step.get("wait").and_then(|w| w.as_f64()) {
             (self.pause)(w)?;

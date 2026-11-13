@@ -1197,11 +1197,18 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
         o.insert("auto_profile".into(), json!(true));
     }
     o.insert("jvm".into(), Value::Array(jvm));
-    let id = launch(&la, jobs)?["job"].as_u64().ok_or("launch gave no job")? as u32;
+    // MC Control Bridge only listens when this file exists at startup (launch can't pass it a -D); off after the run.
+    let bridge = steps.iter().any(|s| s.get("bridge").is_some()).then(|| dir.join(".obelisk").join("mcbridge.enable"));
+    if let Some(f) = &bridge {
+        let _ = std::fs::create_dir_all(dir.join(".obelisk"));
+        std::fs::write(f, "").map_err(|e| format!("couldn't turn on the control bridge: {e}"))?;
+    }
+    let id = launch(&la, jobs).inspect_err(|_| if let Some(f) = &bridge { let _ = std::fs::remove_file(f); })?["job"].as_u64().ok_or("launch gave no job")? as u32;
     super::game::progress(id, |p| { p.phase = "launching".into(); p.steps = steps.len(); });
     let jobs2 = jobs.clone();
     let run = move || {
         let result = run_test(id, steps, scenario_timeout, dyno, &jobs2, &dir).unwrap_or_else(|e| json!({ "job": id, "error": e }));
+        if let Some(f) = &bridge { let _ = std::fs::remove_file(f); }
         super::game::progress(id, |p| { p.phase = "done".into(); p.result = Some(result.clone()); });
         result
     };

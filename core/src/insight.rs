@@ -224,7 +224,7 @@ pub fn apply_knowledge(d: &mut Diagnosis, kind: &str, text: &str, ix: &Index) {
         let blame = if !r.blame.is_empty() { Some(r.blame.clone()) } else { namespace_after(text, &lower, &r.blame_from) };
         let mut detail = r.detail.clone();
         if let Some(b) = &blame {
-            let name = ix.who(b).map(|w| w.0).unwrap_or_else(|| b.clone());
+            let name = ix.who(b).map(|w| w.0).unwrap_or_else(|| crate::crash::pretty(b));
             if r.blame.is_empty() {
                 detail = format!("{detail} It points at {name}.");
             }

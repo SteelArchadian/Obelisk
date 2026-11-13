@@ -142,7 +142,7 @@
       "id": "pride-at", "kinds": ["log"], "all": ["access transformer file", "does not exist"],
       "severity": "info", "title": "A mod points at a file it doesn't ship",
       "detail": "A mod lists an access-transformer file it doesn't include. NeoForge skips it; it only matters if that mod misbehaves.",
-      "fix": "",
+      "fix": "Nothing to do. If that mod acts up, update it.",
       "blameFrom": ["provided by mod "]
     }
   ],
