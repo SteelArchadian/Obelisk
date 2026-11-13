@@ -28,7 +28,7 @@ pub(crate) fn tools() -> Value {
                 "preset": { "type": "string", "enum": ["crosspc"], "description": "Fixed cross-PC profiling run (perf)" },
                 "eta": { "type": "integer", "description": "Minutes" },
                 "world": { "type": "string", "description": "Save to open, or new:<seed>" },
-                "new_world": { "type": "string", "description": "Seed for a fresh world, deleted after" },
+                "new_world": { "type": ["string", "integer"], "description": "Seed for a fresh world, deleted after" },
                 "test_world": { "type": "object", "description": "Custom world: layers [{block,height}] (bottom first; [] = void), terrain flat|normal, seed, biome, border, platform {y,size,block}, spawn {x,y,z}, hold, game_mode, setup [cmds], events [{at,every,command}] (seconds after arrival); frozen at noon unless setup sets the time or night: true" },
                 "jvm": { "type": "array", "items": { "type": "string" }, "description": "-Dmod.key=value" },
                 "timeout": int(),

@@ -450,6 +450,12 @@ fn reply(mut stream: TcpStream, code: u16, v: &Value) -> std::io::Result<()> {
 
 // ---------------------------------------------------------------- validation
 
+/// new_world as text or a plain number (new_world: 4250 was silently dropped and the game sat on the title screen).
+fn seed_arg(args: &Value) -> Option<String> {
+    let v = args.get("new_world")?;
+    v.as_str().map(str::to_string).or_else(|| v.as_u64().map(|n| n.to_string())).filter(|v| !v.is_empty())
+}
+
 fn s<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str()).filter(|v| !v.is_empty())
 }
@@ -1976,7 +1982,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let mut build_world: Option<(Value, u64)> = None;
     let args_world = match args.get("test_world").filter(|v| !v.is_null()) {
         Some(spec) => {
-            if s(args, "world").is_some() || s(args, "new_world").is_some() {
+            if s(args, "world").is_some() || seed_arg(args).is_some() {
                 return Err("give test_world, world or new_world, not more than one".into());
             }
             if game_running_in(&dir) {
@@ -1997,10 +2003,11 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         None => s(args, "world"),
     };
     // world "new:<seed>" is the same as new_world (Speed Loader's own spelling).
+    let new_world_arg = seed_arg(args);
     let (world, seed) = match args_world.map(|w| w.strip_prefix("new:").ok_or(w)) {
         Some(Ok(seed)) => (None, Some(seed)),
-        Some(Err(w)) => (Some(w), s(args, "new_world")),
-        None => (None, s(args, "new_world")),
+        Some(Err(w)) => (Some(w), new_world_arg.as_deref()),
+        None => (None, new_world_arg.as_deref()),
     };
     if let Some(w) = world {
         plain_name(w, "world").map_err(|_| "world must be a plain save folder name".to_string())?;
