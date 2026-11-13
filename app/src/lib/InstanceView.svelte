@@ -726,9 +726,6 @@
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg>
       </button>
     {:else}
-    <button class="add-content copy-log" title="Open the {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()} folder" aria-label="Open folder" onclick={() => reveal(kind).catch((e) => toastError(e))}>
-      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg>
-    </button>
     <button class="add-content" onclick={() => openBrowseTyping(kind === "resourcepacks" ? "resourcepack" : kind === "shaderpacks" ? "shader" : "mod")}>
       <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg> Add Content
     </button>
@@ -772,6 +769,7 @@
   {/if}
 
   {#if page === "content"}
+    <div class="subrow">
     <div class="subtabs" role="tablist">
       {#each KINDS as k (k.kind)}
         <button role="tab" class:on={sub === k.kind} onclick={() => setSub(k.kind)}>{k.label} ({content[k.kind].length})</button>
@@ -779,6 +777,13 @@
       <button role="tab" class:on={sub === "worlds"} onclick={() => setSub("worlds")}>Worlds ({worlds.length})</button>
       <button role="tab" class:on={sub === "favorites"} onclick={() => setSub("favorites")}>♥ Favorites ({favorites.saved.length})</button>
       {#if co?.shared}<button role="tab" class:on={sub === "wishes"} onclick={() => setSub("wishes")}>★ Wish lists ({wishCount})</button>{/if}
+    </div>
+    {#if KINDS.some((k) => k.kind === sub) && !viewTrash}
+      <button class="ghost trash-btn" onclick={() => { viewTrash = true; selected = new Set(); }} title="Trash: recently deleted content" aria-label="Trash">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        {#if trash.length}<span class="fcount">{trash.length}</span>{/if}
+      </button>
+    {/if}
     </div>
 
     {#if sub === "favorites"}
@@ -824,9 +829,8 @@
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class:spin={checking || updating.size > 0}><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
             {checking ? "Checking…" : updating.size ? "Updating…" : "Update all"}{#if pendingHere.length && !checking}<span class="count">{pendingHere.length}</span>{/if}
           </button>
-          <button class="ghost trash-btn" onclick={() => { viewTrash = true; selected = new Set(); }} title="Trash: recently deleted content" aria-label="Trash">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
-            {#if trash.length}<span class="fcount">{trash.length}</span>{/if}
+          <button class="ghost trash-btn" title="Open the {KINDS.find((k) => k.kind === kind)?.label.toLowerCase()} folder" aria-label="Open folder" onclick={() => reveal(kind).catch((e) => toastError(e))}>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg>
           </button>
         {/if}
         <div class="hopper-wrap">
@@ -1127,6 +1131,10 @@
   .hopper svg, .trash-btn svg { display: block; }
   .trash-btn { position: relative; width: 38px; height: 36px; padding: 0 !important; display: grid !important; place-items: center; }
   .hopper:hover, .hopper.active { color: var(--accent); border-color: var(--accent); }
+  /* Trash sits at the right of the tab row, above the search box; its count is red (things to clean up). */
+  .subrow { display: flex; align-items: flex-end; gap: 10px; }
+  .subrow .trash-btn { margin-left: auto; }
+  .trash-btn .fcount { background: var(--danger); }
   .fcount { position: absolute; top: -6px; right: -6px; background: var(--accent); color: #fff; border-radius: 999px; font-size: 10.5px; min-width: 17px; height: 17px; display: grid; place-items: center; padding: 0 4px; }
   .filters { position: absolute; right: 0; top: 42px; z-index: 40; width: min(460px, calc(100vw - 110px)); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: 0 14px 40px rgb(0 0 0 / 0.45); display: flex; flex-direction: column; gap: 10px; }
   .fhead { display: flex; justify-content: space-between; align-items: center; }
