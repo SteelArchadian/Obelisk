@@ -76,12 +76,15 @@ pub fn prism_stop_reason(data: &Path, id: &str) -> Option<String> {
     Some(out)
 }
 
-/// Prism's executable in its default per-user install location.
+/// Prism's executable: the per-user install, else an all-users or Scoop install. The per-user path when none exists.
 pub fn launcher_exe() -> PathBuf {
-    PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default())
-        .join("Programs")
-        .join("PrismLauncher")
-        .join("prismlauncher.exe")
+    let env = |k: &str| PathBuf::from(std::env::var(k).unwrap_or_default());
+    let found = [
+        env("LOCALAPPDATA").join("Programs").join("PrismLauncher"),
+        env("ProgramFiles").join("PrismLauncher"),
+        env("USERPROFILE").join("scoop").join("apps").join("prismlauncher").join("current"),
+    ];
+    found.iter().map(|d| d.join("prismlauncher.exe")).find(|p| p.is_file()).unwrap_or_else(|| found[0].join("prismlauncher.exe"))
 }
 
 /// Parse Prism's INI-style config files (`key=value`, `[General]` sections ignored). Prism writes them with Qt,

@@ -9,6 +9,51 @@
   let saving = $state(false);
   let error = $state("");
 
+  // What a new PC still needs before a game can start. Re-checked whenever the window gets focus, so Prism's
+  // installer or its sign-in window count as soon as the user comes back.
+  let prism = $state<boolean | null>(null);
+  let account = $state<boolean | null>(null);
+  let java = $state<boolean | null>(null);
+  let folder = $state("");
+  let javaGet = $state("");
+  async function check() {
+    prism = await invoke<boolean>("prism_installed").catch(() => false);
+    account = (await invoke<{ kind: string }[]>("list_accounts").catch(() => [])).some((a) => a.kind === "msa");
+    java = (await invoke<{ major: number }[]>("java_installs").catch(() => [])).some((j) => j.major >= 21);
+    folder = (await invoke<{ dir: string }>("instances_dir_get").catch(() => null))?.dir ?? "";
+  }
+  check();
+  $effect(() => {
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  });
+
+  async function signIn() {
+    try {
+      await invoke("open_prism");
+      toast("In Prism: Accounts (top right) → Manage Accounts → Add Microsoft. Come back here afterwards.");
+    } catch (e) {
+      toast(String(e));
+    }
+  }
+
+  async function getJava() {
+    const { listen } = await import("@tauri-apps/api/event");
+    javaGet = "Starting…";
+    const stop = await listen<{ done: number; total: number }>("java-progress", (e) => {
+      javaGet = `Downloading… ${Math.round((100 * e.payload.done) / Math.max(1, e.payload.total))}%`;
+    });
+    try {
+      await invoke("java_download", { major: 21 });
+      javaGet = "";
+      await check();
+    } catch (e) {
+      javaGet = "";
+      toast(`Couldn't get Java: ${e}`);
+    }
+    stop();
+  }
+
   async function finish() {
     settings.welcomed = true;
     await saveSettings();
@@ -33,8 +78,33 @@
 <div class="back">
   <div class="card" role="dialog" aria-label="Welcome to Obelisk">
     <h1>Welcome to Obelisk</h1>
+    <p class="lead">A few things make sure your games start. Each one ticks itself off when it's done.</p>
+
+    <ul class="setup">
+      <li class:ok={prism}>
+        <span class="mark">{prism ? "✓" : "1"}</span>
+        <div><strong>Prism Launcher</strong><span>{prism ? "Installed. Obelisk starts your games through it." : "Obelisk starts your games through Prism. Install it with the default options, then come back."}</span></div>
+        {#if prism === false}<button class="primary small" onclick={() => openUrl("https://prismlauncher.org/download/windows/")}>Get Prism ↗</button>{/if}
+      </li>
+      <li class:ok={account}>
+        <span class="mark">{account ? "✓" : "2"}</span>
+        <div><strong>Microsoft account</strong><span>{account ? "Signed in. You can switch accounts from the top bar." : "The account you play Minecraft with. You sign in on Microsoft's own page, through Prism."}</span></div>
+        {#if account === false}<button class="primary small" disabled={!prism} onclick={signIn}>Sign in</button>{/if}
+      </li>
+      <li class:ok={java}>
+        <span class="mark">{java ? "✓" : "3"}</span>
+        <div><strong>Java</strong><span>{java ? "Java 21 is ready. Older packs get the Java they need when you install them." : "Current Minecraft needs Java 21. Obelisk can fetch it for you (about 50 MB)."}</span></div>
+        {#if java === false}<button class="primary small" disabled={!!javaGet} onclick={getJava}>{javaGet || "Get Java 21"}</button>{/if}
+      </li>
+      <li class="ok">
+        <span class="mark">✓</span>
+        <div><strong>Modpacks folder</strong><span>{folder || "Prism's instances folder"}. Change it any time in Settings → Modpacks folder.</span></div>
+      </li>
+    </ul>
+
+    <h2>CurseForge (optional)</h2>
     <p class="lead">
-      Before you start: Obelisk searches <strong>Modrinth</strong> out of the box. To also see <strong>CurseForge</strong>
+      Obelisk searches <strong>Modrinth</strong> out of the box. To also see <strong>CurseForge</strong>
       mods, pages and updates, it needs a free CurseForge API key of your own. It takes about a minute.
     </p>
 
@@ -81,7 +151,7 @@
       Some personal keys can't use CurseForge's search. If yours can't, Obelisk still uses it for updates, project pages and
       installs, and searches Modrinth. You can change the key any time in Settings → CurseForge API.
     </p>
-    <div class="foot"><button class="skip" onclick={finish}>Skip for now</button></div>
+    <div class="foot"><button class="skip" onclick={finish}>{prism && account && java ? "Done, start Obelisk" : "Skip for now"}</button></div>
   </div>
 </div>
 
@@ -89,6 +159,15 @@
   .back { position: fixed; inset: 0; z-index: 200; background: rgb(0 0 0 / 0.6); display: grid; place-items: center; padding: 16px; }
   .card { background: var(--panel); color: var(--text); border-radius: 12px; padding: 28px 32px 20px; width: min(820px, 100%); max-height: 100%; overflow: auto; box-shadow: 0 20px 60px rgb(0 0 0 / 0.5); }
   h1 { margin: 0 0 8px; font-size: 24px; }
+  h2 { margin: 22px 0 6px; font-size: 17px; }
+  .setup { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .setup li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .setup li > div { flex: 1; min-width: 0; }
+  .setup strong { display: block; }
+  .setup span { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .mark { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: var(--accent) !important; border: 2px solid var(--accent); font-size: 13px !important; }
+  .setup li.ok .mark { background: var(--accent); color: #fff !important; }
+  .primary.small { padding: 7px 14px; }
   .lead { color: var(--text-2); margin: 0 0 20px; line-height: 1.5; }
   .cols { display: grid; grid-template-columns: 1fr 320px; gap: 24px; align-items: center; }
   @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }

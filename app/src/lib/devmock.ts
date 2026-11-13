@@ -48,7 +48,7 @@ export function installDevMock() {
     switch (cmd) {
       case "get_favorites": return JSON.parse(sessionStorage.getItem("mock.favorites") ?? "{}");
       case "set_favorites": sessionStorage.setItem("mock.favorites", JSON.stringify(args.favorites)); return null;
-      case "get_settings": return { welcomed: true, plugins: { lightning: true }, theme: new URLSearchParams(location.search).get("theme") ?? undefined };
+      case "get_settings": return { welcomed: !sessionStorage.getItem("mock.fresh"), plugins: { lightning: true }, theme: new URLSearchParams(location.search).get("theme") ?? undefined };
       case "list_instances": return [{ id: "Foundation", name: "Foundation", iconKey: "", minecraft: "1.21.1", loader: "NeoForge", loaderVersion: "21.1.252", secondsPlayed: 612000, lastLaunchMs: now }];
       case "list_content": return args.kind === "mods" ? mods : [];
       case "content_icons": return {};
@@ -148,7 +148,8 @@ export function installDevMock() {
           whole: { seconds: 120, fps: 115.3, low1PctFps: 41.2, frameP99: 25.99, tickP50: 9, heapMaxMB: 6000, liveSetMBmax: 5300, topModsCpu: [{ mod: "ixeris", sharePct: 41.75 }, { mod: "boundless", sharePct: 25.68 }, { mod: "iris", sharePct: 19.96 }, { mod: "accessories", sharePct: 9.3 }, { mod: "jade", sharePct: 2.1 }] } },
           { id: "a", label: "", startedMs: now - 2 * day, html: "", phases: [], findings: [], contenders: [], whole: { seconds: 60, fps: 98, low1PctFps: 30, topModsCpu: [{ mod: "boundless", sharePct: 30 }] } }] };
       case "get_pins": return [];
-      case "has_cf_key": return true;
+      case "has_cf_key": return !sessionStorage.getItem("mock.fresh");
+      case "prism_installed": return !sessionStorage.getItem("mock.fresh");
       case "cf_account": return sessionStorage.getItem("mock.cfOut") ? null : { id: 7, username: "steel", displayName: "SteelArchadian", avatarUrl: "" };
       case "cf_signout": sessionStorage.setItem("mock.cfOut", "1"); return null;
       case "cf_signin": sessionStorage.removeItem("mock.cfOut"); return null;

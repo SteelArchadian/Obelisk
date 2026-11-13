@@ -1600,7 +1600,14 @@ impl NoWindow for std::process::Command {
 /// Bring up Prism's own window (accounts, instance editing).
 #[tauri::command]
 async fn open_prism() -> Result<(), String> {
+    if !prism_installed().await { return Err("Prism Launcher isn't installed yet. Get it from prismlauncher.org, then try again.".into()) }
     std::process::Command::new(prism::launcher_exe()).spawn().map(|_| ()).map_err(|e| format!("could not start Prism: {e}"))
+}
+
+/// Prism Launcher is on this PC (first-run setup checks this before anything else).
+#[tauri::command]
+async fn prism_installed() -> bool {
+    prism::launcher_exe().is_file()
 }
 
 /// Hand a modpack (URL or local .zip/.mrpack) to Prism's importer.
@@ -2364,7 +2371,7 @@ pub fn run() {
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, cues::cue_preview, sfx::ui_sfx, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch, needed_by,
-            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism,
+            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism, prism_installed,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,
