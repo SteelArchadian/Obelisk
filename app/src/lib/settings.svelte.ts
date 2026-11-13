@@ -85,7 +85,7 @@ export const TRACKS: [string, string][] = [
   ["lounge", "Lounge"], ["shopping", "Window Shopping"], ["puddle", "Puddle"], ["boutique", "Boutique"], ["drizzle", "Drizzle"],
   ["after-hours", "After Hours"], ["after-hours-harp", "After Hours: harp"], ["after-hours-keys", "After Hours: keys"],
   ["velvet", "Velvet"], ["starlit", "Starlit"], ["breeze", "Breeze"], ["lounge-keys", "Lounge Keys"], ["island", "Island"],
-  ["crystal", "Crystal"], ["bubblegum", "Bubblegum"],
+  ["crystal", "Crystal"], ["bubblegum", "Bubblegum"], ["night-kiss", "Night Kiss"],
 ];
 
 /** The social alert sounds cues.rs plays, by id, in its order. */

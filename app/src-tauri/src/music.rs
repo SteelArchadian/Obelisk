@@ -14,6 +14,11 @@ pub const TRACKS: [(&str, fn() -> Vec<f32>); 15] = [
     ("crystal", crystal), ("bubblegum", bubblegum),
 ];
 
+/// Tracks that ship as recordings, not synths (Night Kiss is composed from the CC0 VSCO and FreePats samples, so it is
+/// ours to ship): (setting id, m4a bytes). Piano, clarinet, horn, cello and string pad; it loops cleanly because it
+/// ends at the level it starts and on the home chord.
+const BUNDLED: [(&str, &[u8]); 1] = [("night-kiss", include_bytes!("../music/night-kiss.m4a"))];
+
 /// Audio files the UI can play from the user's music folder.
 const AUDIO: [&str; 7] = ["mp3", "ogg", "oga", "opus", "wav", "flac", "m4a"];
 
@@ -23,6 +28,14 @@ const AUDIO: [&str; 7] = ["mp3", "ogg", "oga", "opus", "wav", "flac", "m4a"];
 pub async fn music_track(app: tauri::AppHandle, id: String) -> Result<String, String> {
     use tauri::Manager;
     static DONE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, bytes)) = BUNDLED.iter().find(|t| t.0 == id) {
+        let dir = crate::datadir::root().join("music");
+        let path = dir.join(format!("{id}.m4a"));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        app.asset_protocol_scope().allow_directory(&dir, false).map_err(|e| e.to_string())?;
+        return Ok(path.to_string_lossy().into_owned());
+    }
     let synth = TRACKS.iter().find(|t| t.0 == id).ok_or_else(|| format!("No track called \"{id}\""))?.1;
     let dir = crate::datadir::root().join("music");
     let path = dir.join(format!("{id}.wav"));
