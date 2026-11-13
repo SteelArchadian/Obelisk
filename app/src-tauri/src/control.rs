@@ -342,7 +342,7 @@ fn cut(s: &str, n: usize) -> String {
     }
 }
 
-fn audit(cmd: &str, args: &Value, result: &str) {
+pub(crate) fn audit(cmd: &str, args: &Value, result: &str) {
     let a = cut(&args.to_string(), 600);
     let r = cut(&result.replace('\n', " "), 300);
     let line = format!("{} {cmd} {a} -> {r}\n", stamp());

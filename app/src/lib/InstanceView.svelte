@@ -143,6 +143,15 @@
   let sortAsc = $state(true);
   let selected = $state<Set<string>>(new Set());
   let confirmDelete = $state<Item[] | null>(null);
+  /** Mods that need what's about to be deleted (null while checking). */
+  let neededBy = $state<string[] | null>([]);
+  $effect(() => {
+    const doomed = confirmDelete;
+    if (!doomed || kind !== "mods") { neededBy = []; return; }
+    neededBy = null;
+    invoke<string[]>("needed_by", { instanceId: current.id, files: doomed.map((i) => i.fileName) })
+      .then((v) => { if (confirmDelete === doomed) neededBy = v; }).catch(() => { if (confirmDelete === doomed) neededBy = []; });
+  });
   let menu = $state<{ item: Item; x: number; y: number; author?: boolean } | null>(null);
   let configsFor = $state<Item | null>(null);
   let trash = $state<TrashEntry[]>([]);
@@ -1000,6 +1009,8 @@
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && (confirmDelete = null)}>
       <h3>Move {confirmDelete.length === 1 ? confirmDelete[0].name : `${confirmDelete.length} items`} to this profile's trash?</h3>
       <p class="muted">You can restore {confirmDelete.length === 1 ? "it" : "them"} from Trash for {trashLabel(settings.trashHours)}.</p>
+      {#if neededBy === null}<p class="muted small">Checking what needs {confirmDelete.length === 1 ? "it" : "them"}…</p>
+      {:else if neededBy.length}<p class="needed" role="alert">⚠ {neededBy.length === 1 ? "This mod needs" : `These ${neededBy.length} mods need`} {confirmDelete.length === 1 ? "it" : "them"} and the game won't start without {confirmDelete.length === 1 ? "it" : "them"}: <strong>{neededBy.join(", ")}</strong>. Delete {neededBy.length === 1 ? "that one" : "those"} too, or keep this.</p>{/if}
       <div class="modal-actions">
         <button class="ghost" onclick={() => (confirmDelete = null)}>Cancel</button>
         <button class="play danger-fill" onclick={doDelete}>Delete</button>
@@ -1135,6 +1146,7 @@
   .subrow { display: flex; align-items: flex-end; gap: 10px; }
   .subrow .trash-btn { margin-left: auto; }
   .trash-btn .fcount { background: var(--danger); }
+  .needed { color: var(--danger); margin: 8px 0 0; }
   .fcount { position: absolute; top: -6px; right: -6px; background: var(--accent); color: #fff; border-radius: 999px; font-size: 10.5px; min-width: 17px; height: 17px; display: grid; place-items: center; padding: 0 4px; }
   .filters { position: absolute; right: 0; top: 42px; z-index: 40; width: min(460px, calc(100vw - 110px)); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: 0 14px 40px rgb(0 0 0 / 0.45); display: flex; flex-direction: column; gap: 10px; }
   .fhead { display: flex; justify-content: space-between; align-items: center; }

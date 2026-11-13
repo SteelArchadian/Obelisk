@@ -98,7 +98,11 @@ async fn set_enabled(instance_id: String, kind: String, file_name: String, enabl
 /// Sends the file (and its Prism metadata) to the recycle bin.
 #[tauri::command]
 async fn delete_content(instance_id: String, kind: String, file_name: String, name: String, version: String, authors: String, source: String) -> Result<(), String> {
-    prism::trash::put(&game(&instance_id)?, &kind, &file_name, &name, &version, &authors, &source).map(|_| ())
+    let r = prism::trash::put(&game(&instance_id)?, &kind, &file_name, &name, &version, &authors, &source).map(|_| ());
+    // Deletes from the window go in the audit log too, so a mod that vanished can be traced to a click.
+    control::audit("ui-delete", &serde_json::json!({ "profile": instance_id, "kind": kind, "file": file_name }),
+        &r.as_ref().map(|_| "ok".to_string()).unwrap_or_else(|e| e.clone()));
+    r
 }
 
 /// How long deleted content stays in a profile's trash (Settings → General), default a week.
@@ -1304,6 +1308,26 @@ fn dupes_ignored(app: &tauri::AppHandle, instance_id: &str, found: &[prism::dupe
 #[derive(serde::Serialize)]
 struct DupeState { dupes: Vec<prism::dupes::Duplicate>, ignored: bool }
 
+/// The other enabled mods that would stop loading without these files: they require a mod id only these provide.
+/// Shown before a delete (a mod's add-on crashed every test once its base mod was deleted).
+#[tauri::command]
+async fn needed_by(instance_id: String, files: Vec<String>) -> Result<Vec<String>, String> {
+    let mods = game(&instance_id)?.join("mods");
+    blocking(move || {
+        let jars: Vec<std::path::PathBuf> = std::fs::read_dir(&mods).map_err(|e| e.to_string())?.flatten().map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "jar")).collect();
+        let (gone, kept): (Vec<_>, Vec<_>) = jars.into_iter()
+            .partition(|p| p.file_name().is_some_and(|n| files.iter().any(|f| *f == n.to_string_lossy())));
+        let still: std::collections::HashSet<String> = kept.iter().flat_map(|p| prism::dupes::provides(p)).collect();
+        let lost: std::collections::HashSet<String> = gone.iter().flat_map(|p| prism::dupes::provides(p)).filter(|id| !still.contains(id)).collect();
+        if lost.is_empty() { return Ok(vec![]) }
+        let mut out: Vec<String> = kept.iter().filter(|p| prism::dupes::needs(p).iter().any(|id| lost.contains(id)))
+            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string()).collect();
+        out.sort();
+        Ok(out)
+    }).await
+}
+
 /// Mods present twice among the profile's enabled jars (same mod id, e.g. one from each site).
 #[tauri::command]
 async fn duplicate_mods(app: tauri::AppHandle, instance_id: String) -> Result<DupeState, String> {
@@ -2339,7 +2363,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, cues::cue_preview, sfx::ui_sfx, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
-            list_worlds, list_screenshots, list_logs, read_log, reveal, launch,
+            list_worlds, list_screenshots, list_logs, read_log, reveal, launch, needed_by,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
