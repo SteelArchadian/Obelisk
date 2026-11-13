@@ -163,8 +163,27 @@ async fn reveal(instance_id: String, sub: String) -> Result<(), String> {
     if sub.contains("..") {
         return Err("invalid path".into());
     }
-    let path = game(&instance_id)?.join(sub).to_string_lossy().replace('/', "\\");
-    std::process::Command::new("explorer").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+    let root = game(&instance_id)?;
+    let path = if sub.is_empty() { root } else { root.join(sub.replace('/', "\\")) };
+    // An empty content folder (no mods yet) is made, so the button opens it rather than the folder above.
+    if ["mods", "resourcepacks", "shaderpacks", "logs"].contains(&sub.as_str()) {
+        let _ = std::fs::create_dir_all(&path);
+    }
+    show_in_explorer(&path)
+}
+
+/// Open a folder, or a file's folder with it selected, through the Windows shell. Explorer's command line
+/// opened Documents whenever it misread the path (spaces, a trailing slash); the shell call takes the path itself.
+/// Missing: the nearest folder above that exists, never Documents.
+fn show_in_explorer(path: &std::path::Path) -> Result<(), String> {
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        if !p.pop() {
+            return Err(format!("{} doesn't exist", path.display()));
+        }
+    }
+    let r = if p.is_dir() && p == path { tauri_plugin_opener::open_path(&p, None::<&str>) } else { tauri_plugin_opener::reveal_item_in_dir(&p) };
+    r.map_err(|e| format!("couldn't open {}: {e}", p.display()))
 }
 
 // ---- Modrinth (blocking HTTP runs on a worker thread so the UI never stalls) ----
@@ -701,7 +720,7 @@ async fn pack_export_zip(app: tauri::AppHandle, instance_id: String) -> Result<S
         })?;
         Ok(out)
     }).await?;
-    std::process::Command::new("explorer").arg(format!("/select,{}", out.display())).spawn().map_err(|e| e.to_string())?;
+    show_in_explorer(&out)?;
     Ok(out.display().to_string())
 }
 
@@ -1401,11 +1420,8 @@ async fn reveal_file(instance_id: String, kind: String, file_name: String) -> Re
     if !["mods", "resourcepacks", "shaderpacks"].contains(&kind.as_str()) || file_name.contains(['/', '\\']) || file_name.contains("..") {
         return Err("invalid path".into());
     }
-    let folder = game(&instance_id)?.join(&kind);
-    let path = folder.join(&file_name);
-    // Gone (replaced outside Obelisk, e.g. a newer version dropped in): open the folder instead of nothing.
-    let arg = if path.exists() { format!("/select,{}", path.to_string_lossy().replace('/', "\\")) } else { folder.to_string_lossy().replace('/', "\\") };
-    std::process::Command::new("explorer").arg(arg).spawn().map(|_| ()).map_err(|e| e.to_string())
+    // Gone (replaced outside Obelisk, e.g. a newer version dropped in): its folder opens instead.
+    show_in_explorer(&game(&instance_id)?.join(&kind).join(&file_name))
 }
 
 /// Show a built server/client pack in Explorer (only the packs Obelisk writes).
@@ -1416,8 +1432,7 @@ async fn reveal_pack(path: String) -> Result<(), String> {
     if !(name.ends_with(" Server") || name.ends_with(" Server.zip") || name.ends_with(" Client.zip")) || !p.exists() {
         return Err("not a pack Obelisk built".into());
     }
-    let path = path.replace('/', "\\");
-    std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn().map(|_| ()).map_err(|e| e.to_string())
+    show_in_explorer(&p)
 }
 
 #[tauri::command]
