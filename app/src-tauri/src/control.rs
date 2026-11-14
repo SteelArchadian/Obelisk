@@ -1131,6 +1131,9 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let purpose = o.get("purpose").and_then(Value::as_str).unwrap_or_default().to_string();
     // stress and dyno are perf runs in length.
     let long = preset.as_deref().is_some_and(|p| p == "stress" || p == "dyno");
+    if room_hot() && (long || o.get("perf").and_then(Value::as_bool).unwrap_or(false) || o.contains_key("dyno")) {
+        return Err(HOT_REFUSAL.into());
+    }
     let test_hold = max_hold(&purpose, long || o.get("perf").and_then(Value::as_bool).unwrap_or(false));
     let scenario_timeout = o.remove("scenario_timeout").and_then(|t| t.as_u64()).unwrap_or(test_hold).min(test_hold);
     let mut background = o.remove("background").and_then(|b| b.as_bool()).unwrap_or(false);
@@ -1736,6 +1739,14 @@ fn fps_prop(a: &str) -> bool {
 const FPS_RUN_MAX: &str = "260";
 /// Every other test: a light window and frame cap so tests don't eat the PC (user, KB #139).
 const TEST_FPS: &str = "60";
+
+/// The user's room heat switch (C:\mcw\state\heat.json, set only by the user, KB #169): "hot" means keep the PC
+/// cool. No file (any other PC) means normal limits.
+fn room_hot() -> bool {
+    std::fs::read_to_string(r"C:\mcw\state\heat.json").ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|v| v["mode"].as_str().is_some_and(|m| m.eq_ignore_ascii_case("hot")))
+}
+const HOT_REFUSAL: &str = "the room is in hot mode (keep the PC cool): perf, profiling and Block Dyno runs are off until the user switches it back";
 const TEST_SIZE: (u32, u32) = (1280, 720);
 /// Where a full-pack check run's heap tries to stay (it may still grow to its -Xmx).
 const FULL_PACK_SOFT_MB: u64 = 4096;
@@ -2079,6 +2090,12 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let fps_props = extra.iter().any(|a| fps_prop(a) && !a.starts_with("-Dspeedloader.autobench")
         && !(auto_profile && a.starts_with("-Dlightning.")));
     let measured = perf_run || fps_props || args.get("measured").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Hot room (KB #169): nothing that runs the GPU flat out or profiles.
+    let hot = room_hot();
+    if hot && (measured || args.get("jfr").and_then(|v| v.as_bool()).unwrap_or(false)
+        || extra.iter().any(|a| a.starts_with("-Dblockdyno"))) {
+        return Err(HOT_REFUSAL.into());
+    }
     // Frame times and pictures need a drawn frame: those windows park off-screen instead of minimized.
     let render = measured || extra.iter().any(|a| CAPTURE_PROPS.iter().any(|p| a.starts_with(p)))
         || args.get("render").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -2170,7 +2187,12 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     for (i, a) in diag_flags(args)?.into_iter().enumerate() { cmd.insert(i, a) }
     let gc_used = gc.map(|f| f.join(" "));
-    let set = run_options(args)?;
+    let mut set = run_options(args)?;
+    // A chat's own options can't lift the hot-room frame cap (an Armory gate ran at 260 fps, 350 W); undone after the run.
+    if hot {
+        set.retain(|(k, _)| k != "maxFps");
+        set.push(("maxFps".into(), TEST_FPS.into()));
+    }
     let lock = format!("{owner} - {purpose} (obelisk)");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
