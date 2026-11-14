@@ -457,8 +457,8 @@ async fn java_download(app: tauri::AppHandle, major: u32) -> Result<prism::java:
 
 /// The Java at a path the user picked (its java/javaw.exe or its folder), if it is one.
 #[tauri::command]
-fn java_at(path: String) -> Option<prism::java::JavaInstall> {
-    prism::java::at(std::path::Path::new(&path))
+async fn java_at(path: String) -> Option<prism::java::JavaInstall> {
+    tauri::async_runtime::spawn_blocking(move || prism::java::at(std::path::Path::new(&path))).await.ok().flatten()
 }
 
 #[tauri::command]

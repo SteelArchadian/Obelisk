@@ -51,7 +51,11 @@ pub async fn music_track(app: tauri::AppHandle, id: String) -> Result<String, St
 
 /// The audio files directly in the user's music `folder`, sorted by name, which the player may then stream.
 #[tauri::command]
-pub fn music_files(app: tauri::AppHandle, folder: String) -> Result<Vec<String>, String> {
+pub async fn music_files(app: tauri::AppHandle, folder: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || list(&app, &folder)).await.map_err(|e| e.to_string())?
+}
+
+fn list(app: &tauri::AppHandle, folder: &str) -> Result<Vec<String>, String> {
     use tauri::Manager;
     let mut files: Vec<String> = std::fs::read_dir(&folder).map_err(|e| format!("Couldn't open {folder}: {e}"))?
         .filter_map(|e| e.ok()).map(|e| e.path())
@@ -59,7 +63,7 @@ pub fn music_files(app: tauri::AppHandle, folder: String) -> Result<Vec<String>,
         .filter_map(|p| p.to_str().map(String::from))
         .collect();
     files.sort_by_key(|f| f.to_lowercase());
-    app.asset_protocol_scope().allow_directory(&folder, false).map_err(|e| e.to_string())?;
+    app.asset_protocol_scope().allow_directory(folder, false).map_err(|e| e.to_string())?;
     Ok(files)
 }
 

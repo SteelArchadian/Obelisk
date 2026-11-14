@@ -324,10 +324,23 @@ fn proven(r: &Registry, b: &Build) -> Result<String, String> {
 }
 
 /// Crash reports in a pack since `after` whose diagnosis says this mod's code was running.
+/// A report's verdict is kept once worked out: the worker asks every minute, and diagnosing reads every mod jar
+/// in the pack, which kept a core busy for seconds each time.
 fn crash_naming(game: &Path, b: &Build, after: u64) -> Vec<String> {
+    static SEEN: std::sync::Mutex<Option<std::collections::HashMap<(PathBuf, String, u64), Option<String>>>> = std::sync::Mutex::new(None);
     prism::crash::list(game).into_iter().filter(|rep| rep.kind == "crash" && rep.time_ms / 1000 > after).filter_map(|rep| {
-        let d = prism::crash::diagnose(game, &rep.file).ok()?;
-        d.suspects.first().filter(|s| s.mod_id == b.mod_id && prism::crash::ran(s)).map(|_| rep.file.clone())
+        let key = (game.to_path_buf(), rep.file.clone(), rep.time_ms);
+        let known = SEEN.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(&key).cloned()));
+        let ran = match known {
+            Some(ran) => ran,
+            None => {
+                let d = prism::crash::diagnose(game, &rep.file).ok()?;
+                let ran = d.suspects.first().filter(|s| prism::crash::ran(s)).map(|s| s.mod_id.clone());
+                if let Ok(mut m) = SEEN.lock() { m.get_or_insert_with(Default::default).insert(key, ran.clone()); }
+                ran
+            }
+        };
+        (ran.as_deref() == Some(b.mod_id.as_str())).then(|| rep.file.clone())
     }).collect()
 }
 

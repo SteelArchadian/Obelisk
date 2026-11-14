@@ -510,76 +510,97 @@ impl Net {
     /// whose authors block other apps are matched by fingerprint when a CurseForge key is set. Whatever is left
     /// is custom; Windows programs, scripts and code with signs of malware are refused; Defender scans the rest.
     async fn vet(&self, sess: &Session, code: &str, m: &Manifest, cf: Option<Arc<crate::curseforge::Client>>, progress: &Progress) -> Result<Vetting, String> {
-        let mut refused = Vec::new();
-        let mut code_files = Vec::new();
-        let mut known = 0;
-        for f in &m.files {
-            if packcode::safe_path(&f.path).is_none() {
-                let why = if guard::blocked(&f.path) { "a Windows program or script" } else { "outside the pack folders" };
-                refused.push(CustomFile { path: f.path.clone(), size: f.size, findings: Findings { serious: vec![why.into()], notes: vec![] } });
-            } else if packcode::site_url_ok(&f.url) {
-                known += 1;
-            } else if guard::risky(&f.path) {
-                code_files.push(f.clone());
-            }
-        }
-        // A hostile sharer could list endless files or giant ones to wear this PC out before anything is asked.
-        if m.files.len() > 50_000 {
-            return Err("This pack lists more files than any real modpack has; not installing it.".into());
-        }
-        let mut fetched = HashMap::new();
-        let mut held = 0usize;
-        for (i, f) in code_files.iter().enumerate() {
-            progress(ImportProgress { step: "checking", done: i, total: code_files.len(), file: f.path.clone() });
-            let bytes = sess.pack_file(code, &f.path).await?;
-            held += bytes.len();
-            if held > 2 << 30 {
-                return Err("This pack's custom code is larger than any real modpack's; not installing it.".into());
-            }
-            if crate::sha1_hex(&bytes) != f.sha1 {
-                return Err(format!("{} didn't match the pack's list", f.path));
-            }
-            fetched.insert(f.path.clone(), bytes);
-        }
-        // CurseForge's word for files only it hosts (asked by this PC, not the sharer).
-        progress(ImportProgress { step: "checking", done: code_files.len(), total: code_files.len(), file: "Asking CurseForge about its files".into() });
-        let genuine: std::collections::HashSet<u32> = match cf {
-            Some(cf) => {
-                let fps: Vec<u32> = code_files.iter().filter(|f| f.site == "curseforge")
-                    .filter_map(|f| fetched.get(&f.path)).map(|b| crate::curseforge::fingerprint(b)).collect();
-                tokio::task::spawn_blocking(move || cf.match_fingerprints(&fps)).await.map_err(|e| e.to_string())?
-                    .map(|v| v.into_iter().map(|(fp, _, _)| fp).collect()).unwrap_or_default()
-            }
-            None => Default::default(),
-        };
-        let mut custom = Vec::new();
-        for f in &code_files {
-            let bytes = &fetched[&f.path];
-            if f.site == "curseforge" && genuine.contains(&crate::curseforge::fingerprint(bytes)) {
-                known += 1;
-                continue;
-            }
-            stopped()?;
-            let findings = guard::inspect(&f.path, bytes);
-            let c = CustomFile { path: f.path.clone(), size: f.size, findings };
-            if c.findings.serious.is_empty() { custom.push(c) } else { refused.push(c) }
-        }
-        // Defender looks at the custom files before anything is installed.
-        let scan = if custom.is_empty() { Scan::Clean } else {
-            progress(ImportProgress { step: "scanning", done: 0, total: custom.len(), file: "Windows Defender is scanning the custom files".into() });
-            let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
-            for c in &custom {
-                let to = dir.path().join(&c.path);
-                if let Some(d) = to.parent() { std::fs::create_dir_all(d).map_err(|e| e.to_string())? }
-                std::fs::write(&to, &fetched[&c.path]).map_err(|e| e.to_string())?;
-            }
-            let p = dir.path().to_path_buf();
-            let s = scan_watched(p, custom.len(), "custom files", progress).await?;
-            stopped()?;
-            s
-        };
-        Ok(Vetting { known, custom, refused, scan, fetched })
+        vet(sess, code, m, cf, progress).await
     }
+}
+
+/// Where a pack code's files come from. Today that's the sharer's PC over iroh (`Session`); another sharing
+/// service (an Essential collaboration, our own server) plugs in by implementing this, and every file it hands
+/// over still goes through the same checks in `vet` before anything is installed.
+pub trait PackSource: Sync {
+    fn file(&self, code: &str, path: &str) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + Send;
+}
+
+impl PackSource for Session {
+    fn file(&self, code: &str, path: &str) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + Send {
+        self.pack_file(code, path)
+    }
+}
+
+/// See `Net::vet`: the checks are the same whatever the pack's source.
+async fn vet<S: PackSource>(sess: &S, code: &str, m: &Manifest, cf: Option<Arc<crate::curseforge::Client>>, progress: &Progress) -> Result<Vetting, String> {
+    let mut refused = Vec::new();
+    let mut code_files = Vec::new();
+    let mut known = 0;
+    for f in &m.files {
+        if packcode::safe_path(&f.path).is_none() {
+            let why = if guard::blocked(&f.path) { "a Windows program or script" } else { "outside the pack folders" };
+            refused.push(CustomFile { path: f.path.clone(), size: f.size, findings: Findings { serious: vec![why.into()], notes: vec![] } });
+        } else if packcode::site_url_ok(&f.url) {
+            known += 1;
+        } else if guard::risky(&f.path) {
+            code_files.push(f.clone());
+        }
+    }
+    // A hostile sharer could list endless files or giant ones to wear this PC out before anything is asked.
+    if m.files.len() > 50_000 {
+        return Err("This pack lists more files than any real modpack has; not installing it.".into());
+    }
+    let mut fetched = HashMap::new();
+    let mut held = 0usize;
+    for (i, f) in code_files.iter().enumerate() {
+        progress(ImportProgress { step: "checking", done: i, total: code_files.len(), file: f.path.clone() });
+        let bytes = sess.file(code, &f.path).await?;
+        held += bytes.len();
+        if held > 2 << 30 {
+            return Err("This pack's custom code is larger than any real modpack's; not installing it.".into());
+        }
+        if crate::sha1_hex(&bytes) != f.sha1 {
+            return Err(format!("{} didn't match the pack's list", f.path));
+        }
+        fetched.insert(f.path.clone(), bytes);
+    }
+    // CurseForge's word for files only it hosts (asked by this PC, not the sharer).
+    progress(ImportProgress { step: "checking", done: code_files.len(), total: code_files.len(), file: "Asking CurseForge about its files".into() });
+    let genuine: std::collections::HashSet<u32> = match cf {
+        Some(cf) => {
+            let fps: Vec<u32> = code_files.iter().filter(|f| f.site == "curseforge")
+                .filter_map(|f| fetched.get(&f.path)).map(|b| crate::curseforge::fingerprint(b)).collect();
+            tokio::task::spawn_blocking(move || cf.match_fingerprints(&fps)).await.map_err(|e| e.to_string())?
+                .map(|v| v.into_iter().map(|(fp, _, _)| fp).collect()).unwrap_or_default()
+        }
+        None => Default::default(),
+    };
+    let mut custom = Vec::new();
+    for f in &code_files {
+        let bytes = &fetched[&f.path];
+        if f.site == "curseforge" && genuine.contains(&crate::curseforge::fingerprint(bytes)) {
+            known += 1;
+            continue;
+        }
+        stopped()?;
+        let findings = guard::inspect(&f.path, bytes);
+        let c = CustomFile { path: f.path.clone(), size: f.size, findings };
+        if c.findings.serious.is_empty() { custom.push(c) } else { refused.push(c) }
+    }
+    // Defender looks at the custom files before anything is installed.
+    let scan = if custom.is_empty() { Scan::Clean } else {
+        progress(ImportProgress { step: "scanning", done: 0, total: custom.len(), file: "Windows Defender is scanning the custom files".into() });
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        for c in &custom {
+            let to = dir.path().join(&c.path);
+            if let Some(d) = to.parent() { std::fs::create_dir_all(d).map_err(|e| e.to_string())? }
+            std::fs::write(&to, &fetched[&c.path]).map_err(|e| e.to_string())?;
+        }
+        let p = dir.path().to_path_buf();
+        let s = scan_watched(p, custom.len(), "custom files", progress).await?;
+        stopped()?;
+        s
+    };
+    Ok(Vetting { known, custom, refused, scan, fetched })
+}
+
+impl Net {
 
     /// What a code's pack holds (before choosing about custom files).
     pub async fn preview(&self, code: &str, cf: Option<Arc<crate::curseforge::Client>>,
@@ -1199,6 +1220,30 @@ fn hex(b: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Any sharing backend: files served from memory.
+    struct Memory(HashMap<String, Vec<u8>>);
+    impl PackSource for Memory {
+        async fn file(&self, _code: &str, path: &str) -> Result<Vec<u8>, String> {
+            self.0.get(path).cloned().ok_or_else(|| "missing".to_string())
+        }
+    }
+
+    /// Whatever backend hands the pack over, a planted stealer and a Windows program are refused before install.
+    #[tokio::test]
+    async fn any_backend_is_vetted() {
+        let files = [("mods/evil.jar", "x discord.com/api/webhooks/1/2 x"), ("mods/setup.exe", "MZ"), ("config/a.toml", "x=1")];
+        let src = Memory(files.iter().map(|(p, c)| (p.to_string(), c.as_bytes().to_vec())).collect());
+        let list: Vec<serde_json::Value> = files.iter().map(|(p, c)| serde_json::json!({
+            "path": p, "size": c.len(), "sha1": crate::sha1_hex(c.as_bytes()), "custom": true })).collect();
+        let m: Manifest = serde_json::from_value(serde_json::json!({ "v": 1, "name": "P", "pack": "{}", "files": list })).unwrap();
+        let v = vet(&src, "code", &m, None, &|_| {}).await.unwrap();
+        let mut refused: Vec<_> = v.refused.iter().map(|c| c.path.as_str()).collect();
+        refused.sort();
+        assert_eq!(refused, ["mods/evil.jar", "mods/setup.exe"]);
+        assert!(v.custom.is_empty());
+        assert!(matches!(v.scan, Scan::Clean));
+    }
 
     /// Two Obelisks on this PC, over the real relay and n0's network: run by hand with
     /// `cargo test --lib -- --ignored pack_code`.

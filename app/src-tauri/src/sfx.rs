@@ -25,9 +25,12 @@ pub fn sound(theme: &str, kind: &str) -> Option<Vec<f32>> {
 
 /// A theme's menu or typing sound as a WAV file, for the UI to decode and keep.
 #[tauri::command]
-pub fn ui_sfx(theme: String, kind: String) -> Result<tauri::ipc::Response, String> {
-    let pcm = sound(&theme, &kind).ok_or_else(|| format!("No {kind} sound in theme \"{theme}\""))?;
-    Ok(tauri::ipc::Response::new(crate::sound::wav(&pcm)))
+pub async fn ui_sfx(theme: String, kind: String) -> Result<tauri::ipc::Response, String> {
+    // Synthesised off the window's thread, so the window never stalls while a theme's sounds load.
+    tauri::async_runtime::spawn_blocking(move || {
+        let pcm = sound(&theme, &kind).ok_or_else(|| format!("No {kind} sound in theme \"{theme}\""))?;
+        Ok(tauri::ipc::Response::new(crate::sound::wav(&pcm)))
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// How a theme plays the alert cues: its instrument, how far to shift the cue shapes (semitones), a slide on each
