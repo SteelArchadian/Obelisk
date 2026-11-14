@@ -1985,6 +1985,10 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
         if let Some(y) = deg("yaw", -360.0, 360.0)? { extra.push(format!("-Dtestharness.yaw={y}")); }
     }
     // test_world: a custom world built for this run (flat layers, border, platform, scripted events), then opened.
+    // A wrong type (world: true) would otherwise be dropped silently and the run would sit on the title screen.
+    if let Some(v) = args.get("world").filter(|v| !v.is_null() && !v.is_string()) {
+        return Err(format!("world must be a save folder name or new:<seed>, not {v}"));
+    }
     let built;
     let mut build_world: Option<(Value, u64)> = None;
     let args_world = match args.get("test_world").filter(|v| !v.is_null()) {

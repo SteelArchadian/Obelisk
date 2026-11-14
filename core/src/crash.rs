@@ -503,13 +503,14 @@ pub fn analyze(kind: &str, text: &str, mods: &HashMap<String, String>) -> Diagno
         .take(3).map(|l| l.trim().to_string()).collect();
     if !mixin_fail.is_empty() {
         // "Mixin apply for mod X failed ... from mod X", or the handler$abc000$X$method name in the exception.
-        let owner = mixin_fail.iter().find_map(|l| ["Mixin apply for mod ", "from mod "].iter().find_map(|k| l.split(k).nth(1))
+        // The owner is often only on a later "Caused by: MixinApplyError ... from mod X" line, past the first three.
+        let owner = lines.iter().filter(|l| l.contains("Mixin") && !l.trim_start().starts_with("at ")).find_map(|l| ["Mixin apply for mod ", "from mod "].iter().find_map(|k| l.split(k).nth(1))
                 .map(|s| s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("").to_lowercase())
-                .filter(|o| !o.is_empty() && o != "file")
-                .or_else(|| mixin_owners(l).into_iter().next()));
+                .filter(|o| !o.is_empty() && o != "file"))
+            .or_else(|| mixin_fail.iter().find_map(|l| mixin_owners(l).into_iter().next()));
         f.push(Finding {
             severity: "critical".into(),
-            title: match &owner { Some(o) => format!("{} couldn't patch the game (mixin failed)", pretty(o)), None => "A mod couldn't patch the game (mixin failed)".into() },
+            title: match &owner { Some(o) => format!("{} doesn't fit this version of the game", pretty(o)), None => "A mod doesn't fit this version of the game".into() },
             detail: "Mods change Minecraft's code with mixins. One of them no longer fits, usually because it's the wrong version for your Minecraft or clashes with another mod.".into(),
             fix: "Update that mod, or check it's the build for your Minecraft and loader version.".into(),
             action: if owner.is_some() { "page".into() } else { String::new() },

@@ -89,6 +89,36 @@ def checks():
         sys.exit(f'svelte-check failed:\n{svelte.stdout[-1500:]}')
 
 
+def smoke(exe):
+    """The built exe must start and answer: its build id, then an assistant handshake and tool list over stdio.
+    No window opens (a second window would only bring the running Obelisk to the front)."""
+    try:
+        bid = subprocess.run([exe, '--build-id'], capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        sys.exit('smoke: the built exe hung on --build-id')
+    if bid.returncode != 0 or not bid.stdout.strip():
+        sys.exit(f'smoke: the built exe did not start (exit {bid.returncode})')
+    msgs = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2024-11-05', 'capabilities': {}, 'clientInfo': {'name': 'release-smoke', 'version': '1'}}},
+            {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
+            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}]
+    try:
+        mcp = subprocess.run([exe, '--mcp'], input=''.join(json.dumps(m) + '\n' for m in msgs), capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        sys.exit('smoke: the built exe hung answering the assistant handshake')
+    replies = {}
+    for line in mcp.stdout.splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and 'id' in r:
+            replies[r['id']] = r
+    tools = (replies.get(2) or {}).get('result', {}).get('tools') or []
+    if 1 not in replies or 'error' in replies[1] or len(tools) < 10:
+        sys.exit(f'smoke: the built exe answered the assistant handshake wrongly ({len(tools)} tools)\n{mcp.stdout[-400:]}{mcp.stderr[-400:]}')
+    print(f'smoke ok: build {bid.stdout.strip()}, {len(tools)} tools')
+
+
 def commit(version, notes):
     subprocess.run(['git', 'add', '-A'], cwd=ROOT, check=True)
     subprocess.run(['git', 'commit', '-q', '-m', f'{version}: {notes}'], cwd=ROOT, check=True)
@@ -129,6 +159,7 @@ def main():
     if code != 0:
         sys.exit(f'build failed (exit {code}); see {log}')
 
+    smoke(os.path.join(TAURI, 'target', 'release', 'obelisk.exe'))
     nsis = os.path.join(TAURI, 'target', 'release', 'bundle', 'nsis')
     setup = f'Obelisk_{version}_x64-setup.exe'
     for name in (setup, setup + '.sig'):

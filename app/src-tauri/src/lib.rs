@@ -2212,6 +2212,16 @@ fn after_pid() {
 pub fn run() {
     after_pid();
     datadir::prepare();
+    // Obelisk's own crashes land in errors.jsonl on this PC (nothing is sent anywhere), where the errors tool finds them.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
+        let what = info.payload().downcast_ref::<&str>().map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+        let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+        errlog::record("panic", &format!("{what}{at} (thread {thread})"));
+        default_hook(info);
+    }));
     tauri::Builder::default()
         // A second start just brings the running Obelisk to the front.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
