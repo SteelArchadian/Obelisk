@@ -479,6 +479,9 @@ pub struct Applied {
     /// goes out to everyone (user, 11-22: the owner's copy wins, never the other way round).
     #[serde(default)]
     pub kept: Vec<String>,
+    /// On a member's PC: its own jars of a mod the pack just brought in another version of (now in the safety backup).
+    #[serde(default)]
+    pub replaced: Vec<String>,
 }
 
 /// Apply friends' changesets (all incoming ones when `ids` is empty). Takes a safety backup first.
@@ -590,6 +593,15 @@ fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>
                 out.conflicts.push(e.path.clone());
             }
             history::put(game, &e.path, entry.as_ref())?;
+            if owner_wins.is_none() && entry.is_some() {
+                // A jar of the same mod this PC got on its own (an update done here, user 11-22: the old owner change
+                // and the local update ended up side by side, "duplicate mod"). The pack's version replaces it;
+                // the local one is in the safety backup.
+                for other in same_mod_local_jars(game, &e.path, &base) {
+                    history::put(game, &other, None)?;
+                    out.replaced.push(other);
+                }
+            }
             match entry {
                 Some(fe) => { base.insert(e.path.clone(), fe); }
                 None => { base.remove(&e.path); }
@@ -623,8 +635,25 @@ fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>
     out.conflicts.dedup();
     out.kept.sort();
     out.kept.dedup();
+    out.replaced.sort();
+    out.replaced.dedup();
     save_state(game, &st)?;
     Ok(out)
+}
+
+/// Other enabled jars in mods/ that declare one of the mod ids of the jar just written at `path` and aren't part of
+/// the pack (not in `base`), so they're this PC's own copy of the same mod.
+fn same_mod_local_jars(game: &Path, path: &str, base: &HashMap<String, FileEntry>) -> Vec<String> {
+    let Some(name) = path.strip_prefix("mods/").filter(|n| !n.contains('/') && n.to_lowercase().ends_with(".jar")) else { return vec![] };
+    let ids = crate::dupes::own_ids(&game.join(path));
+    if ids.is_empty() { return vec![] }
+    crate::dupes::index(&game.join("mods")).into_iter()
+        .filter(|(id, _)| ids.contains(id))
+        .flat_map(|(_, files)| files)
+        .filter(|f| f != name)
+        .map(|f| format!("mods/{f}"))
+        .filter(|p| !base.contains_key(p))
+        .collect::<HashSet<_>>().into_iter().collect()
 }
 
 /// Friends' files are checked before they land, the same way as a share code's custom files: code is opened
@@ -1193,6 +1222,69 @@ mod tests {
         let r = apply_auto(&b, &sam.id).unwrap();
         assert!(r.kept.is_empty());
         assert_eq!(fs::read_to_string(b.join("config/slabs.toml")).unwrap(), "stone=alex2");
+    }
+
+    /// User 11-22: the friend's Obelisk updated Supplementaries to 4.1.3 by itself, then the owner's older change
+    /// (4.0.2 -> 4.1.2) arrived and both jars sat in mods/ ("duplicate mod"). The pack's version replaces the local one.
+    #[test]
+    fn owner_jar_replaces_members_own_copy_of_that_mod() {
+        fn jar(p: &Path, id: &str, ver: &str) {
+            use std::io::Write;
+            let mut z = zip::ZipWriter::new(fs::File::create(p).unwrap());
+            z.start_file("META-INF/neoforge.mods.toml", zip::write::SimpleFileOptions::default()).unwrap();
+            write!(z, "[[mods]]
+modId=\"{id}\"
+version=\"{ver}\"
+").unwrap();
+            z.finish().unwrap();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("A/minecraft");
+        fs::create_dir_all(a.join("mods")).unwrap();
+        jar(&a.join("mods/supplementaries-4.0.2.jar"), "supplementaries", "4.0.2");
+        jar(&a.join("mods/jei-19.jar"), "jei", "19");
+        fs::write(d.path().join("A/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        let alex = me("aaaaaaaaaaaa", "Alex");
+        let sam = me("bbbbbbbbbbbb", "Sam");
+        let share = start(&a, "Pack", "p1", "s3cret", &alex).unwrap();
+        let instances = d.path().join("B-instances");
+        fs::create_dir_all(&instances).unwrap();
+        let (cfg, pj) = instance_files(&a, "Pack").unwrap();
+        let (_, b) = create_instance(&instances, &share, &cfg, &pj).unwrap();
+        transfer(&a, &b);
+        apply_auto(&b, &sam.id).unwrap();
+        assert!(b.join("mods/supplementaries-4.0.2.jar").is_file());
+
+        // Sam's copy updates the mod on its own; a separate local mod of Sam's must stay.
+        fs::remove_file(b.join("mods/supplementaries-4.0.2.jar")).unwrap();
+        jar(&b.join("mods/supplementaries-4.1.3.jar"), "supplementaries", "4.1.3");
+        jar(&b.join("mods/sams-own.jar"), "samsown", "1");
+        // The owner's older change arrives.
+        fs::remove_file(a.join("mods/supplementaries-4.0.2.jar")).unwrap();
+        jar(&a.join("mods/supplementaries-4.1.2.jar"), "supplementaries", "4.1.2");
+        publish(&a, &alex, "4.1.2").unwrap().unwrap();
+        transfer(&a, &b);
+        let r = apply_auto(&b, &sam.id).unwrap();
+        assert!(crate::dupes::find(&b).is_empty(), "no mod twice: {:?}", crate::dupes::find(&b));
+        assert!(b.join("mods/supplementaries-4.1.2.jar").is_file(), "the pack's version is in");
+        assert!(!b.join("mods/supplementaries-4.1.3.jar").exists());
+        assert_eq!(r.replaced, vec!["mods/supplementaries-4.1.3.jar".to_string()]);
+        assert!(b.join("mods/sams-own.jar").is_file() && b.join("mods/jei-19.jar").is_file(), "other mods untouched");
+        assert!(history::list(&b).iter().any(|x| x.kind == "safety"), "Sam's 4.1.3 is in a safety backup");
+
+        // The owner's PC keeps its own copy: a member's jar never removes the owner's.
+        let mut sa = get(&a).unwrap();
+        sa.members.push(sam.clone());
+        sa.auto_apply = true;
+        save(&a, &sa).unwrap();
+        jar(&a.join("mods/jei-20.jar"), "jei", "20");
+        fs::remove_file(a.join("mods/jei-19.jar")).unwrap();
+        fs::remove_file(b.join("mods/jei-19.jar")).unwrap();
+        jar(&b.join("mods/jei-21.jar"), "jei", "21");
+        publish(&b, &sam, "").unwrap().unwrap();
+        transfer(&b, &a);
+        let r = apply_auto(&a, &alex.id).unwrap();
+        assert!(r.replaced.is_empty() && a.join("mods/jei-20.jar").is_file());
     }
 
     #[test]
