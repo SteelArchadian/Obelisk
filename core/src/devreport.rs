@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const SALT: &str = "c42a87b7ff07fb16aaf42b9495dc2a85";
+const SALT: &str = "3da10232690aded9c7bc7b2c0dd7fdf5";
 const ROUNDS: u32 = 200_000;
 /// sha256 of the unlock tag; the tag itself (kept once unlocked) can only be made from the password.
-const CHECK: &str = "f2c51b77ef30a9d27b8f085e7f933906ed49b918e8411eab5b22f269c730b949";
+const CHECK: &str = "f8f846db160830fd392be01269354cdd62371de098e2697a399cb6821f6c20b5";
+/// Tags unlocked before the password changed (0.2.173-0.2.174) stay unlocked.
+const KEPT: &[&str] = &["f2c51b77ef30a9d27b8f085e7f933906ed49b918e8411eab5b22f269c730b949"];
 /// The biggest report text accepted (a long game log); the start and end of anything longer are kept.
 pub const MAX_TEXT: usize = 8 << 20;
 
@@ -49,7 +51,9 @@ fn unhex(s: &str) -> Vec<u8> {
 }
 
 fn tag_ok(tag: &str) -> bool {
-    tag.len() == 64 && hex(&Sha256::digest(unhex(tag))) == CHECK
+    if tag.len() != 64 { return false }
+    let h = hex(&Sha256::digest(unhex(tag)));
+    h == CHECK || KEPT.contains(&h.as_str())
 }
 
 /// The unlock tag for this password, or None when it's wrong.
