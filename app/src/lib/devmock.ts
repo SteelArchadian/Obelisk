@@ -10,6 +10,7 @@ const mod = (n: number, name: string, author: string, src: string) => ({
 });
 const mods = ["Create", "Jade", "JEI", "Sodium Extra", "Waystones", "Balm", "Farmer's Delight", "Supplementaries", "Iris", "Xaero's Minimap"]
   .map((n, i) => mod(i + 1, n, ["simibubi", "Snownee", "mezz", "FlashyReese", "BlayTheNinth"][i % 5], i % 3 ? "curseforge" : "modrinth"));
+(mods[0] as any).bundled = [{ name: "Dungeon Config", version: "1.26.11.1", id: "dungeonconfig" }, { name: "Flywheel", version: "1.0.0" }, { name: "AMCDB", version: "2.0" }];
 let trash: any[] = [{ id: "1-old", kind: "mods", fileName: "old_mod-2.0.jar", name: "Old Mod", version: "2.0", authors: "Someone", source: "modrinth", deletedMs: now - 2 * day }];
 
 const TOML = `# Client settings
@@ -46,6 +47,10 @@ export function installDevMock() {
   mockWindows("main");
   mockIPC((cmd, args: any) => {
     switch (cmd) {
+      case "sync_sources": return [];
+      case "config_sync": return { packs: ["Odyssey", "Test Dummy", "Foundation"], paused: false, mod_config_files_tracked: 533, waiting_for_game_to_close: {}, log: ["2026-11-18 10:29:32 Test Dummy: changed with its game closed (a chat?): tutorialStep movement -> none; waiting for approval (#1)"], pending: args.args?.action ? [] : [{ id: 1, pack: "Test Dummy", file: "options.txt", key: "tutorialStep", old: "movement", new: "none", seen: "2026-11-18 10:29:32" }, { id: 2, pack: "Odyssey", file: "config/sodium-options.json", key: "quality/weather_quality", old: "\"DEFAULT\"", new: "\"FAST\"", seen: "2026-11-18 10:31:02" }] };
+      case "prism_installed": return !sessionStorage.getItem("mock.fresh") || !!sessionStorage.getItem("mock.prism");
+      case "prism_download": return new Promise((r) => setTimeout(() => { sessionStorage.setItem("mock.prism", "1"); r("11.1.1"); }, 1500));
       case "get_favorites": return JSON.parse(sessionStorage.getItem("mock.favorites") ?? "{}");
       case "set_favorites": sessionStorage.setItem("mock.favorites", JSON.stringify(args.favorites)); return null;
       case "get_settings": return { welcomed: !sessionStorage.getItem("mock.fresh"), plugins: { lightning: true }, theme: new URLSearchParams(location.search).get("theme") ?? undefined };
@@ -149,7 +154,6 @@ export function installDevMock() {
           { id: "a", label: "", startedMs: now - 2 * day, html: "", phases: [], findings: [], contenders: [], whole: { seconds: 60, fps: 98, low1PctFps: 30, topModsCpu: [{ mod: "boundless", sharePct: 30 }] } }] };
       case "get_pins": return [];
       case "has_cf_key": return !sessionStorage.getItem("mock.fresh");
-      case "prism_installed": return !sessionStorage.getItem("mock.fresh");
       case "cf_account": return sessionStorage.getItem("mock.cfOut") ? null : { id: 7, username: "steel", displayName: "SteelArchadian", avatarUrl: "" };
       case "cf_signout": sessionStorage.setItem("mock.cfOut", "1"); return null;
       case "cf_signin": sessionStorage.removeItem("mock.cfOut"); return null;

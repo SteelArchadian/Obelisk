@@ -8,6 +8,8 @@ export type Item = {
   fileName: string; name: string; version: string; authors: string;
   enabled: boolean; source: "curseforge" | "modrinth" | "local"; projectId: string;
   installedMs: number; modifiedMs: number;
+  /** Mods packed inside this jar: shown grayed under it, removed only with it. */
+  bundled?: { name: string; version: string; id?: string; url?: string }[];
   /** Set on rows shown from the trash. */
   trashId?: string;
 };

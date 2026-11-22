@@ -133,10 +133,26 @@ pub fn best(list: &[JavaInstall], need: u32) -> Option<&JavaInstall> {
 pub fn check_before_launch(data: &Path, id: &str) -> Result<Option<String>, String> {
     let root = crate::instance_root(data, id)?;
     let cfg = crate::read_cfg(&root.join("instance.cfg"));
-    if cfg.get("OverrideJavaLocation").map(String::as_str) != Some("true") { return Ok(None); }
     let Some(inst) = crate::list_instances(data).into_iter().find(|i| i.id == id) else { return Ok(None) };
-    let need = crate::sides::java_for(&inst.minecraft);
+    let mc_need = crate::sides::java_for(&inst.minecraft);
+    // A mod built for a newer Java than Minecraft's own (C2ME OpenCL: Java 25 on 1.21.1) crashes the game at mod
+    // scan with no log line naming it, so the profile is moved to that Java before the game starts.
+    let mods_need = crate::game_dir(data, id).map_or(0, |g| mods_need_java(&g.join("mods")));
+    let need = mc_need.max(mods_need);
+    let mod_note = |major: u32| format!("A mod in this profile needs Java {mods_need} (Minecraft {} itself runs on Java {mc_need}), so this profile now uses Java {major}.", inst.minecraft);
+    let missing = || format!("A mod in this profile needs Java {mods_need}, which isn't installed, so the game will likely crash at start. Install Java {mods_need} in Settings > Minecraft & Java.");
     let list = installs(data);
+    if cfg.get("OverrideJavaLocation").map(String::as_str) != Some("true") {
+        if mods_need <= mc_need { return Ok(None); }
+        return match best(&list, mods_need) {
+            Some(j) => {
+                crate::update_cfg(&root.join("instance.cfg"), &[("OverrideJavaLocation", Some("true".into())),
+                    ("JavaPath", Some(j.path.clone())), ("IgnoreJavaCompatibility", Some("true".into()))])?;
+                Ok(Some(mod_note(j.major)))
+            }
+            None => Ok(Some(missing())),
+        };
+    }
     let path = resolve(data, cfg.get("JavaPath").map(String::as_str).unwrap_or_default()).to_string_lossy().into_owned();
     let canon = |p: &str| fs::canonicalize(p).unwrap_or_else(|_| p.into());
     // A Java outside the scanned folders (picked with Other Java) still counts.
@@ -154,16 +170,30 @@ pub fn check_before_launch(data: &Path, id: &str) -> Result<Option<String>, Stri
         }
         return Ok(None);
     }
+    let cfg_path = root.join("instance.cfg");
+    if mods_need > mc_need && current.is_some_and(|j| suits(j.major, mc_need)) {
+        // Fine for Minecraft, too old for a mod.
+        return match best(&list, mods_need) {
+            Some(j) => {
+                crate::update_cfg(&cfg_path, &[("JavaPath", Some(j.path.clone())), ("IgnoreJavaCompatibility", Some("true".into()))])?;
+                Ok(Some(mod_note(j.major)))
+            }
+            None => Ok(Some(missing())),
+        };
+    }
     let why = match current {
-        Some(j) => format!("Java {} doesn't suit Minecraft {} (it needs Java {need})", j.major, inst.minecraft),
+        Some(j) => format!("Java {} doesn't suit Minecraft {} (it needs Java {mc_need})", j.major, inst.minecraft),
         None => "The chosen Java is no longer installed".to_string(),
     };
-    let cfg_path = root.join("instance.cfg");
     match best(&list, need) {
         Some(j) => {
-            crate::update_cfg(&cfg_path, &[("JavaPath", Some(j.path.clone()))])?;
+            let listed = prism_java_majors(data, &inst.minecraft);
+            let mut set = vec![("JavaPath", Some(j.path.clone()))];
+            if !listed.is_empty() && !listed.contains(&j.major) { set.push(("IgnoreJavaCompatibility", Some("true".into()))) }
+            crate::update_cfg(&cfg_path, &set)?;
             Ok(Some(format!("{why}, so this profile now uses Java {} ({}).", j.major, j.version)))
         }
+        None if mods_need > mc_need => Ok(Some(missing())),
         None => {
             crate::update_cfg(&cfg_path, &[("OverrideJavaLocation", Some("false".into()))])?;
             Ok(Some(format!("{why}, and none is installed, so Prism will pick or download one.")))
@@ -185,6 +215,54 @@ pub fn prism_java_majors(data: &Path, mc: &str) -> Vec<u32> {
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v["compatibleJavaMajors"].as_array().map(|a| a.iter().filter_map(|m| m.as_u64().map(|m| m as u32)).collect()))
         .unwrap_or_default()
+}
+
+/// The newest Java the enabled mods in `mods` were compiled for (0 when none says). Checks the classes the loader
+/// starts first (each META-INF/services provider, e.g. a mod locator) plus a jar's first two classes: a jar built
+/// for Java 25 kills a Java 21 game before any log line names it (C2ME OpenCL, 2026-11-18).
+pub fn mods_need_java(mods: &Path) -> u32 {
+    // Remembered per folder until a jar is added, removed or renamed there (the folder's modified time changes),
+    // so a launch doesn't reopen every jar each time.
+    static SEEN: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, (std::time::SystemTime, u32)>>> = std::sync::Mutex::new(None);
+    let stamp = fs::metadata(mods).and_then(|m| m.modified()).ok();
+    if let (Some(t), Ok(mut g)) = (stamp, SEEN.lock()) {
+        if let Some((seen, need)) = g.get_or_insert_with(Default::default).get(mods) { if *seen == t { return *need } }
+    }
+    let need = scan_mods_java(mods);
+    if let (Some(t), Ok(mut g)) = (stamp, SEEN.lock()) { g.get_or_insert_with(Default::default).insert(mods.to_path_buf(), (t, need)); }
+    need
+}
+
+fn scan_mods_java(mods: &Path) -> u32 {
+    use std::io::Read;
+    type Zip = zip::ZipArchive<std::io::BufReader<fs::File>>;
+    let java_of = |z: &mut Zip, name: &str| -> u32 {
+        let mut head = [0u8; 8];
+        let Ok(mut f) = z.by_name(name) else { return 0 };
+        if f.read_exact(&mut head).is_err() || head[..4] != [0xCA, 0xFE, 0xBA, 0xBE] { return 0 }
+        u16::from_be_bytes([head[6], head[7]]).saturating_sub(44) as u32
+    };
+    let jar = |p: &Path| -> u32 {
+        let Ok(mut z) = fs::File::open(p).map_err(|_| ()).and_then(|f| Zip::new(std::io::BufReader::new(f)).map_err(|_| ())) else { return 0 };
+        let names: Vec<String> = z.file_names().map(str::to_string).collect();
+        let mut check: Vec<String> = names.iter()
+            .filter(|n| n.ends_with(".class") && !n.starts_with("META-INF/")).take(2).cloned().collect();
+        for svc in names.iter().filter(|n| n.starts_with("META-INF/services/") && !n.ends_with('/')) {
+            let mut t = String::new();
+            if z.by_name(svc).ok().and_then(|mut f| f.read_to_string(&mut t).ok()).is_none() { continue }
+            check.extend(t.lines().map(|l| l.split('#').next().unwrap_or("").trim()).filter(|l| !l.is_empty())
+                .map(|c| format!("{}.class", c.replace('.', "/"))));
+        }
+        check.iter().map(|c| java_of(&mut z, c)).max().unwrap_or(0)
+    };
+    let jars: Vec<PathBuf> = fs::read_dir(mods).into_iter().flatten().flatten().map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("jar"))).collect();
+    // Several jars at once: a 400-mod pack takes seconds one by one.
+    let n = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8);
+    std::thread::scope(|s| {
+        jars.chunks(jars.len().div_ceil(n).max(1)).map(|c| s.spawn(move || c.iter().map(|p| jar(p)).max().unwrap_or(0)))
+            .collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap_or(0)).max().unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
@@ -213,5 +291,44 @@ mod tests {
     #[ignore] // reads this PC's folders: cargo test java -- --ignored --nocapture
     fn list_here() {
         for j in installs(&crate::data_dir()) { println!("{j:?}"); }
+    }
+}
+
+#[cfg(test)]
+mod need_here {
+    #[test]
+    #[ignore] // reads this PC's packs: cargo test need_here -- --ignored --nocapture
+    fn packs() {
+        for p in ["Odyssey", "odyssey-test", "Foundation", "Test Dummy"] {
+            let m = std::path::PathBuf::from(format!("D:/Modding/Minecraft/Obelisk/Instances/{p}/minecraft/mods"));
+            let t = std::time::Instant::now();
+            let a = super::mods_need_java(&m);
+            let first = t.elapsed();
+            let b = super::mods_need_java(&m);
+            println!("{p}: need {a} (again {b}) first {first:?} cached {:?}", t.elapsed() - first);
+        }
+    }
+}
+
+#[cfg(test)]
+mod prelaunch_here {
+    #[test]
+    #[ignore] // copies one mod of Test Dummy to a temp profile: cargo test prelaunch_here -- --ignored --nocapture
+    fn moves_to_mod_java() {
+        let src = std::path::Path::new("D:/Modding/Minecraft/Obelisk/Instances/Test Dummy");
+        let data = std::env::temp_dir().join(format!("obk-java-{}", std::process::id()));
+        let inst = data.join("instances").join("T");
+        std::fs::create_dir_all(inst.join("minecraft/mods")).unwrap();
+        std::fs::copy(src.join("mmc-pack.json"), inst.join("mmc-pack.json")).unwrap();
+        std::fs::write(inst.join("instance.cfg"), "[General]\nname=T\nOverrideJavaLocation=false\n").unwrap();
+        let jar = "c2me-neoforge-opts-accel-opencl-mc1.21.1-0.4.0-alpha.0.124.jar";
+        std::fs::copy(src.join("minecraft/mods").join(jar), inst.join("minecraft/mods").join(jar)).unwrap();
+        println!("installs: {:?}", super::installs(&data).iter().map(|j| j.major).collect::<Vec<_>>());
+        println!("1: {:?}", super::check_before_launch(&data, "T"));
+        println!("cfg: {}", std::fs::read_to_string(inst.join("instance.cfg")).unwrap());
+        println!("2: {:?}", super::check_before_launch(&data, "T"));
+        std::fs::write(inst.join("instance.cfg"), "[General]\nname=T\nOverrideJavaLocation=true\nJavaPath=C:/mcw/java/jdk-21.0.7+6/bin/javaw.exe\n").unwrap();
+        println!("3: {:?}", super::check_before_launch(&data, "T"));
+        println!("cfg: {}", std::fs::read_to_string(inst.join("instance.cfg")).unwrap());
     }
 }

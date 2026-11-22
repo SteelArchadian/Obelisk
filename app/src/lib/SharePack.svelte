@@ -68,9 +68,12 @@
     await load();
   });
   const apply = (ids: string[]) => run("apply", async () => {
-    const r = await invoke<{ applied: number; conflicts: string[]; blocked: string[] }>("share_apply", { instanceId: inst.id, ids });
+    const r = await invoke<{ applied: number; conflicts: string[]; blocked: string[]; kept?: string[] }>("share_apply", { instanceId: inst.id, ids });
+    const kept = r.kept?.length ?? 0;
     toast(r.blocked.length
       ? `Applied, except ${r.blocked.length} blocked file${r.blocked.length === 1 ? "" : "s"}: see Blocked files.`
+      : kept
+      ? `Applied. You own this pack, so your version of ${kept} file${kept === 1 ? "" : "s"} you'd both changed stays and goes back out to friends.`
       : r.conflicts.length
       ? `Applied. ${r.conflicts.length} file${r.conflicts.length === 1 ? "" : "s"} you'd also changed now use their version; yours is in Backups.`
       : `Applied ${r.applied} change${r.applied === 1 ? "" : "s"}. Undo anytime from Backups.`);

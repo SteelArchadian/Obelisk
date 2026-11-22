@@ -5,7 +5,7 @@
   import { projectUrl, authorUrl } from "./links";
   import { app, pushOverlay } from "./state.svelte";
   import { openLink } from "./account.svelte";
-  import { tagsOnce, loadersOf as loaderOf, cap, isInstalled } from "./install";
+  import { tagsOnce, loadersOf as loaderOf, cap, isInstalled, compat } from "./install";
   import { cfSearchAvailable, cfToHit, mergeHits, sameKey } from "./cf";
   import NoIcon from "./NoIcon.svelte";
   import SourceBadges from "./SourceBadges.svelte";
@@ -30,6 +30,18 @@
   let categories = $state<Set<string>>(new Set());
   let hideInstalled = $state(false);
   let hideLibraries = $state(false);
+  // Hide results that can't run in the install target (wrong Minecraft version or loader); Connector-able Fabric mods stay.
+  let hideIncompatible = $state(true);
+  // Follow the install target: picking "Install to Odyssey" after Browse opened used to leave the filters on "Any".
+  let lastTarget = app.target?.id;
+  $effect(() => {
+    const t = app.target;
+    if (t?.id === lastTarget) return;
+    lastTarget = t?.id;
+    loaders = t?.loader ? [t.loader.toLowerCase()] : [];
+    gameVersion = t?.minecraft ?? "";
+  });
+  const runs = (h: Hit) => { const c = compat(h, app.target); return c.ok || (c.connector && settings.connector); };
   // Modrinth files libraries under "library", CurseForge under "library-api" (API and Library).
   const isLibrary = (h: Hit) => h.categories.some((c) => c === "library" || c === "library-api");
   let showFilters = $state(false);
@@ -55,7 +67,7 @@
     (tags?.categories ?? []).filter((c) => c.project_type === app.browseType && c.header !== "resolutions"),
   );
   let loaderNames = $derived(new Set((tags?.loaders ?? []).map((l) => l.name)));
-  let shown = $derived(hits.filter((h) => !(hideInstalled && isInstalled(h)) && !(hideLibraries && isLibrary(h))));
+  let shown = $derived(hits.filter((h) => !(hideInstalled && isInstalled(h)) && !(hideLibraries && isLibrary(h)) && !(hideIncompatible && !runs(h))));
 
   onMount(() => {
     tagsOnce().then((t) => (tags = t)).catch(() => {});
@@ -199,13 +211,14 @@
     </div>
 
     <div class="pop">
-      <button class="tool" class:active={categories.size || hideInstalled || hideLibraries} onclick={(e) => { e.stopPropagation(); showFilters = !showFilters; showSort = false; }}>
+      <button class="tool" class:active={categories.size || hideInstalled || hideLibraries || (app.target && !hideIncompatible)} onclick={(e) => { e.stopPropagation(); showFilters = !showFilters; showSort = false; }}>
         Filters{categories.size ? ` (${categories.size})` : ""}
       </button>
       {#if showFilters}
         <div class="menu filters" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
           <label class="check"><input type="checkbox" bind:checked={hideInstalled} /> Hide installed content</label>
           <label class="check"><input type="checkbox" bind:checked={hideLibraries} /> Hide libraries and APIs</label>
+          {#if app.target}<label class="check"><input type="checkbox" bind:checked={hideIncompatible} /> Hide what won't run in {app.target.name}</label>{/if}
           {#if loaderApplies}
             <div class="field">Modloader <small class="muted">(none ticked = any)</small>
               {#each ["neoforge", "forge", "fabric", "quilt"] as l (l)}

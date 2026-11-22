@@ -242,12 +242,12 @@
         <SourceBadges hit={siteHit} big links={siteLinks} />
         <div class="spacer"></div>
         {#if mr.account && mrId}
-          <button class="mr-follow" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
+          <button class="mr-follow mrb" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
             aria-pressed={mr.follows.has(mrId!)} onclick={() => toggleFollow(mrId!)}>{mr.follows.has(mrId!) ? "✓ Following" : "+ Follow"}</button>
         {/if}
         {#if cf.account && cfId}
-          <button class="mr-follow" class:on={cf.favorites.has(Number(cfId))} title={cf.favorites.has(Number(cfId)) ? "In your CurseForge favorites (click to remove)" : "Add to your CurseForge favorites"}
-            aria-pressed={cf.favorites.has(Number(cfId))} onclick={() => toggleCfFavorite(Number(cfId))}>{cf.favorites.has(Number(cfId)) ? "♥ CurseForge" : "♡ CurseForge"}</button>
+          <button class="mr-follow heart cfb" class:on={cf.favorites.has(Number(cfId))} title={cf.favorites.has(Number(cfId)) ? "In your CurseForge favorites (click to remove)" : "Add to your CurseForge favorites"}
+            aria-pressed={cf.favorites.has(Number(cfId))} aria-label="CurseForge favorite" onclick={() => toggleCfFavorite(Number(cfId))}>{cf.favorites.has(Number(cfId)) ? "♥" : "♡"}</button>
         {/if}
         {#if wishPack}
           <button class="follow wish" class:on={isWished(wishPack.id, hit.project_id)} aria-pressed={isWished(wishPack.id, hit.project_id)}
@@ -432,6 +432,12 @@
   .mr-follow { height: 40px; flex: none; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-weight: 600; }
   .mr-follow:hover { color: var(--text); }
   .mr-follow.on { color: var(--accent); }
+  /* Which site the button is for, by its border: Modrinth green, CurseForge orange (user, 11-14). */
+  .mr-follow.mrb { border-color: color-mix(in srgb, var(--mr) 55%, transparent); }
+  .mr-follow.mrb.on { border-color: var(--mr); color: var(--mr); }
+  .mr-follow.cfb { border-color: color-mix(in srgb, var(--cf) 55%, transparent); }
+  .mr-follow.cfb.on { border-color: var(--cf); color: var(--cf); }
+  .mr-follow.heart { width: 40px; padding: 0; font-size: 18px; }
   .tablist > button.on { color: var(--text); border-bottom-color: var(--accent); }
   .links { margin-left: auto; display: flex; gap: 12px; }
   .link { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 2px; }

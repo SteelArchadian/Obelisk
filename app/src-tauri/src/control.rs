@@ -30,6 +30,8 @@ use std::time::{Duration, Instant, SystemTime};
 struct TestBench {
     /// Folder whose direct subfolders are the test copies (plus the tool folders in NOT_COPIES).
     root: PathBuf,
+    /// Where new test copies go (user, 2026-11-15: off C:, D:\Modding\Claude). Copies already in `root` still count.
+    copies: PathBuf,
     /// The Minecraft runtime (versions, libraries, assets, Java) test copies launch from.
     install: String,
     /// The test harness jar (no mouse grab, camera aim, fast quit) added to every launched copy.
@@ -46,6 +48,19 @@ fn tb() -> &'static TestBench {
     static TB: std::sync::OnceLock<TestBench> = std::sync::OnceLock::new();
     TB.get_or_init(|| std::fs::read(token_dir().join("bench.json")).ok()
         .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default())
+}
+
+/// Where copy_pack puts new copies: `copies` from bench.json, else the bench root.
+fn new_copy_root() -> &'static Path {
+    let c = tb().copies.as_path();
+    if c.as_os_str().is_empty() { tb().root.as_path() } else { c }
+}
+
+/// Every folder whose direct subfolders are test copies: the new-copy folder first, then the bench root.
+fn copy_roots() -> Vec<&'static Path> {
+    let mut v = vec![new_copy_root()];
+    if canon(tb().root.as_path()) != canon(v[0]) { v.push(tb().root.as_path()) }
+    v
 }
 
 fn tb_ready() -> Result<(), String> {
@@ -270,10 +285,19 @@ fn token_dir() -> PathBuf {
     PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Default".into())).join(".obelisk")
 }
 
+/// This PC has the test bench set up (bench.json). Bench-only features stay off everywhere else (user, 11-14).
+pub fn has_bench() -> bool { token_dir().join("bench.json").is_file() }
+
 /// Start the server (once, from setup). Does nothing when Obelisk itself runs inside another app's package:
 /// then it would have the same slow, redirected view of the files as the chats.
+/// Only for PCs that use it: this PC's test bench (bench.json) or a user who connected an AI assistant in
+/// Settings. Everyone else gets no local server at all (user, 11-14: other people use Obelisk).
 pub fn start(app: tauri::AppHandle) {
-    if super::sandboxed() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if super::sandboxed() || !(token_dir().join("bench.json").is_file() || super::mcp::ai_connected()) {
+        return;
+    }
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(recover_swaps);
@@ -483,6 +507,33 @@ fn label(n: &str, what: &str) -> Result<String, String> {
     if ok { Ok(n.to_string()) } else { Err(format!("{what} may use letters, digits, spaces and . _ - ( ) / : , + (max 80)")) }
 }
 
+/// The test's line in the user's bench widget (user 11-18, KB #194): a plain summary of what it checks, as
+/// benchlock.label_problem. A leading "smoke:" is dropped (every launch is one). Gate runs label themselves.
+fn plain_purpose(p: &str) -> Result<String, String> {
+    let mut what = p.trim();
+    for pre in ["smoke:", "smoke -", "smoke "] {
+        if what.len() >= pre.len() && what.is_char_boundary(pre.len()) && what[..pre.len()].eq_ignore_ascii_case(pre) {
+            what = what[pre.len()..].trim_start();
+            break;
+        }
+    }
+    let what = what.to_string();
+    let eg = " Write what the test checks in plain words, e.g. \"checking portal view after fill fix\" or \"inspecting spider walking\".";
+    if what.to_lowercase().starts_with("gate") { return Ok(what) }
+    if what.is_empty() { return Err(format!("purpose is empty.{eg}")) }
+    let n = what.chars().count();
+    if n > 50 { return Err(format!("purpose is {n} chars; keep it under 50 (it is the user's widget line).{eg}")) }
+    let code = |w: &str| {
+        let c: Vec<char> = w.chars().collect();
+        let num = w.split('.').all(|x| !x.is_empty() && x.chars().all(|d| d.is_ascii_digit()));
+        !num && (c.iter().any(|x| "_/\\\u{b7}(){}[]=".contains(*x))
+            || c.windows(2).any(|p| (p[0].is_ascii_alphabetic() && p[1].is_ascii_digit()) || (p[0].is_ascii_digit() && p[1].is_ascii_alphabetic())))
+    };
+    let bad: Vec<&str> = what.split_whitespace().filter(|w| code(w)).take(4).collect();
+    if !bad.is_empty() { return Err(format!("no build tags, ids, paths or code words in purpose: {}.{eg}", bad.join(" "))) }
+    Ok(what)
+}
+
 fn canon(p: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(p).ok()
 }
@@ -500,9 +551,10 @@ pub(crate) fn test_copy(name: &str) -> Result<PathBuf, String> {
     if NOT_COPIES.contains(&name.to_ascii_lowercase().as_str()) {
         return Err(format!("{name} isn't a game copy"));
     }
-    let dir = tb().root.as_path().join(name);
+    let (dir, root) = copy_roots().into_iter().map(|r| (r.join(name), r))
+        .find(|(d, _)| d.exists()).ok_or_else(|| format!("no copy called {name} in the test bench"))?;
     let c = canon(&dir).ok_or_else(|| format!("no copy called {name} in the test bench"))?;
-    let root = canon(tb().root.as_path()).ok_or("the test bench folder is missing")?;
+    let root = canon(root).ok_or("the test bench folder is missing")?;
     if c.parent() != Some(root.as_path()) || is_play(&c) {
         return Err(format!("{name} points outside the test bench; refused"));
     }
@@ -538,9 +590,10 @@ fn changed(dir: &Path, what: &str) {
 /// A file the user's chats built: must be a .jar in the test bench.
 fn mcw_jar(p: &str) -> Result<PathBuf, String> {
     let c = canon(Path::new(p)).ok_or_else(|| format!("{p} doesn't exist"))?;
-    let root = canon(tb().root.as_path()).ok_or("the test bench folder is missing")?;
+    let roots: Vec<PathBuf> = copy_roots().into_iter().filter_map(canon).collect();
+    if roots.is_empty() { return Err("the test bench folder is missing".into()) }
     let is_jar = c.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
-    if !c.starts_with(&root) || !is_jar || !c.is_file() {
+    if !roots.iter().any(|r| c.starts_with(r)) || !is_jar || !c.is_file() {
         return Err("the jar must be a .jar file in the test bench".into());
     }
     Ok(c)
@@ -674,7 +727,14 @@ fn jvm_props(args: &Value) -> Result<Vec<String>, String> {
 fn game_running_in(dir: &Path) -> bool {
     let want = canon(dir).map(|c| c.to_string_lossy().trim_start_matches(r"\\?\").replace('\\', "/").to_ascii_lowercase());
     let Some(want) = want else { return false };
-    let key = format!("/{}", want.trim_end_matches('/').rsplit('/').next().unwrap_or_default());
+    // Key on the folder's own name. A Prism game folder is always "minecraft" (and "/minecraft/" sits in every
+    // path under D:/Modding/Minecraft), so for those key on the whole instance folder: its natives and gameDir both hold it.
+    let want = want.trim_end_matches('/');
+    let key = match want.rsplit_once('/') {
+        Some((inst, "minecraft" | ".minecraft")) => inst.trim_start_matches(|c: char| c.is_ascii_alphabetic()).to_string(),
+        Some((_, last)) => format!("/{last}"),
+        None => return false,
+    };
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always));
     sys.processes().values().any(|p| {
@@ -727,7 +787,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
         "help" => Ok(json!({ "commands": ["ping", "copies", "launch", "gate", "status", "wait", "kill", "mods", "mod-enable",
             "mod-disable", "mod-add", "mod-remove", "mod-install", "updates", "mod-update", "duplicates", "reports", "diagnose", "log",
             "screenshots", "lightning", "timeline", "copy-pack", "app-commands", "app", "release-submit", "release-status", "release-promote",
-            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test", "game-result", "game-stop", "game-quit", "bisect"],
+            "release-rollback", "release-retry", "release-optout", "errors", "game-query", "game-cmd", "game-scenario", "game-test", "game-result", "game-stop", "game-quit", "bisect", "config-sync"],
             "note": "Every launch waits for the shared bench lock; use wait instead of polling status." })),
         "copies" => copies(),
         // Everything the app itself can do, run live through its window (bridge.rs).
@@ -738,6 +798,7 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             if let Some(id) = r.as_ref().ok().and_then(|v| v["job"].as_u64()) { journal::request(id as u32, cmd, args) }
             r
         }
+        "config-sync" => super::cfgsync::call(args),
         "errors" => Ok(super::errlog::recent(num(args, "limit", 30, 1, 200)? as usize, args.get("since").and_then(|v| v.as_u64()).unwrap_or(0))),
         "release-submit" | "release-status" | "release-promote" | "release-rollback" | "release-retry" | "release-optout" => super::releases::command(cmd, args),
         "status" => {
@@ -747,8 +808,18 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
             v.sort_by_key(|j| std::cmp::Reverse(j.id));
             if let Some(id) = args.get("job").and_then(|j| j.as_u64()) {
                 v.retain(|j| j.id as u64 == id);
+                return Ok(json!({ "jobs": v }));
             }
-            Ok(json!({ "jobs": v }))
+            // Overseer 11-18: 500+ KB of finished jobs made status time out. Default: every active job in full, the
+            // last 10 finished ones as one-liners; all=true for everything.
+            if args.get("all").and_then(|a| a.as_bool()) == Some(true) { return Ok(json!({ "jobs": v })) }
+            let done = |j: &Job| j.ended.is_some();
+            let finished = v.iter().filter(|j| done(j)).count();
+            let recent: Vec<Value> = v.iter().filter(|j| done(j)).take(10)
+                .map(|j| json!({ "id": j.id, "owner": j.owner, "state": j.state, "detail": j.detail, "ended": j.ended })).collect();
+            let active: Vec<&Job> = v.iter().filter(|j| !done(j)).collect();
+            Ok(json!({ "jobs": active, "recent_finished": recent, "older_finished": finished.saturating_sub(10),
+                "note": "status {job} for one job in full; all=true for every job" }))
         }
         "wait" => wait(args, jobs),
         "play-status" => Ok(play_status()),
@@ -925,9 +996,15 @@ fn dispatch(cmd: &str, args: &Value, jobs: &Shared, app: &tauri::AppHandle) -> R
                 // The game died before it could log why; the JVM's own output says.
                 let hit = lines.iter().position(|l| l.contains("Exception") || l.contains("Error:") || l.contains("Error ")).unwrap_or(0);
                 let line = lines.get(hit).cloned().unwrap_or_default();
-                d.headline = format!("The game exited with code {code}: {}", explain_java_error(&line).unwrap_or_else(|| line.clone()));
+                // The root cause is the last "Caused by", often past the first 40 lines (odyssey-test, 2026-11-18).
+                let root = lines.iter().rev().find(|l| l.starts_with("Caused by:")).cloned();
+                let why = lines.iter().find_map(|l| explain_java_error(l))
+                    .or_else(|| root.as_ref().map(|r| format!("{line} ({})", r.trim_start_matches("Caused by: "))));
+                d.headline = format!("The game exited with code {code}: {}", why.unwrap_or_else(|| line.clone()));
                 d.error = line;
-                d.excerpt = lines.into_iter().skip(hit).take(40).collect();
+                let mut ex: Vec<String> = lines.iter().skip(hit).take(25).cloned().collect();
+                ex.extend(lines.iter().skip(hit + 25).filter(|l| l.starts_with("Caused by:")).cloned());
+                d.excerpt = ex;
             }
             d.excerpt.truncate(40);
             Ok(serde_json::to_value(d).unwrap_or_default())
@@ -980,9 +1057,11 @@ fn pack_of(args: &Value) -> Result<(String, String), String> {
 
 fn copies() -> Result<Value, String> {
     let mut out = vec![];
-    for e in std::fs::read_dir(&tb().root).map_err(|e| e.to_string())?.flatten() {
+    let mut seen = std::collections::HashSet::new();
+    for e in copy_roots().into_iter().flat_map(|r| std::fs::read_dir(r).into_iter().flatten().flatten()) {
         let name = e.file_name().to_string_lossy().into_owned();
-        if test_copy(&name).is_ok() && e.path().join("config").is_dir() {
+        if !seen.insert(name.to_ascii_lowercase()) { continue }
+        if test_copy(&name).ok().as_deref() == Some(e.path().as_path()) && e.path().join("config").is_dir() {
             out.push(json!({ "copy": name, "running": game_running_in(&e.path()) }));
         }
     }
@@ -1177,6 +1256,7 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // over the picture. Off for this run only.
     let visual = scene || steps.iter().any(|s| ["shot", "punch", "record"].iter().any(|k| s.get(*k).is_some()));
     if visual {
+        if o.get("visual").is_none() { o.insert("visual".into(), json!(true)); }
         let mut off = o.get("disable_mods").and_then(|a| a.as_array().cloned()).unwrap_or_default();
         let add: Vec<Value> = mods_named(&VISUAL_OFF).into_iter().filter(|f| !off.iter().any(|o| o.as_str() == Some(f))).map(Value::from).collect();
         off.extend(add);
@@ -1193,7 +1273,8 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     let lightning = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
         .any(|e| { let n = e.file_name().to_string_lossy().to_lowercase(); n.starts_with("lightning") && n.ends_with(".jar") });
-    if lightning && !has(&jvm, "lightning.") {
+    // Only perf runs record the full Lightning capture (KB #171): a plain test doesn't need the profiler running.
+    if lightning && o.get("perf").and_then(Value::as_bool).unwrap_or(false) && !has(&jvm, "lightning.") {
         jvm.push(json!("-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads"));
         jvm.push(json!("-Dlightning.windows=30"));
         jvm.push(json!(format!("-Dlightning.autoStart=1,{RUN_WALL}")));
@@ -1738,7 +1819,9 @@ fn fps_prop(a: &str) -> bool {
 /// The frame cap an FPS run uses: high enough that no laptop or desktop here reaches it, so the numbers are the game's.
 const FPS_RUN_MAX: &str = "260";
 /// Every other test: a light window and frame cap so tests don't eat the PC (user, KB #139).
-const TEST_FPS: &str = "60";
+/// Plain tests run at 30 fps; ones about what's on screen (visual) at 60 (user, KB #171).
+const TEST_FPS: &str = "30";
+const VISUAL_FPS: &str = "60";
 
 /// The user's room heat switch (C:\mcw\state\heat.json, set only by the user, KB #169): "hot" means keep the PC
 /// cool. No file (any other PC) means normal limits.
@@ -1755,6 +1838,38 @@ const FULL_PACK_SOFT_MB: u64 = 4096;
 fn lean_heap_mb(dir: &Path) -> Option<u64> {
     let meta: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("lean.json")).ok()?).unwrap_or(Value::Null);
     Some((meta["heap_gb"].as_f64().filter(|g| *g >= 1.0).unwrap_or(2.0) * 1024.0) as u64)
+}
+
+/// Lean tests (user, KB #171): a 3 GB heap, no full pack, low render settings, unless the Underling cleared the copy.
+const LEAN_HEAP_MB: u64 = 3072;
+/// Real perf and benchmark runs may use up to 6 GB (user, 11-14).
+const PERF_HEAP_MB: u64 = 6144;
+const FULL_PACK_MODS: usize = 150;
+/// The basic tier's light settings (testprofile.py LEAN): fast graphics, minimal particles, no clouds or shadows.
+const LEAN_OPTIONS: &[(&str, &str)] = &[("graphicsMode", "0"), ("particles", "2"), ("renderClouds", "\"false\""),
+    ("entityShadows", "false"), ("biomeBlendRadius", "0"), ("ao", "false"), ("entityDistanceScaling", "0.5")];
+
+/// Today as YYYY-MM-DD on the user's clock.
+fn today_ymd() -> String {
+    #[repr(C)]
+    #[derive(Default)]
+    struct SystemTime { y: u16, mo: u16, dow: u16, d: u16, h: u16, mi: u16, s: u16, ms: u16 }
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetLocalTime(t: *mut SystemTime); }
+    let mut t = SystemTime::default();
+    unsafe { GetLocalTime(&mut t) };
+    format!("{:04}-{:02}-{:02}", t.y, t.mo, t.d)
+}
+
+/// The Underling's exception for this copy in C:/mcw/state/test-exceptions.json ({heap_gb, full, rd, until}), if current.
+fn test_exception(dir: &Path) -> Option<Value> {
+    let all: Value = serde_json::from_str(&std::fs::read_to_string(r"C:\mcw\state\test-exceptions.json").ok()?).ok()?;
+    let norm = |p: &str| p.trim_start_matches(r"\\?\").replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let want = norm(&dir.to_string_lossy());
+    let today = today_ymd();
+    all.as_object()?.iter()
+        .find(|(k, v)| norm(k) == want && v["until"].as_str().is_none_or(|u| u >= today.as_str()))
+        .map(|(_, v)| v.clone())
 }
 
 fn get_option(path: &Path, key: &str) -> Option<String> {
@@ -1777,6 +1892,9 @@ fn set_for_run(options: &Path, set: &[(String, String)]) -> Vec<(String, Option<
 }
 
 /// This run's options ("options": {"renderDistance": 12, ...}), set for the run and put back after it.
+/// Render distance for visual runs when neither the chat nor the copy sets one (KB #187/#191).
+const VISUAL_RD: u64 = 12;
+
 fn run_options(args: &Value) -> Result<Vec<(String, String)>, String> {
     let Some(map) = args.get("options").filter(|v| !v.is_null()) else { return Ok(vec![]) };
     let map = map.as_object().ok_or("\"options\" must be an object of options.txt keys, e.g. {\"renderDistance\": 12}")?;
@@ -1955,7 +2073,7 @@ fn crosspc_args(args: &Value) -> Value {
                 { "at": 90, "command": "tp @a -512 140 -512 135 20" }
             ]
         },
-        "options": { "enableVsync": false, "maxFps": 260, "renderDistance": 6, "simulationDistance": 6 },
+        "options": { "enableVsync": false, "maxFps": 260, "renderDistance": 6, "simulationDistance": 5 },
         // Lightning records from 35 s in the world for 150 s (all four legs of the route), then quits the game.
         "jvm": ["-Dlightning.capture=gpu,render,ticks,cpu,alloc,gc,threads", "-Dlightning.crosspc=true", "-Dlightning.autoStart=15,100,quit"],
     });
@@ -1978,7 +2096,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let dir = test_copy(&name)?;
     prism::dupes::check_before_launch(&dir)?;
     let owner = label(need(args, "owner")?, "owner")?;
-    let purpose = label(need(args, "purpose")?, "purpose")?;
+    let purpose = plain_purpose(&label(need(args, "purpose")?, "purpose")?)?;
     let eta = num(args, "eta", 5, 1, 30)?;
     let timeout = num(args, "timeout", MAX_TIMEOUT, 60, MAX_TIMEOUT)?;
     // Always in the background (user, 2026-10-24): "park": false is no longer honoured.
@@ -2136,7 +2254,16 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // The pack's own Java and JVM settings (its profile in Prism), unless the run asks for a bench Java.
     let profile = copy_source(&name);
     match args.get("java").filter(|v| !v.is_null()) {
-        None => if let Some(p) = profile.java.as_ref() { java = p.clone() },
+        None => {
+            if let Some(p) = profile.java.as_ref() { java = p.clone() }
+            // A mod built for a newer Java than the pack's dies at startup with no log line naming it; run it on
+            // the bench's Java 25 instead (C2ME OpenCL in odyssey-test, 2026-11-18).
+            let need = prism::java::mods_need_java(&dir.join("mods"));
+            if need > 21 && prism::java::at(Path::new(&java)).map_or(21, |j| j.major) < need {
+                if need > 25 { return Err(format!("a mod in {name} needs Java {need}; the bench has Java 21 and 25")) }
+                java = jdk25()?;
+            }
+        }
         Some(_) => match num(args, "java", 21, 21, 25)? {
             21 => {}
             25 => java = jdk25()?,
@@ -2187,13 +2314,62 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     for (i, a) in diag_flags(args)?.into_iter().enumerate() { cmd.insert(i, a) }
     let gc_used = gc.map(|f| f.join(" "));
+    // Lean tests (user, KB #171): at most 3 GB of heap and no full pack, unless the Underling cleared this copy in
+    // test-exceptions.json; the full-pack release gate keeps its 6 GB. Applies to every run, perf ones too.
+    let exc = test_exception(&dir)
+        .or_else(|| extra.iter().any(|a| a == "-Dmcw.fullgate=1").then(|| json!({"heap_gb": 6, "full": true})));
+    let mods = std::fs::read_dir(dir.join("mods")).into_iter().flatten().flatten()
+        .filter(|e| e.file_name().to_string_lossy().to_lowercase().ends_with(".jar")).count();
+    if mods > FULL_PACK_MODS && exc.as_ref().is_none_or(|e| e["full"].as_bool() != Some(true)) {
+        return Err(format!("copy {name} is a full pack ({mods} mods): test in a small pack with only the mods the test needs (copy_pack), or ask the Underling to clear this copy in C:/mcw/state/test-exceptions.json (KB #171)"));
+    }
+    let heap_cap = exc.as_ref().and_then(|e| e["heap_gb"].as_f64()).filter(|g| *g >= 1.0).map_or(if perf_run { PERF_HEAP_MB } else { LEAN_HEAP_MB }, |g| (g * 1024.0) as u64);
+    let asked = |a: &str| extra.iter().any(|x| x == a) || gc_used.as_deref().is_some_and(|g| g.split(' ').any(|x| x == a));
+    if let Some(a) = cmd.iter().find(|a| heap_flag(a).is_some_and(|(k, v)| k == "-Xmx" && v.is_none_or(|m| m > heap_cap)) && asked(a)) {
+        return Err(format!("{a}: test heaps go up to {heap_cap}m (KB #171); the Underling can clear a bigger one for this copy in C:/mcw/state/test-exceptions.json"));
+    }
+    // The profile's own heap (a pack's 6 GB) comes down to the cap for tests; no -Xmx at all would mean a quarter of RAM.
+    cmd.retain(|a| !heap_flag(a).is_some_and(|(k, v)| (k == "-Xmx" || k == "-Xms") && v.is_none_or(|m| m > heap_cap)));
+    if !cmd.iter().any(|a| heap_flag(a).is_some_and(|(k, _)| k == "-Xmx")) { cmd.insert(0, format!("-Xmx{heap_cap}m")) }
+    // The flags sized against the old heap must fit under the new one, or the JVM refuses to start
+    // ("SoftMaxHeapSize must be <= max heap"): -Xms above -Xmx goes, SoftMaxHeapSize comes down to 85% of it.
+    let mx = cmd.iter().filter_map(|a| heap_flag(a).filter(|(k, _)| *k == "-Xmx").and_then(|(_, v)| v)).last().unwrap_or(heap_cap);
+    cmd.retain(|a| !heap_flag(a).is_some_and(|(k, v)| k == "-Xms" && v.is_none_or(|m| m > mx)));
+    let soft = |a: &str| a.strip_prefix("-XX:SoftMaxHeapSize=").map(|v| heap_flag(&format!("-Xmx{v}")).and_then(|(_, m)| m));
+    if cmd.iter().any(|a| soft(a).is_some_and(|m| m.is_none_or(|m| m > mx))) {
+        cmd.retain(|a| soft(a).is_none());
+        cmd.insert(0, format!("-XX:SoftMaxHeapSize={}m", mx * 85 / 100));
+    }
     let mut set = run_options(args)?;
+    // Every run that isn't a measurement runs lean: 30 fps (60 for visual checks), simulation 5, and for plain tests
+    // render distance 2, fast graphics, minimal particles, no clouds or shadows. They win over the chat's own options.
+    // Visual checks keep a real view (KB #187/#191): the chat's renderDistance, else the exception's, else 12. The copy's
+    // options.txt is not used: test rules rewrite it (e.g. 6) every launch, so it is no view the user chose.
+    if !measured {
+        let visual = args.get("visual").and_then(Value::as_bool).unwrap_or(false);
+        let exc_rd = exc.as_ref().and_then(|e| e["rd"].as_u64());
+        let rd = if visual {
+            let chat = set.iter().find(|(k, _)| k == "renderDistance").and_then(|(_, v)| v.parse::<u64>().ok());
+            chat.or(exc_rd).unwrap_or(VISUAL_RD)
+        } else { exc_rd.unwrap_or(2) }.to_string();
+        let mut lean: Vec<(String, String)> = vec![("maxFps".into(), (if visual { VISUAL_FPS } else { TEST_FPS }).into()),
+            ("enableVsync".into(), "false".into()), ("renderDistance".into(), rd), ("simulationDistance".into(), "5".into())];
+        if !visual { lean.extend(LEAN_OPTIONS.iter().map(|(k, v)| (k.to_string(), v.to_string()))) }
+        set.retain(|(k, _)| !lean.iter().any(|(l, _)| l == k));
+        set.extend(lean);
+    } else {
+        // Measurements too keep simulation distance at the game's minimum, 5 (user, 11-14).
+        set.retain(|(k, _)| k != "simulationDistance");
+        set.push(("simulationDistance".into(), "5".into()));
+    }
     // A chat's own options can't lift the hot-room frame cap (an Armory gate ran at 260 fps, 350 W); undone after the run.
     if hot {
-        set.retain(|(k, _)| k != "maxFps");
-        set.push(("maxFps".into(), TEST_FPS.into()));
+        for (k, v) in set.iter_mut() {
+            if k == "maxFps" && v.parse::<u32>().is_ok_and(|f| f > 60) { *v = VISUAL_FPS.into() }
+        }
+        if !set.iter().any(|(k, _)| k == "maxFps") { set.push(("maxFps".into(), VISUAL_FPS.into())) }
     }
-    let lock = format!("{owner} - {purpose} (obelisk)");
+    let lock = format!("{owner} - {purpose}");
     let id = new_job(jobs, "launch", &name, &lock, dir.join("logs").join("latest.log").to_string_lossy().into_owned());
     let jobs = jobs.clone();
     // A comparison (perf, a GC A/B, or "ab": before/after) needs the bench to itself: it queues until the user is
@@ -2209,9 +2385,9 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // (Overseer blind test, run 616: check runs were left at 260 fps).
     let fps_run = measured;
     std::thread::spawn(move || run_game(jobs, id, dir, lock, eta, timeout, world_cap, render, perf, exclusive, measured_shared, stop_if_playing, java, cmd, swap, new_world, hooks, gc_used, set, !crosspc, build_world, fps_run));
-    let lock_note = if exclusive { format!("comparison run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose} (obelisk)\"") }
-        else if measured_shared { format!("measured run: shares the PC with at most one other game, as \"{owner} - {purpose} (obelisk)\"") }
-        else { format!("waiting for the bench lock as \"{owner} - {purpose} (obelisk)\"") };
+    let lock_note = if exclusive { format!("comparison run: queued until the user is away (benchlock.py away), as \"{owner} - {purpose}\"") }
+        else if measured_shared { format!("measured run: shares the PC with at most one other game, as \"{owner} - {purpose}\"") }
+        else { format!("waiting for the bench lock as \"{owner} - {purpose}\"") };
     Ok(json!({ "job": id, "state": "queued", "lock": lock_note, "gc": reply_gc,
         "limit": match world_cap {
             Some(c) => format!("CAP: {c} s in the world (killed {QUIT_GRACE} s later if still there), {timeout} s in all, then \"{OVERTIME}\"; split longer work into several runs"),
@@ -2224,18 +2400,31 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
 fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout: u64, world_cap: Option<u64>, render: bool, perf: bool, exclusive: bool, measured: bool, stop_if_playing: bool, java: String, cmd: Vec<String>,
     mut swap: ModSwap, new_world: bool, mut hooks: Vec<Hook>, gc_used: Option<String>, set: Vec<(String, String)>, pc_overrides: bool,
     build_world: Option<(Value, u64)>, fps_run: bool) {
+    // Every test window says it's a test in the taskbar (user, 11-19: a bare "Minecraft" looked like their own game).
+    let title = format!("TEST - {lock}");
     let me = std::process::id().to_string();
     let copy = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let eta_s = eta.to_string();
     let mut acquire = vec!["acquire", &lock, "--pid", &me, "--wait", "--eta", &eta_s];
     if !exclusive { acquire.extend(["--shared", "--copy", &copy]); }
     if measured { acquire.push("--measured"); }
-    let child = bench(&acquire).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let child = bench(&acquire).stdout(Stdio::piped()).stderr(Stdio::null()).spawn();
     let Ok(mut child) = child else {
         update(&jobs, id, |j| { j.state = "failed".into(); j.detail = "couldn't run benchlock.py".into(); j.ended = Some(now()); });
         return;
     };
     update(&jobs, id, |j| j.helper_pid = Some(child.id()));
+    // Keep benchlock's last line: if it gives up, its reason goes into the job instead of a bare "didn't get the lock".
+    let last_line = std::sync::Arc::new(Mutex::new(String::new()));
+    if let Some(out) = child.stdout.take() {
+        let last = last_line.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for l in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+                if !l.trim().is_empty() { *last.lock().unwrap() = l.trim().to_string() }
+            }
+        });
+    }
     // While queued, say who holds the lock and until when, so a wait shows why it's slow.
     let got = loop {
         if let Ok(Some(s)) = child.try_wait() { break s.code() == Some(0); }
@@ -2270,16 +2459,25 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             }
             _ => None,
         };
+        // Its place in line (Overseer 11-16: say "queued #n", don't look like a failure).
+        let place = bench(&["queue"]).output().ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok())
+            .and_then(|q| q["waiting"].as_array().and_then(|w| w.iter().position(|w| w["owner"].as_str() == Some(lock.as_str()))));
+        // The Overseer's or the user's global pause holds every run, whatever the queue says: name it.
+        let paused = std::fs::read_to_string(tb().root.join("BENCH.paused")).ok()
+            .map(|p| format!("waiting for the bench lock: the bench is paused ({}); runs go once it's resumed", p.trim()));
+        let d = paused.or(d);
+        let d = d.map(|d| match place { Some(n) => format!("queued #{}: {d}", n + 1), None => d });
         if let Some(d) = d { update(&jobs, id, |j| if j.detail != KILLED { j.detail = d }); }
         std::thread::sleep(Duration::from_secs(15));
     };
-    update(&jobs, id, |j| if j.detail.starts_with("waiting for the bench lock") || j.detail.starts_with("waiting: the user is playing") { j.detail.clear() });
+    update(&jobs, id, |j| if j.detail.starts_with("queued #") || j.detail.starts_with("waiting for the bench lock") || j.detail.starts_with("waiting: the user is playing") { j.detail.clear() });
     update(&jobs, id, |j| j.helper_pid = None);
     if !got {
         // The ticket names Obelisk's own pid, which stays alive, so benchlock.py never reaps it: a killed or failed
         // wait would hold its place in the queue for good (and a perf ticket keeps every shared run waiting).
         drop_tickets(&lock);
-        finish(&jobs, id, "failed", "didn't get the bench lock".into());
+        let why = last_line.lock().unwrap().clone();
+        finish(&jobs, id, "failed", if why.is_empty() { "didn't get the bench lock".into() } else { format!("didn't get the bench lock: {why}") });
         return;
     }
     let saves_before = if new_world { save_names(&dir) } else { Default::default() };
@@ -2346,6 +2544,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
         let t0 = Instant::now();
         let mut parked = std::collections::HashSet::new();
         let mut prev_fg = foreground_window();
+        let mut titled: Option<Instant> = None; // when a game window last had the TEST title
         // Whether the user is in their own game: then a test window never keeps the focus (user, 11-10: keys stuck
         // mid-play when one grabbed it). Checked every 15 s while this run lasts.
         let user_game = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2393,6 +2592,7 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
             }
             let since = (prism::timeline::now_ms() - click_ms) as f64 / 1000.0;
             let mut kill_now = None;
+            if let Err(e) = keep_title(pid, &title, &mut titled, window_ms) { kill_now = Some(e) }
             for h in hooks.iter_mut().filter(|h| !h.fired) {
                 let Some(at) = watch.events.iter().find(|e| e["event"] == h.event.as_str()).and_then(|e| e["t"].as_f64()) else { continue };
                 if since < at + h.after { continue; }
@@ -2785,7 +2985,7 @@ fn copy_source(copy: &str) -> Profile {
 /// the pack is the instance whose folder name gives that slug (lowercase, every run of other characters one '-'),
 /// so its Java and JVM args are used, not the play pack's.
 fn gate_source(copy: &str) -> Option<Profile> {
-    let from = std::fs::read(tb().root.join(copy).join("gate-sync.json")).ok()
+    let from = std::fs::read(test_copy(copy).unwrap_or_else(|_| tb().root.join(copy)).join("gate-sync.json")).ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v["from"].as_str().map(PathBuf::from))
         .and_then(|m| m.parent().map(Path::to_path_buf))
@@ -2823,7 +3023,7 @@ const SWAP_JOURNAL: &str = "swap-journal.json";
 /// Runs cut off by an Obelisk restart left their swaps in place (mods set aside, added jars, edited configs): put
 /// them back in every copy no game is running in.
 fn recover_swaps() {
-    for e in std::fs::read_dir(&tb().root).into_iter().flatten().flatten() {
+    for e in copy_roots().into_iter().flat_map(|r| std::fs::read_dir(r).into_iter().flatten().flatten()) {
         let copy = e.path();
         let journal = copy.join(".obelisk").join(SWAP_JOURNAL);
         let Ok(bytes) = std::fs::read(&journal) else { continue };
@@ -3021,6 +3221,28 @@ const FOCUS_GUARD: Duration = Duration::from_secs(180);
 /// hand it to each other forever.
 static TEST_PIDS: std::sync::LazyLock<Mutex<std::collections::HashSet<u32>>> = std::sync::LazyLock::new(Default::default);
 
+/// Gives each game window of `pid` the TEST title, again whenever the game writes its own (world join, screens): called
+/// every pass of the run's watch loop, so it stops with the run. WM_SETTEXT only: never raises or focuses the window.
+/// A window that has been up 15 s without ever taking the title ends the run (Overseer, 11-19: refuse, don't guess).
+fn keep_title(pid: u32, title: &str, titled: &mut Option<Instant>, window_ms: Option<i64>) -> Result<(), String> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetWindowTextW(h: isize, s: *const u16) -> i32;
+    }
+    let wide: Vec<u16> = title.encode_utf16().chain([0]).collect();
+    let mut any = false;
+    for (h, p, vis, class, t) in super::top_windows() {
+        if p != pid || !vis || !(class.starts_with("GLFW") || class == "LWJGL") { continue }
+        any = true;
+        if t == title || unsafe { SetWindowTextW(h, wide.as_ptr()) } != 0 { *titled = Some(Instant::now()) }
+    }
+    let up_ms = window_ms.map(|w| prism::timeline::now_ms().saturating_sub(w));
+    if any && titled.is_none() && up_ms.is_some_and(|ms| ms > 15_000) {
+        return Err(format!("couldn't set the window title \"{title}\": stopped so it can't pass for the user's own game"));
+    }
+    Ok(())
+}
+
 /// `prev`: the user's last window that isn't this test's, kept current. `guard`: early in the run or the user is in
 /// their own game, so a test window in front is never the user opening it: it goes back down and they get theirs back.
 fn park_windows(pid: u32, parked: &mut std::collections::HashSet<isize>, render: bool, size: Option<(u32, u32)>, prev: &mut isize, guard: bool,
@@ -3181,12 +3403,26 @@ fn copy_pack(args: &Value, jobs: &Shared) -> Result<Value, String> {
     if NOT_COPIES.contains(&to_name.to_ascii_lowercase().as_str()) {
         return Err(format!("{to_name} is reserved"));
     }
-    let to = tb().root.as_path().join(&to_name);
+    let to = new_copy_root().join(&to_name);
     // Only into a new or empty folder, so nobody's copy is ever overwritten.
-    if to.exists() && std::fs::read_dir(&to).map(|mut d| d.next().is_some()).unwrap_or(true) {
+    let taken = |d: PathBuf| d.exists() && std::fs::read_dir(&d).map(|mut d| d.next().is_some()).unwrap_or(true);
+    if copy_roots().into_iter().any(|r| taken(r.join(&to_name))) {
         return Err(format!("{to_name} already exists in the test bench; pick a new name"));
     }
-    let saves = args.get("saves").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Play saves are never copied whole (user, 2026-11-15: 20 GB worlds in 50+ copies filled C:). Tests get a small
+    // fresh world (launch with new_world=<seed>); one named save comes along only when asked for with world=<name>.
+    if args.get("saves").is_some() {
+        return Err("saves is gone: copies never take every save. Pass world=<save name> to bring one save, or launch with new_world=<seed> for a small fresh test world".into());
+    }
+    let world = match s(args, "world") {
+        Some(w) => {
+            plain_name(w, "world").map_err(|_| "world must be a plain save folder name".to_string())?;
+            if !from.join("saves").join(w).is_dir() { return Err(format!("no save called {w} in {}", need(args, "from")?)) }
+            Some(w.to_string())
+        }
+        None => None,
+    };
+    std::fs::create_dir_all(new_copy_root()).map_err(|e| format!("can't make {}: {e}", new_copy_root().display()))?;
     let owner = label(s(args, "owner").unwrap_or("unknown"), "owner")?;
     let id = new_job(jobs, "copy-pack", &to_name, &owner, to.to_string_lossy().into_owned());
     let jobs = jobs.clone();
@@ -3194,10 +3430,16 @@ fn copy_pack(args: &Value, jobs: &Shared) -> Result<Value, String> {
         update(&jobs, id, |j| j.state = "running".into());
         let mut c = Command::new("robocopy");
         c.arg(&from).arg(&to).args(["/E", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NP", "/XJ", "/XD"])
-            .args(COPY_SKIP_DIRS.iter().filter(|d| saves || **d != "saves")).arg("mods-removed*")
+            .args(COPY_SKIP_DIRS).arg("mods-removed*")
             .args(["/XF", "*.log", "session.lock", ".stignore", "gate-sync.json"])
             .creation_flags_no_window().stdout(Stdio::null()).stderr(Stdio::null());
-        let code = c.status().ok().and_then(|s| s.code()).unwrap_or(16);
+        let mut code = c.status().ok().and_then(|s| s.code()).unwrap_or(16);
+        if let (true, Some(w)) = (code < 8, &world) {
+            let mut c = Command::new("robocopy");
+            c.arg(from.join("saves").join(w)).arg(to.join("saves").join(w)).args(["/E", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NP", "/XJ"])
+                .args(["/XF", "session.lock"]).creation_flags_no_window().stdout(Stdio::null()).stderr(Stdio::null());
+            code = c.status().ok().and_then(|s| s.code()).unwrap_or(16);
+        }
         // robocopy: below 8 means success.
         let (state, detail) = if code < 8 { ("done", format!("copied to {}", to.display())) } else { ("failed", format!("robocopy exit {code}")) };
         if code < 8 {

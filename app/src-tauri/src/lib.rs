@@ -2,6 +2,7 @@
 use obelisk_core as prism;
 mod bridge;
 mod cleanup;
+mod cfgsync;
 mod control;
 mod cfaccount;
 mod cflegacy;
@@ -731,7 +732,16 @@ async fn pack_export_zip(app: tauri::AppHandle, instance_id: String) -> Result<S
 #[tauri::command]
 async fn share_publish(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String, label: String) -> Result<bool, String> {
     let game = game(&instance_id)?;
-    Ok(share_net(&app, &net).await?.publish(&game, &label)?.is_some())
+    let sent = share_net(&app, &net).await?.publish(&game, &label)?.is_some();
+    if sent { poke_later(app.clone(), (*net).clone(), game); }
+    Ok(sent)
+}
+
+/// After sending a change, tell the pack's friends to pull it now instead of on their next minute's pull.
+fn poke_later(app: tauri::AppHandle, cell: ShareNet, game: PathBuf) {
+    tauri::async_runtime::spawn(async move {
+        if let Ok(n) = share_net(&app, &cell).await { n.poke(&game).await; }
+    });
 }
 
 #[derive(serde::Serialize)]
@@ -746,7 +756,8 @@ struct Synced { received: usize, waiting: Vec<Waiting> }
 /// changes not applied yet (arrived now or earlier, e.g. by the background sync), and whether it applies them itself.
 #[tauri::command]
 async fn share_sync(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>) -> Result<Synced, String> {
-    let received = share_net(&app, &net).await?.sync_all().await.into_iter().map(|(_, n)| n).sum();
+    let running = running_games().await;
+    let received = share_net(&app, &net).await?.sync_all(&running).await.into_iter().map(|(_, n)| n).sum();
     let waiting = blocking(|| Ok(prism::share::all(&prism::instances_dir(&prism::data_dir())).into_iter()
         .map(|(id, game, s)| Waiting { instance_id: id, changes: prism::share::incoming(&game).len(), auto_apply: s.auto_apply })
         .filter(|w| w.changes > 0).collect())).await?;
@@ -754,9 +765,10 @@ async fn share_sync(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>) -> R
 }
 
 #[tauri::command]
-async fn share_apply(app: tauri::AppHandle, instance_id: String, ids: Vec<String>) -> Result<prism::share::Applied, String> {
+async fn share_apply(app: tauri::AppHandle, net: tauri::State<'_, ShareNet>, instance_id: String, ids: Vec<String>) -> Result<prism::share::Applied, String> {
     let game = game(&instance_id)?;
-    let r = blocking(move || prism::share::apply(&game, &ids)).await?;
+    let me = share_net(&app, &net).await?.id();
+    let r = blocking(move || prism::share::apply_by(&game, &ids, &me)).await?;
     if !r.blocked.is_empty() { announce_held(&app, &instance_id); }
     Ok(r)
 }
@@ -792,6 +804,12 @@ fn report_error(message: String, context: String) {
 #[tauri::command]
 async fn releases_call(command: String, args: serde_json::Value) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || releases::from_ui(&command, &args)).await.map_err(|e| e.to_string())?
+}
+
+/// Settings shared between the play packs (cfgsync.rs): status, approve / reject a change made with the game closed.
+#[tauri::command]
+async fn config_sync(args: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || cfgsync::call(&args)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1610,6 +1628,23 @@ async fn prism_installed() -> bool {
     prism::launcher_exe().is_file()
 }
 
+/// First run without Prism: fetch Prism's newest release and unpack it per-user (where its own installer puts it).
+/// Progress goes out as "prism-progress" events ({done, total} in bytes).
+#[tauri::command]
+async fn prism_download(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+        let dest = prism::launcher_exe().parent().ok_or("bad folder")?.to_path_buf();
+        let mut last = 0;
+        prism::prismget::install(&dest, |done, total| {
+            if done - last >= 1 << 20 || done == total {
+                last = done;
+                let _ = app.emit("prism-progress", serde_json::json!({ "done": done, "total": total }));
+            }
+        })
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Hand a modpack (URL or local .zip/.mrpack) to Prism's importer.
 #[tauri::command]
 async fn import_pack(source: String) -> Result<(), String> {
@@ -2316,7 +2351,10 @@ pub fn run() {
                                     Some(now) if settling.get(id) == Some(&now) => {
                                         settling.remove(id);
                                         match n.publish(game, "Sent automatically") {
-                                            Ok(Some(_)) => { let _ = handle.emit("share-changed", id); }
+                                            Ok(Some(_)) => {
+                                                let _ = handle.emit("share-changed", id);
+                                                poke_later(handle.clone(), net.clone(), game.clone());
+                                            }
                                             Ok(None) => {}
                                             Err(e) => eprintln!("auto-send {id}: {e}"),
                                         }
@@ -2325,7 +2363,7 @@ pub fn run() {
                                     None => { settling.remove(id); }
                                 }
                             }
-                            let synced = n.sync_all().await;
+                            let synced = n.sync_all(&running).await;
                             let got: usize = synced.iter().map(|(_, c)| c).sum();
                             if got > 0 {
                                 let _ = handle.emit("share-incoming", got);
@@ -2334,11 +2372,18 @@ pub fn run() {
                             for (id, _) in synced.iter().filter(|(_, c)| *c > 0) { announce_held(&handle, id); }
                         }
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    // A friend who just sent something pokes us: pull right away instead of waiting out the minute.
+                    let poked = match share_net(&handle, &net).await { Ok(n) => Some(n.poked.clone()), Err(_) => None };
+                    match poked {
+                        Some(p) => { tokio::select! { _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}, _ = p.notified() => {} } }
+                        None => tokio::time::sleep(std::time::Duration::from_secs(60)).await,
+                    }
                 }
             });
             // Empty expired items out of every profile's trash.
             let handle = app.handle().clone();
+            // Keep the play packs' settings in step (KB #189).
+            cfgsync::start();
             // Read every profile's mod jars once in the background, so opening a profile lists them instantly.
             std::thread::spawn(|| {
                 let data = prism::data_dir();
@@ -2381,11 +2426,11 @@ pub fn run() {
             sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, cues::cue_preview, sfx::ui_sfx, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch, needed_by,
-            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism, prism_installed,
+            mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism, prism_installed, prism_download,
             detect_launchers, sync_sources, sync_profile, profile_options, set_profile_options, java_installs, java_at, java_download, duplicate_mods, ignore_duplicates, instances_dir_get, instances_dir_set, clone_instance,
             delete_instance, prism_defaults, set_prism_defaults, prism_running, system_memory_mb, get_settings, get_favorites, set_favorites,
             set_settings, set_cf_key, has_cf_key, mr_dependencies, cf_relations, cross_site, mr_token_set, mr_account, mr_follows, mr_follow, mr_notifications, mr_notifications_read, cfaccount::cf_account, cfaccount::cf_signin, cfaccount::cf_signout, cfaccount::cf_comments, cfaccount::cf_comment_post, cfaccount::cf_favorites, cfaccount::cf_favorite, cfaccount::cf_notifications, cfaccount::cf_notifications_read, list_accounts, switch_account, logout_account,
-            check_updates, apply_update, await_download, cf_download_window, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, game_ids, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, pc_overrides_get, pc_overrides_set, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
+            check_updates, apply_update, await_download, cf_download_window, cf_search, list_trash, restore_trash, remove_trash, crash_reports, diagnose_crash, read_report, lightning_runs, load_times, open_game_file, get_pins, set_pins, mod_configs, game_ids, read_config, write_config, config_default, restore_config_default, orphan_configs, clean_configs, mod_sides, build_packs, reveal_pack, pack_trash, restore_pack, remove_pack, backups, create_checkpoint, auto_backup, change_backup, safety_backup, restore_backup, revert_change, share_status, share_overview, share_start, share_publish, share_sync, share_apply, share_apply_file, share_skip, share_set_auto, share_set_auto_send, releases_call, config_sync, report_error, share_stop, share_remove, share_info, share_set_wishes, share_history, share_dismiss_ended, share_join, share_allow_held, held_list, held_keep, share_trace, pc_overrides_get, pc_overrides_set, collab_code, pack_code_start, pack_code_status, pack_code_stop, pack_code_preview, pack_code_cancel, pack_code_import, pack_export_zip, running_games, kill_game, cancel_launch, window_mode, set_window_mode, set_window_mode_all, window_mode_common, reveal_file, cf_project, cf_id_by_slug, cf_author, cf_files, cf_changelog, cf_install, cf_featured
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

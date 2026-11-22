@@ -475,6 +475,10 @@ pub struct Applied {
     pub conflicts: Vec<String>,
     /// Friends' files Obelisk blocked (see held).
     pub blocked: Vec<String>,
+    /// On the owner's PC: files a member changed that the owner had changed too. The owner's version stays and
+    /// goes out to everyone (user, 11-22: the owner's copy wins, never the other way round).
+    #[serde(default)]
+    pub kept: Vec<String>,
 }
 
 /// Apply friends' changesets (all incoming ones when `ids` is empty). Takes a safety backup first.
@@ -485,7 +489,35 @@ pub fn apply(game: &Path, ids: &[String]) -> Result<Applied, String> {
     }
     // Files a later change replaces aren't needed (nor written): judged against everything incoming.
     let skip = superseded(&incoming(game));
-    apply_sets(game, todo, skip, true)
+    apply_sets(game, todo, skip, true, None)
+}
+
+/// `apply` on a PC that knows its own id (`me`): on the owner's PC, the owner's version of a file both changed stays.
+pub fn apply_by(game: &Path, ids: &[String], me: &str) -> Result<Applied, String> {
+    let todo: Vec<Changeset> = incoming(game).into_iter().filter(|c| ids.is_empty() || ids.contains(&c.id)).collect();
+    if todo.is_empty() {
+        return Ok(Applied::default());
+    }
+    let is_owner = get(game).is_some_and(|s| owner(game, &s) == me);
+    apply_sets(game, todo, superseded(&incoming(game)), true, is_owner.then_some(me))
+}
+
+/// The background sync: what's arrived is applied by itself, oldest first, as far as its files are here. Members
+/// always follow the pack (a collab stays in step without anyone pressing Apply, user 11-22); the owner's PC applies
+/// by itself only with "apply automatically" on, and keeps its own version of any file both changed.
+pub fn apply_auto(game: &Path, me: &str) -> Result<Applied, String> {
+    let Some(s) = get(game) else { return Ok(Applied::default()) };
+    let is_owner = owner(game, &s) == me;
+    if is_owner && !s.auto_apply {
+        return Ok(Applied::default());
+    }
+    let all = incoming(game);
+    let skip = superseded(&all);
+    let ready: Vec<Changeset> = all.into_iter().take_while(|c| needed_blobs(game, c, &skip).is_empty()).collect();
+    if ready.is_empty() {
+        return Ok(Applied::default());
+    }
+    apply_sets(game, ready, skip, true, is_owner.then_some(me))
 }
 
 /// Apply one file of an incoming change and leave the rest of it waiting (the change stays incoming, so the
@@ -496,7 +528,7 @@ pub fn apply_file(game: &Path, id: &str, path: &str) -> Result<Applied, String> 
     if cs.entries.is_empty() {
         return Err(format!("that change doesn't include {path}"));
     }
-    apply_sets(game, vec![cs], HashSet::new(), false)
+    apply_sets(game, vec![cs], HashSet::new(), false, None)
 }
 
 /// The jars an incoming change brings, as they'd land: path, size, sha1, md5 and the mod id and version the jar
@@ -512,7 +544,8 @@ pub fn jar_details(game: &Path, cs: &Changeset) -> Vec<serde_json::Value> {
     }).collect()
 }
 
-fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>, whole: bool) -> Result<Applied, String> {
+/// `owner_wins`: this PC is the owner (its id): a member's change to a file the owner changed too isn't written.
+fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>, whole: bool, owner_wins: Option<&str>) -> Result<Applied, String> {
     if let Some(missing) = todo.iter().find(|c| !needed_blobs(game, c, &skip).is_empty()) {
         return Err(format!("Still downloading the files for {}'s changes. Try again in a moment.", missing.author_name));
     }
@@ -542,10 +575,20 @@ fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>
             let dest = history::real(game, &e.path).ok_or("invalid path")?;
             let mine = if dest.is_file() { history::hash_file(&dest).ok() } else { None };
             let shared = base.get(&e.path).map(|b| b.hash.clone());
+            let entry = e.hash.as_ref().map(|h| FileEntry { path: e.path.clone(), size: e.size, mtime_ms: 0, hash: h.clone() });
             if mine != shared && mine != e.hash && !was_held {
+                if owner_wins.is_some_and(|o| o != cs.author) {
+                    // The owner's file stays. Theirs becomes the shared version, so the owner's counts as a change
+                    // of the owner's and goes back out to everyone.
+                    out.kept.push(e.path.clone());
+                    match entry {
+                        Some(fe) => { base.insert(e.path.clone(), fe); }
+                        None => { base.remove(&e.path); }
+                    }
+                    continue;
+                }
                 out.conflicts.push(e.path.clone());
             }
-            let entry = e.hash.as_ref().map(|h| FileEntry { path: e.path.clone(), size: e.size, mtime_ms: 0, hash: h.clone() });
             history::put(game, &e.path, entry.as_ref())?;
             match entry {
                 Some(fe) => { base.insert(e.path.clone(), fe); }
@@ -578,6 +621,8 @@ fn apply_sets(game: &Path, todo: Vec<Changeset>, skip: HashSet<(String, String)>
     out.blocked.retain(|p| held.contains(p));
     out.conflicts.sort();
     out.conflicts.dedup();
+    out.kept.sort();
+    out.kept.dedup();
     save_state(game, &st)?;
     Ok(out)
 }
@@ -1064,6 +1109,90 @@ mod tests {
         assert_eq!(fs::read_to_string(a.join("mods/jei.jar")).unwrap(), "jei 2");
         assert_eq!(fs::read_to_string(a.join("config/create.toml")).unwrap(), "speed=5");
         assert_eq!(incoming(&a).len(), 1, "the rest of the change still waits");
+    }
+
+    /// User 11-22: a friend's copy fell behind because it waited for Apply. Members now follow the owner by
+    /// themselves (as far as files have arrived), and on the owner's PC the owner's version of a file both changed wins.
+    #[test]
+    fn members_follow_the_owner_and_the_owner_wins() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("A/minecraft");
+        fs::create_dir_all(a.join("mods")).unwrap();
+        fs::create_dir_all(a.join("config")).unwrap();
+        fs::write(a.join("mods/boundless-c360.jar"), "hotfix 360").unwrap();
+        fs::write(a.join("config/slabs.toml"), "stone=1").unwrap();
+        fs::write(d.path().join("A/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        let alex = me("aaaaaaaaaaaa", "Alex");
+        let sam = me("bbbbbbbbbbbb", "Sam");
+        let share = start(&a, "Pack", "p1", "s3cret", &alex).unwrap();
+        let instances = d.path().join("B-instances");
+        fs::create_dir_all(&instances).unwrap();
+        let (cfg, pj) = instance_files(&a, "Pack").unwrap();
+        let (_, b) = create_instance(&instances, &share, &cfg, &pj).unwrap();
+        let mut sb = get(&b).unwrap();
+        sb.auto_apply = false;
+        sb.members.push(sam.clone());
+        save(&b, &sb).unwrap();
+        let mut sa = get(&a).unwrap();
+        sa.members.push(sam.clone());
+        save(&a, &sa).unwrap();
+
+        // Sam's copy has "apply automatically" off and still takes the owner's baseline by itself.
+        transfer(&a, &b);
+        let r = apply_auto(&b, &sam.id).unwrap();
+        assert!(r.conflicts.is_empty() && r.kept.is_empty());
+        assert_eq!(fs::read_to_string(b.join("mods/boundless-c360.jar")).unwrap(), "hotfix 360");
+        assert!(incoming(&b).is_empty());
+
+        // Owner swaps the experimental jar twice; the second one's file hasn't arrived yet.
+        fs::remove_file(a.join("mods/boundless-c360.jar")).unwrap();
+        fs::write(a.join("mods/boundless-c367.jar"), "hotfix 367").unwrap();
+        publish(&a, &alex, "367").unwrap().unwrap();
+        fs::write(a.join("config/slabs.toml"), "stone=2").unwrap();
+        let late = publish(&a, &alex, "slabs").unwrap().unwrap();
+        transfer(&a, &b);
+        for h in late.entries.iter().filter_map(|e| e.hash.clone()) {
+            if let Some(p) = blob_path(&b, &h) { fs::remove_file(p).unwrap(); }
+        }
+        apply_auto(&b, &sam.id).unwrap();
+        assert!(b.join("mods/boundless-c367.jar").is_file() && !b.join("mods/boundless-c360.jar").exists(),
+            "the change whose files are here applies even though a later one is still downloading");
+        assert_eq!(incoming(&b).len(), 1, "the later one waits for its file");
+        assert_eq!(fs::read_to_string(b.join("config/slabs.toml")).unwrap(), "stone=1");
+        assert!(apply(&b, &[]).is_err(), "Apply still says it's downloading");
+        let h = late.entries[0].hash.clone().unwrap();
+        store_blob(&b, &h, &fs::read(blob_path(&a, &h).unwrap()).unwrap()).unwrap();
+        apply_auto(&b, &sam.id).unwrap();
+        assert_eq!(fs::read_to_string(b.join("config/slabs.toml")).unwrap(), "stone=2");
+
+        // The owner's PC: Alex and Sam both change the config. Without auto-apply nothing happens by itself.
+        fs::write(a.join("config/slabs.toml"), "stone=alex").unwrap();
+        fs::write(b.join("config/slabs.toml"), "stone=sam").unwrap();
+        fs::write(b.join("config/other.toml"), "sam's new file").unwrap();
+        publish(&b, &sam, "").unwrap().unwrap();
+        transfer(&b, &a);
+        assert!(apply_auto(&a, &alex.id).unwrap().kept.is_empty());
+        assert_eq!(incoming(&a).len(), 1);
+        let r = apply_by(&a, &[], &alex.id).unwrap();
+        assert_eq!(r.kept, vec!["config/slabs.toml".to_string()]);
+        assert_eq!(fs::read_to_string(a.join("config/slabs.toml")).unwrap(), "stone=alex", "the owner's version stays");
+        assert_eq!(fs::read_to_string(a.join("config/other.toml")).unwrap(), "sam's new file", "the rest of Sam's change lands");
+        let ch = local_changes(&a).unwrap();
+        assert!(ch.iter().any(|e| e.path == "config/slabs.toml"), "the owner's version goes back out: {ch:?}");
+        // ...and Sam's copy follows it.
+        publish(&a, &alex, "").unwrap().unwrap();
+        transfer(&a, &b);
+        apply_auto(&b, &sam.id).unwrap();
+        assert_eq!(fs::read_to_string(b.join("config/slabs.toml")).unwrap(), "stone=alex");
+
+        // A member's PC never keeps its own version over the owner's.
+        fs::write(b.join("config/slabs.toml"), "stone=sam2").unwrap();
+        fs::write(a.join("config/slabs.toml"), "stone=alex2").unwrap();
+        publish(&a, &alex, "").unwrap().unwrap();
+        transfer(&a, &b);
+        let r = apply_auto(&b, &sam.id).unwrap();
+        assert!(r.kept.is_empty());
+        assert_eq!(fs::read_to_string(b.join("config/slabs.toml")).unwrap(), "stone=alex2");
     }
 
     #[test]

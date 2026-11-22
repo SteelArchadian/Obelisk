@@ -93,6 +93,9 @@ enum Req {
     Joined,
     /// The owner's options.txt, once, for a member's copy that has none of its own yet (share::seed_options).
     Options,
+    /// "I just sent a change, pull now" (instead of waiting for the next minute's pull). Older Obelisk answers
+    /// "bad request", which is skipped.
+    Poke,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -118,6 +121,8 @@ pub struct Net {
     instances: PathBuf,
     name: Arc<Mutex<String>>,
     offers: Offers,
+    /// Woken when a member pokes us (Req::Poke): the app's sync loop pulls right away.
+    pub poked: Arc<tokio::sync::Notify>,
 }
 
 /// A pack offered under a code, until `expires` (unix seconds).
@@ -246,10 +251,11 @@ impl Net {
     pub async fn start(key: [u8; 32], instances: PathBuf, name: String) -> Result<Net, String> {
         let endpoint = Endpoint::builder(presets::N0).secret_key(SecretKey::from_bytes(&key)).bind().await.map_err(|e| e.to_string())?;
         let name = Arc::new(Mutex::new(name));
-        let handler = Handler { instances: instances.clone(), name: name.clone(), me: endpoint.id(), joining: Default::default() };
+        let poked: Arc<tokio::sync::Notify> = Default::default();
+        let handler = Handler { instances: instances.clone(), name: name.clone(), me: endpoint.id(), joining: Default::default(), poked: poked.clone() };
         let offers: Offers = Default::default();
         let router = Router::builder(endpoint.clone()).accept(ALPN, handler).accept(ALPN_PACK, PackHandler { offers: offers.clone() }).spawn();
-        Ok(Net { endpoint, _router: router, instances, name, offers })
+        Ok(Net { endpoint, _router: router, instances, name, offers, poked })
     }
 
     pub fn id(&self) -> String {
@@ -290,6 +296,25 @@ impl Net {
 
     pub fn publish(&self, game: &Path, label: &str) -> Result<Option<Changeset>, String> {
         share::publish(game, &self.me(), label)
+    }
+
+    /// Tell every other member of this pack to pull now (after sending a change). Offline ones are skipped.
+    pub async fn poke(&self, game: &Path) -> usize {
+        let Some(s) = share::get(game) else { return 0 };
+        let mut told = 0;
+        for m in s.members.iter().filter(|m| m.id != self.id()) {
+            let Ok(id) = m.id.parse::<EndpointId>() else { continue };
+            let go = async {
+                let (sess, _, _) = self.connect(&s, EndpointAddr::from(id)).await?;
+                let r = sess.call(&Req::Poke).await;
+                sess.conn.close(0u32.into(), b"done");
+                r
+            };
+            if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(30), go).await {
+                told += 1;
+            }
+        }
+        told
     }
 
     /// The owner removes someone (signed with this PC's key) and moves the pack to a new secret.
@@ -408,12 +433,14 @@ impl Net {
         Ok(got)
     }
 
-    /// Pull from every other member of every shared pack. Quietly skips anyone offline.
-    pub async fn sync_all(&self) -> Vec<(String, usize)> {
-        QUIET.scope(true, self.sync_each()).await
+    /// Pull from every other member of every shared pack. Quietly skips anyone offline. What arrived (now or
+    /// earlier) is applied by itself (share::apply_auto), except in packs whose game is running (`running`,
+    /// instance ids): their files may be in use, so they're applied once the game is closed.
+    pub async fn sync_all(&self, running: &[String]) -> Vec<(String, usize)> {
+        QUIET.scope(true, self.sync_each(running)).await
     }
 
-    async fn sync_each(&self) -> Vec<(String, usize)> {
+    async fn sync_each(&self, running: &[String]) -> Vec<(String, usize)> {
         let mut out = Vec::new();
         for (inst, game, s) in share::all(&self.instances) {
             let mut total = 0;
@@ -423,8 +450,10 @@ impl Net {
                     total += n;
                 }
             }
-            if total > 0 && share::get(&game).is_some_and(|s| s.auto_apply) {
-                let _ = share::apply(&game, &[]);
+            if !running.contains(&inst) {
+                if let Err(e) = share::apply_auto(&game, &self.id()) {
+                    trace(format!("applying in {inst}: {e}"));
+                }
             }
             out.push((inst, total));
         }
@@ -974,6 +1003,7 @@ struct Handler {
     me: EndpointId,
     /// People who connected without being members yet (joining), and since when.
     joining: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    poked: Arc<tokio::sync::Notify>,
 }
 
 /// Someone who keeps syncing this long after they started joining has the pack, even if their Obelisk is too old to
@@ -1087,6 +1117,14 @@ impl Handler {
                 }
                 let text = std::fs::read_to_string(game.join("options.txt")).unwrap_or_default();
                 (ok(serde_json::Value::String(text)), vec![])
+            }
+            Req::Poke => {
+                let Some(s) = share::get(game) else { return (err("not shared"), vec![]) };
+                if !s.members.iter().any(|m| m.id == peer.to_string()) {
+                    return (err("not a member"), vec![]);
+                }
+                self.poked.notify_one();
+                (ok(serde_json::Value::Bool(true)), vec![])
             }
             Req::Joined => {
                 self.joining.lock().unwrap().remove(&peer.to_string());
@@ -1315,30 +1353,30 @@ name=Pack
             "the host lists people once their join worked");
 
         x.set_wishes(&gx, vec![serde_json::json!({ "hit": { "project_id": "AANobbMI" } })]).unwrap();
-        o.sync_all().await;
+        o.sync_all(&[]).await;
         assert_eq!(share::wishes(&game).get(&x.id()).map(|w| w.name.as_str()), Some("Xan"), "wish lists travel");
         std::fs::write(game.join("options.txt"), "renderDistance:6
 ").unwrap();
         std::fs::write(gm.join("options.txt"), "renderDistance:2
 ").unwrap();
-        m.sync_all().await;
+        m.sync_all(&[]).await;
         assert_eq!(std::fs::read_to_string(gm.join("options.txt")).unwrap(), "renderDistance:6
 ", "a member takes the owner's settings");
         assert_eq!(std::fs::read_to_string(gm.join("options.txt.obelisk-pre-seed")).unwrap(), "renderDistance:2
 ");
         std::fs::write(gm.join("options.txt"), "renderDistance:4
 ").unwrap();
-        m.sync_all().await;
+        m.sync_all(&[]).await;
         assert_eq!(std::fs::read_to_string(gm.join("options.txt")).unwrap(), "renderDistance:4
 ", "only once");
 
         o.remove(&game, &x.id()).unwrap();
         assert!(m.remove(&gm, &o.id()).is_err(), "only the owner removes people");
-        m.sync_all().await;
+        m.sync_all(&[]).await;
         let sm = share::get(&gm).unwrap();
         assert_eq!(sm.secret, share::get(&game).unwrap().secret, "the member moved to the new secret");
         assert!(!sm.members.iter().any(|mm| mm.id == x.id()));
-        x.sync_all().await;
+        x.sync_all(&[]).await;
         assert!(share::get(&gx).is_none(), "the removed one stops collaborating");
         assert_eq!(share::ended(&gx).unwrap().by_name, "Olive");
         // Their old invite no longer lets anyone in under a new id.
@@ -1350,9 +1388,9 @@ name=Pack
         let (again, _) = o.offer_invite(&game, "Pack").await.unwrap();
         let gx2 = inst("x").join(x.join(&again).await.expect("invited back after a removal")).join("minecraft");
         assert!(!share::is_removed(&share::get(&game).unwrap(), &x.id()));
-        m.sync_all().await;
-        x.sync_all().await;
-        o.sync_all().await;
+        m.sync_all(&[]).await;
+        x.sync_all(&[]).await;
+        o.sync_all(&[]).await;
         assert!(share::get(&gx2).is_some(), "still collaborating after syncing with everyone");
         assert!(!share::is_removed(&share::get(&game).unwrap(), &x.id()), "a member's old removal didn't come back");
     }

@@ -35,8 +35,10 @@ Steps, in order, as granular as you need:
   it; no AI and no knockback by default, so it stays in frame.
 - {punch: {times: 5, every: 1.0, shots: [0.5, 0.75, 1.75], label: "z"}}: real player punches (swing, attack,
   cooldown); screenshots at those offsets after each punch. Each reports what was hit and its health.
-- {shot: "label"}: a screenshot now. Shots land in <copy>/screenshots/obt-<run>-<label>.png; the same labels in
-  two runs give comparable pictures.
+- {shot: "label"}: a screenshot now, HUD and hand hidden (F1); {shot: {name: "label", hud: true}} keeps the HUD.
+  Shots land in <copy>/screenshots/obt-<run>-<label>.png; the same labels in two runs give comparable pictures.
+  Shots are first person unless a camera step chose another view. Visual runs (scenes, shots, punches, records) use
+  render distance 12; pass options {renderDistance: N} to size it to the job (nearby 6-10, far 10-18). Plain tests: 2.
 - {record: {seconds: 10, label: "x"}} (max 30): watches every frame and reports what you would otherwise have to stare
   at: flicker (spots that change for one frame and snap back), sudden colour or brightness jumps, stutters, and how
   often each part of the screen really updates (an animation stepping at 12/s while the game draws 60). Frames

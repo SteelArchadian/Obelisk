@@ -12,7 +12,9 @@
   import Diagnosis from "./Diagnosis.svelte";
   import Icon from "./Icon.svelte";
   import { app, openBrowseTyping, pushOverlay, toast, toastError } from "./state.svelte";
-  import { openProjectById, refreshInstalled, setTarget } from "./install";
+  import { nameKey, openProjectById, refreshInstalled, setTarget } from "./install";
+  import { cfToHit } from "./cf";
+  import { openLink } from "./account.svelte";
   import { manualDownload } from "./cf";
   import { checkDupes, dupeState, flagged, ignoreDupes } from "./dupes.svelte";
   import CollabBadge from "./CollabBadge.svelte";
@@ -139,6 +141,25 @@
   let filterCount = $derived(filters.authors.length + filters.sources.length + filters.envs.length + filters.status.length + (filters.noLibs ? 1 : 0));
   let sub = $state<Sub>("mods");
   let query = $state("");
+  /** Mods packed inside this one (none on trash rows): shown grayed under it. */
+  const bundledOf = (i: Item) => (i.trashId ? [] : i.bundled ?? []);
+  /** Open a bundled mod's own Modrinth/CurseForge page (found by name or mod id), else its homepage, to look it over. */
+  async function openBundled(b: NonNullable<Item["bundled"]>[number], parent: Item) {
+    const key = nameKey(b.name);
+    const same = (h: { title: string; slug: string }) => nameKey(h.title) === key || (!!b.id && h.slug === b.id);
+    try {
+      const [mrr, cfr] = await Promise.all([
+        api.search({ query: b.name, projectType: "mod", loaders: [], gameVersions: [], categories: [], sort: "relevance", offset: 0, limit: 10 }).catch(() => null),
+        api.cfSearch({ query: b.name, projectType: "mod", loader: "", gameVersion: "", sort: "", offset: 0, limit: 10 }).catch(() => null),
+      ]);
+      const hit = mrr?.hits.find(same) ?? (cfr?.data ?? []).map(cfToHit).find(same);
+      if (hit) return pushOverlay({ kind: "project", hit });
+      if (b.url) return openLink(b.url);
+      // No page of its own (often it ships only inside this mod): the parent's page is where it is described.
+      toast(`${b.name} has no page of its own, so here is ${parent.name}, which carries it`);
+      openItem(parent);
+    } catch (e) { toastError(e); }
+  }
   let sortKey = $state<SortKey>("name");
   let sortAsc = $state(true);
   let selected = $state<Set<string>>(new Set());
@@ -178,7 +199,7 @@
           enabled: true, projectId: "", installedMs: t.deletedMs, modifiedMs: t.deletedMs, trashId: t.id,
         }))
       : content[kind];
-    if (q) list = list.filter((i) => `${i.name} ${i.fileName} ${i.authors}`.toLowerCase().includes(q));
+    if (q) list = list.filter((i) => `${i.name} ${i.fileName} ${i.authors} ${(i.bundled ?? []).map((b) => b.name).join(" ")}`.toLowerCase().includes(q));
     if (filterCount) list = list.filter(passes);
     const dir = sortAsc ? 1 : -1;
     return [...list].sort((a, b) => {
@@ -980,6 +1001,13 @@
                   aria-label="Toggle {item.name}" onclick={() => setEnabled(item, !item.enabled)}><i></i></button>{/if}
               </span>{/if}
             </div>
+            {#each bundledOf(item) as b (b.name)}
+              {@const hit = !!query.trim() && b.name.toLowerCase().includes(query.trim().toLowerCase())}
+              <div class="nested" class:hit role="row" title="Packed inside {item.name}: it comes and goes with it">
+                <span></span>
+                <div class="nname"><span class="elbow" aria-hidden="true"></span><span class="ntag">Bundled</span><button class="nlink" title="Open {b.name}'s page to look it over" onclick={() => openBundled(b, item)}>{b.name}</button>{#if b.version}<small>{b.version}</small>{/if}</div>
+              </div>
+            {/each}
           {:else}
             <div class="empty small">{query ? "Nothing matches your search." : viewTrash ? `Nothing deleted here in the last ${trashLabel(settings.trashHours)}.` : "Nothing here yet."}</div>
           {/each}
@@ -1110,6 +1138,14 @@
   .row:hover { background: var(--panel-2); }
   .row.picked { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
   .row.off .text, .row.off .thumb { opacity: 0.45; }
+  /* Mods packed inside the row above: thin, gray, nothing to click (user, 11-14). */
+  .nested { display: grid; grid-template-columns: var(--cols); gap: 14px; align-items: center; padding: 0 16px; height: 30px; border-bottom: 1px solid var(--row-line); color: var(--muted); font-size: 12px; user-select: none; }
+  .nested .nname { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 18px; white-space: nowrap; overflow: hidden; }
+  .nested .elbow { width: 12px; height: 10px; border-left: 1px solid var(--muted); border-bottom: 1px solid var(--muted); opacity: .6; margin-top: -8px; flex: none; }
+  .nested .ntag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; border: 1px solid var(--muted); border-radius: 4px; padding: 0 5px; opacity: .8; }
+  .nested .nlink { all: unset; cursor: pointer; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .nested .nlink:hover, .nested .nlink:focus-visible { color: var(--accent); text-decoration: underline; }
+  .nested.hit .nlink { color: var(--text); }
   .name { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .thumb { width: 36px; height: 36px; flex: none; border-radius: 6px; background: var(--panel-2); display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--muted); object-fit: cover; }
   .thumb:global(.px) { image-rendering: pixelated; }

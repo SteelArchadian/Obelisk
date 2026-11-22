@@ -24,7 +24,7 @@ pub(crate) fn tools() -> Value {
         t("guide", "Read first: everything Obelisk can do for you (simulations, tests, screenshots, bisect, profiling, mod management) and its rules.", obj(json!({}), &[])),
         t("copies", "Test copies and whether a game runs in each.", obj(json!({}), &[])),
         t("launch", "Launch a test copy (waits for the bench lock; perf/fps runs queue until the user is away and end \"invalid\" when they return; muted, off-screen, test harness). HARD CAPS: hold <=120 s; a non-perf run is killed 120 s after reaching the world (375 s in all); a perf run 600 s in all; larger timeout/eta are clamped. Split longer work into several runs. Returns a job: use wait; end with kill when no save is needed.",
-            obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
+            obj(json!({ "copy": copy, "owner": st(), "purpose": { "type": "string", "description": "The user's widget line: what the test checks in plain words, under 50 chars, no tags/ids/paths, e.g. \"checking portal view after fill fix\"" },
                 "preset": { "type": "string", "enum": ["crosspc"], "description": "Fixed cross-PC profiling run (perf)" },
                 "eta": { "type": "integer", "description": "Minutes" },
                 "world": { "type": "string", "description": "Save to open, or new:<seed>" },
@@ -43,6 +43,7 @@ pub(crate) fn tools() -> Value {
                 "gc": { "type": "array", "items": { "type": "string" }, "description": "One -XX:+Use...GC plus tuning (ClassUnloading* too), and optionally -Xms/-Xmx up to 6144m; replaces the profile's" },
                 "diag": { "type": "array", "items": { "type": "string" }, "description": "Read-only JVM diagnostics: -XX:+UnlockDiagnosticVMOptions, -XX:+SafepointTimeout, -XX:SafepointTimeoutDelay=<ms>, -XX:HandshakeTimeout=<ms>, -Xlog:safepoint*=info,handshake*=info:file=<relative path, lands in the copy>" },
                 "perf": { "type": "boolean", "description": "Bench to itself; only when the user asked" },
+                "visual": { "type": "boolean", "description": "A check of what is on screen: 60 fps and the copy's own graphics (else plain tests run lean at 30 fps, fast graphics, render distance 2)" },
                 "shaders": { "type": "boolean", "description": "Keep shaders on (off by default: light test profile)" },
                 "boundless": { "type": "boolean", "description": "Keep Boundless far terrain on (off by default)" },
                 "ab": { "type": "boolean", "description": "A before/after or A/B comparison: bench to itself (else a measured run shares the PC with one other game)" } }), &["copy", "owner", "purpose"])),
@@ -50,7 +51,11 @@ pub(crate) fn tools() -> Value {
             obj(json!({ "owner": st(), "jar": st(), "replace": { "type": "string", "description": "Glob of the jar(s) it replaces" },
                 "mods": st(), "cycles": int(), "hold": int(), "sync": { "type": "boolean" }, "tag": st(), "loader_version": st() }), &["owner"])),
         t("play_wait", "Wait until the user's own game is closed (timeout default 50 s); returns closed true/false.", obj(json!({ "timeout": int() }), &[])),
-        t("status", "Obelisk jobs and their state.", obj(job(), &[])),
+        t("status", "Active Obelisk jobs in full, plus the last 10 finished ones in short (job=<id> for one in full, all=true for every job).", {
+            let mut s = obj(job(), &[]);
+            s["properties"]["all"] = json!({ "type": "boolean" });
+            s
+        }),
         t("wait", "Wait for a job to finish or reach a stage (until: window, modsLoaded, titleScreen, inWorld, terrainReady, leaveStart, quit, pressure0..3). timeout default 50, max 600. Samples: C:/mcw/obelisk-runs/<copy>/<job>.samples.jsonl.",
             obj(json!({ "job": { "type": "integer" }, "timeout": int(), "until": st() }), &["job"])),
         t("kill", "Fast quit a job's game, no save.", obj(job(), &["job"])),
@@ -68,12 +73,12 @@ pub(crate) fn tools() -> Value {
         t("diagnose", "Explain a crash report or log (default latest.log): cause, mods at fault, errors by mod.", obj(json!({ "copy": copy, "file": st() }), &["copy"])),
         t("log", "Read a log, grep (substring) and tail.", obj(json!({ "copy": copy, "file": st(), "grep": st(), "tail": int() }), &["copy"])),
         t("game_test", "Whole test in one call: launch, wait for the world, run steps, quit normally; returns stages, per-phase profile, step results, log summary, Lightning. preset basic: visit 4 structures. stress: tests [chests, mobs, hop, flyover]. dyno: Block Dyno's own plan (mode, default quick). scene: 64x64 flat grass, frozen midnight with night vision (bright, undead never burn), no weather or spawns, creative, steps start once drawn; script it with steps (summon, punch, shot). Same limits as launch; stress/dyno measure <=120 s, queue until the user is away (then run in the background) and end \"invalid\" when they return. background=true: follow with game.",
-            obj(json!({ "copy": copy, "owner": st(), "purpose": st(),
+            obj(json!({ "copy": copy, "owner": st(), "purpose": { "type": "string", "description": "The user's widget line: what the test checks in plain words, under 50 chars, no tags/ids/paths, e.g. \"checking portal view after fill fix\"" },
                 "preset": { "type": "string", "enum": ["basic", "stress", "dyno", "scene"] }, "mode": st(), "tests": strs(),
                 "steps": { "type": "array", "items": { "type": "object" }, "description": "Extra steps (see game)" },
                 "background": { "type": "boolean" }, "scenario_timeout": int(),
                 "test_world": { "type": "object" }, "world": st(), "new_world": st(), "java": int(), "jvm": strs(), "diag": strs(), "options": { "type": "object" },
-                "config": { "type": "array", "items": { "type": "object" } }, "add_mods": strs(), "disable_mods": strs(), "perf": { "type": "boolean" }, "ab": { "type": "boolean" },
+                "config": { "type": "array", "items": { "type": "object" } }, "add_mods": strs(), "disable_mods": strs(), "perf": { "type": "boolean" }, "visual": { "type": "boolean" }, "ab": { "type": "boolean" },
                 "shaders": { "type": "boolean", "description": "Keep shaders on (off by default)" }, "boundless": { "type": "boolean", "description": "Keep Boundless far terrain on (off by default)" } }), &["copy", "owner", "purpose"])),
         t("bisect", "Thanos: find the mod causing a behaviour by halving. start {copy, run: game_test args (owner, purpose, preset, steps), keep: [file prefixes never disabled], suspects?: [files]}: each round runs the scenario with half the suspects off (mods others require stay on) in the background; check game_result and its shots, then answer {present: true|false} or {failed: true}. Also retry, status, stop. ~log2(mods) rounds.",
             obj(json!({ "copy": copy, "action": { "type": "string", "enum": ["start", "answer", "retry", "status", "stop"] }, "run": { "type": "object" },
@@ -96,8 +101,10 @@ pub(crate) fn tools() -> Value {
             obj(json!({ "mod": st(), "version": st(), "reason": { "type": "string", "enum": ["user-played", "proven-in-td"] } }), &["mod", "version", "reason"])),
         t("release_pack", "For one pack: rollback (put back the replaced jar), retry (queue a failed rollout again), optout or optin (automatic releases).",
             obj(json!({ "action": { "type": "string", "enum": ["rollback", "retry", "optout", "optin"] }, "mod": st(), "pack": st(), "reason": st() }), &["action", "pack"])),
-        t("copy_pack", "New test copy from a copy or \"play\" (no saves unless saves=true).",
-            obj(json!({ "from": copy, "to": st(), "saves": { "type": "boolean" }, "owner": st() }), &["from", "to"])),
+        t("config_sync", "Settings sync between Odyssey, Test Dummy and Foundation (options.txt per key). The user's own in-game edits spread on their own; edits made with the pack's game closed (yours) wait as pending until approved. action: status (default; pending, recent log), approve or reject (id or all=true), sync (look now).",
+            obj(json!({ "action": { "type": "string", "enum": ["status", "approve", "reject", "sync"] }, "id": int(), "all": { "type": "boolean" } }), &[])),
+        t("copy_pack", "New test copy (in D:/Modding/Claude) from a copy or \"play\". Never copies saves: launch it with new_world=<seed> for a small fresh test world, or pass world=<save name> to bring that one save.",
+            obj(json!({ "from": copy, "to": st(), "world": st(), "owner": st() }), &["from", "to"])),
     ])
 }
 
@@ -124,16 +131,36 @@ fn route(name: &str, mut args: Value) -> Result<(String, Value), String> {
     })
 }
 
-/// One request to the running Obelisk. Err = it isn't running or refused.
+/// How long one request may take before the helper gives up on it (Overseer 11-18: with no limit, a connection the
+/// app never answered, e.g. across a restart, hung the helper for good and every later call in that session with it).
+/// wait/play-wait: their own timeout plus a margin; quick reads 30 s; everything else (game_test, launch, copies,
+/// mod installs) 25 min, under the assistant's own 30 min tool limit.
+fn deadline(cmd: &str, args: &Value) -> std::time::Duration {
+    let secs = match cmd {
+        "wait" | "play-wait" => args.get("timeout").and_then(Value::as_u64).unwrap_or(600).min(3600) + 30,
+        "ping" | "mcp-tools" | "status" | "guide" | "busy" => 30,
+        _ => 1500,
+    };
+    std::time::Duration::from_secs(secs)
+}
+
+/// One request to the running Obelisk. Err = it isn't running, refused, or didn't answer in time.
 fn call(cmd: &str, args: &Value) -> Result<Value, String> {
+    call_within(cmd, args, deadline(cmd, args))
+}
+
+fn call_within(cmd: &str, args: &Value, limit: std::time::Duration) -> Result<Value, String> {
+    let until = std::time::Instant::now() + limit;
     let home = std::env::var("USERPROFILE").map_err(|e| e.to_string())?;
     let info: Value = std::fs::read(std::path::Path::new(&home).join(".obelisk").join("control.json")).ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or("Obelisk isn't running. Ask the user to open Obelisk from the Start menu.")?;
     let port = info["port"].as_u64().ok_or("bad control.json")?;
     let token = info["token"].as_str().ok_or("bad control.json")?;
-    let mut s = std::net::TcpStream::connect(("127.0.0.1", port as u16))
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port as u16));
+    let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5))
         .map_err(|_| "Obelisk isn't running. Ask the user to open Obelisk from the Start menu.".to_string())?;
+    s.set_write_timeout(Some(std::time::Duration::from_secs(10))).map_err(|e| e.to_string())?;
     let body = args.to_string();
     write!(s, "POST /v1/{cmd} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
         .map_err(|e| e.to_string())?;
@@ -149,9 +176,14 @@ fn call(cmd: &str, args: &Value) -> Result<Value, String> {
     };
     loop {
         if need(&raw).is_some_and(|n| raw.len() >= n) { break }
+        let late = || format!("Obelisk didn't answer {cmd} within {} s (it may have restarted). Check status, or run the same tool from a shell: obelisk-mcp.exe --call {cmd} <json>.", limit.as_secs());
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() { return Err(late()) }
+        s.set_read_timeout(Some(left)).map_err(|e| e.to_string())?;
         match s.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => return Err(late()),
             Err(e) => return Err(e.to_string()),
         }
     }
@@ -182,52 +214,94 @@ pub fn call_cli(args: Vec<String>) -> i32 {
         Some(Ok(v)) => v,
         Some(Err(e)) => { eprintln!("args aren't JSON: {e}"); return 2; }
     };
+    // The same names as the MCP tools (game, mod_set, release_pack are merged tools; underscores or dashes).
+    let (tool, a) = match route(&tool.replace('_', "-"), a) {
+        Ok(r) => r,
+        Err(e) => { eprintln!("{tool}: {e}"); return 2; }
+    };
+    let tool = &tool;
     match call(tool, &a) {
         Ok(v) => { println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()); 0 }
         Err(e) => { eprintln!("{tool}: {e}"); 1 }
     }
 }
 
+const INSTRUCTIONS: &str = "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management). If these tools ever stop answering (Obelisk was updated or reinstalled), run the same tool from a shell: \"<this exe> --call <tool> <json args>\" (path in your MCP config), then reconnect.";
+
+/// Answers one tools/call: the merged tool routed to the control API's own command, the answer as MCP content.
+fn tool_call(msg: &Value) -> Value {
+    let name = msg.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("").replace('_', "-");
+    let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+    let (name, mut args) = match route(&name, args) {
+        Ok(r) => r,
+        Err(e) => return json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
+    };
+    if (name == "wait" || name == "play-wait") && args.get("timeout").is_none() {
+        args["timeout"] = json!(50);
+    }
+    match call(&name, &args) {
+        Ok(v) if name == "guide" => json!({ "content": [{ "type": "text", "text": v["guide"].as_str().unwrap_or_default() }] }),
+        Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
+        Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
+    }
+}
+
+fn send(out: &std::sync::Mutex<std::io::Stdout>, v: &Value) -> bool {
+    let mut o = out.lock().unwrap_or_else(|p| p.into_inner());
+    writeln!(o, "{v}").and_then(|_| o.flush()).is_ok()
+}
+
 pub fn serve() {
+    use std::sync::{Arc, Mutex};
     let stdin = std::io::stdin();
-    let mut out = std::io::stdout();
+    let out = Arc::new(Mutex::new(std::io::stdout()));
     // The Obelisk version whose tools the assistant has; after a call, a different one means Obelisk updated meanwhile,
     // and the assistant is told to fetch the list again (tools/list_changed).
-    let mut listed: Option<String> = None;
+    let listed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // Requests the assistant gave up on (notifications/cancelled, e.g. its own tool time limit): late answers dropped.
+    let cancelled: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
-        let Some(id) = msg.get("id").cloned() else { continue }; // notifications need no answer
-        let method = msg["method"].as_str().unwrap_or("");
-        let result = match method {
+        let method = msg["method"].as_str().unwrap_or("").to_string();
+        let Some(id) = msg.get("id").cloned() else {
+            if method == "notifications/cancelled" {
+                if let Some(r) = msg.pointer("/params/requestId") { cancelled.lock().unwrap_or_else(|p| p.into_inner()).insert(r.to_string()); }
+            }
+            continue; // notifications need no answer
+        };
+        // Each tool call on its own thread (Overseer 11-18): one long or stuck call (a 10 min wait, a game_test) used
+        // to hold up every later call of that session, status included, until the assistant's own 30 min limit.
+        if method == "tools/call" {
+            let (out, listed, cancelled) = (out.clone(), listed.clone(), cancelled.clone());
+            std::thread::spawn(move || {
+                let result = tool_call(&msg);
+                if cancelled.lock().unwrap_or_else(|p| p.into_inner()).remove(&id.to_string()) { return }
+                if !send(&out, &json!({ "jsonrpc": "2.0", "id": id, "result": result })) { return }
+                // Also when the list came from this helper because Obelisk wasn't running at connect time (listed is
+                // None): otherwise that session would keep the helper's own, possibly older, list until it reconnects.
+                let now = call("ping", &json!({})).ok().and_then(|v| v["version"].as_str().map(String::from));
+                let mut l = listed.lock().unwrap_or_else(|p| p.into_inner());
+                if now.is_some() && now != *l {
+                    *l = now;
+                    drop(l);
+                    send(&out, &json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }));
+                }
+            });
+            continue;
+        }
+        let result = match method.as_str() {
             "initialize" => Ok(json!({
                 "protocolVersion": msg.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18")),
                 "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "obelisk", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management). If these tools ever stop answering (Obelisk was updated or reinstalled), run the same tool from a shell: \"<this exe> --call <tool> <json args>\" (path in your MCP config), then reconnect."
+                "instructions": INSTRUCTIONS,
             })),
             "ping" => Ok(json!({})),
             "tools/list" => {
                 let (list, version) = live_tools();
-                listed = version;
+                *listed.lock().unwrap_or_else(|p| p.into_inner()) = version;
                 Ok(json!({ "tools": list }))
-            }
-            "tools/call" => {
-                let name = msg.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("").replace('_', "-");
-                let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
-                let (name, mut args) = match route(&name, args) {
-                    Ok(r) => r,
-                    Err(e) => { let r = json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": e }], "isError": true } });
-                        if writeln!(out, "{r}").and_then(|_| out.flush()).is_err() { break } continue }
-                };
-                if (name == "wait" || name == "play-wait") && args.get("timeout").is_none() {
-                    args["timeout"] = json!(50);
-                }
-                Ok(match call(&name, &args) {
-                    Ok(v) if name == "guide" => json!({ "content": [{ "type": "text", "text": v["guide"].as_str().unwrap_or_default() }] }),
-                    Ok(v) => json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }] }),
-                    Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
-                })
             }
             _ => Err(json!({ "code": -32601, "message": format!("unknown method {method}") })),
         };
@@ -235,19 +309,7 @@ pub fn serve() {
             Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
             Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": e }),
         };
-        if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
-            break;
-        }
-        // Also when the list came from this helper because Obelisk wasn't running at connect time (listed is None):
-        // otherwise that session would keep the helper's own, possibly older, list until it reconnects.
-        if method == "tools/call" {
-            let now = call("ping", &json!({})).ok().and_then(|v| v["version"].as_str().map(String::from));
-            if now.is_some() && now != listed {
-                listed = now;
-                let note = json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" });
-                if writeln!(out, "{note}").and_then(|_| out.flush()).is_err() { break; }
-            }
-        }
+        if !send(&out, &reply) { break }
     }
 }
 
@@ -263,7 +325,16 @@ pub fn ai_hookup_line() -> Result<String, String> {
 /// Register `obelisk.exe --mcp` with the assistant (Settings → Plugins → Connect). Writes the assistant's
 /// own config file directly: the Claude desktop app has no `claude` command on PATH.
 #[tauri::command]
-pub async fn ai_connect(assistant: String) -> Result<String, String> {
+pub async fn ai_connect(app: tauri::AppHandle, assistant: String) -> Result<String, String> {
+    let out = ai_connect_inner(assistant);
+    // The control server starts only once an assistant is connected: start it now rather than on the next launch.
+    if out.is_ok() {
+        super::control::start(app);
+    }
+    out
+}
+
+fn ai_connect_inner(assistant: String) -> Result<String, String> {
     // The helper program next to obelisk.exe (so connected chats never hold the app itself open), or the app.
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     let helper = me.with_file_name("obelisk-mcp.exe");
@@ -328,6 +399,17 @@ fn add_server(path: &std::path::Path, entry: Value) -> Result<bool, String> {
 
 /// The Claude desktop app's config for its chats: %APPDATA%\Claude, and the Store version's own copy of that folder
 /// (it reads that one when it exists).
+/// True when an assistant has Obelisk in its config (Settings → Connect, or added by hand).
+pub(crate) fn ai_connected() -> bool {
+    let Ok(home) = std::env::var("USERPROFILE").map(std::path::PathBuf::from) else { return false };
+    let has_json = |p: &std::path::Path| {
+        std::fs::read(p).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).is_some_and(|c| c.pointer("/mcpServers/obelisk").is_some())
+    };
+    has_json(&home.join(".claude.json"))
+        || claude_desktop_configs().iter().any(|p| has_json(p))
+        || std::fs::read_to_string(home.join(".codex").join("config.toml")).is_ok_and(|t| t.contains("[mcp_servers.obelisk]"))
+}
+
 pub(crate) fn claude_desktop_configs() -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     if let Ok(roaming) = std::env::var("APPDATA") {

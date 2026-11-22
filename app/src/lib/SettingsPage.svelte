@@ -12,6 +12,7 @@
   import { settings, saveSettings, THEMES, applyTheme } from "./settings.svelte";
   import Resolution from "./Resolution.svelte";
   import SoundSettings from "./SoundSettings.svelte";
+  import PackSettingsSync from "./PackSettingsSync.svelte";
 
   // About → Check for updates: the same GitHub check Obelisk runs every 30 minutes, on demand.
   type SelfUpdate = { version: string; notes: string };
@@ -298,6 +299,7 @@
         {/each}
         <button class="ghost" onclick={addFolder}>+ Add an instances folder</button>
       </div>
+      <PackSettingsSync />
 
       <div class="sync-head">
         <h3>Profiles found ({sources.length})</h3>

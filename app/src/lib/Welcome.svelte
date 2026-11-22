@@ -54,6 +54,24 @@
     stop();
   }
 
+  let prismGet = $state("");
+  async function getPrism() {
+    const { listen } = await import("@tauri-apps/api/event");
+    prismGet = "Starting…";
+    const stop = await listen<{ done: number; total: number }>("prism-progress", (e) => {
+      prismGet = `Downloading… ${Math.round((100 * e.payload.done) / Math.max(1, e.payload.total))}%`;
+    });
+    try {
+      const ver = await invoke<string>("prism_download");
+      toast(`Prism ${ver} installed.`);
+    } catch (e) {
+      toast(`Couldn't get Prism: ${e}`);
+    }
+    prismGet = "";
+    stop();
+    await check();
+  }
+
   async function finish() {
     settings.welcomed = true;
     await saveSettings();
@@ -83,8 +101,8 @@
     <ul class="setup">
       <li class:ok={prism}>
         <span class="mark">{prism ? "✓" : "1"}</span>
-        <div><strong>Prism Launcher</strong><span>{prism ? "Installed. Obelisk starts your games through it." : "Obelisk starts your games through Prism. Install it with the default options, then come back."}</span></div>
-        {#if prism === false}<button class="primary small" onclick={() => openUrl("https://prismlauncher.org/download/windows/")}>Get Prism ↗</button>{/if}
+        <div><strong>Prism Launcher</strong><span>{prism ? "Installed. Obelisk starts your games through it." : "Obelisk starts your games through Prism. Obelisk can fetch it for you (about 40 MB)."}</span></div>
+        {#if prism === false}<button class="primary small" disabled={!!prismGet} onclick={getPrism}>{prismGet || "Get Prism"}</button>{/if}
       </li>
       <li class:ok={account}>
         <span class="mark">{account ? "✓" : "2"}</span>

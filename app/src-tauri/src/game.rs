@@ -310,15 +310,16 @@ impl Game<'_> {
             });
         }
         if let Some(v) = step.get("shot") {
-            return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"));
+            return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"), v["hud"].as_bool().unwrap_or(false));
         }
         Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch, shot, record or settle"))
     }
 
-    /// A screenshot named for this run and the label, so the same label can be compared across runs.
-    fn shot(&self, label: &str) -> Result<Value, String> {
+    /// A screenshot named for this run and the label, so the same label can be compared across runs. The HUD and hand
+    /// are hidden (F1) unless hud is true, so a shot shows the world, not the compass bar.
+    fn shot(&self, label: &str, hud: bool) -> Result<Value, String> {
         let label: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(40).collect();
-        self.ask(json!({ "op": "shot", "name": format!("obt-{}-{label}", self.started) }))
+        self.ask(json!({ "op": "shot", "name": format!("obt-{}-{label}", self.started), "hud": hud }))
     }
 
     /// A mob `distance` blocks in front of the player at its feet height, facing it; no AI by default (it stands still).
@@ -362,7 +363,7 @@ impl Game<'_> {
             match what {
                 None => hits.push(self.ask(json!({ "op": "attack" }))?),
                 Some((i, s)) => {
-                    let f = self.shot(&format!("{label}{}-{}ms", i + 1, (s * 1000.0).round()))?;
+                    let f = self.shot(&format!("{label}{}-{}ms", i + 1, (s * 1000.0).round()), false)?;
                     files.push(json!({ "punch": i + 1, "after": s, "file": f["file"], "late_ms": ((t0.elapsed().as_secs_f64() - at) * 1000.0).round() }));
                 }
             }

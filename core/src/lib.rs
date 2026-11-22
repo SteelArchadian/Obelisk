@@ -19,6 +19,7 @@ pub mod sides;
 pub mod window;
 pub mod history;
 pub mod java;
+pub mod prismget;
 pub mod timeline;
 pub mod tomlset;
 pub mod overrides;
@@ -235,6 +236,21 @@ pub struct ContentItem {
     pub installed_ms: u64,
     /// When the file was last changed.
     pub modified_ms: u64,
+    /// Mods packed inside this jar (jar-in-jar), shown under it; they go with it and can't be removed alone.
+    pub bundled: Vec<BundledMod>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BundledMod {
+    pub name: String,
+    pub version: String,
+    /// Its mod id, which is often its Modrinth slug: used to find its page.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// Its own homepage (mods.toml displayURL, fabric.mod.json contact.homepage), if it names one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
 }
 
 pub const KINDS: [&str; 3] = ["mods", "resourcepacks", "shaderpacks"];
@@ -272,6 +288,7 @@ pub fn list_content(game: &Path, kind: &str) -> Vec<ContentItem> {
                 project_id: meta.map(|m| m.project_id.clone()).unwrap_or_default(),
                 enabled,
                 file_name,
+                bundled: jar.bundled,
             })
         })
         .collect();
@@ -319,6 +336,9 @@ struct JarMeta {
     name: Option<String>,
     version: Option<String>,
     authors: Option<String>,
+    bundled: Vec<BundledMod>,
+    id: Option<String>,
+    url: Option<String>,
 }
 
 /// A jar's own version, from its mods.toml or fabric.mod.json.
@@ -341,10 +361,32 @@ fn cached_jar_meta(path: &Path) -> JarMeta {
     meta
 }
 
-/// Display name, version and authors from a NeoForge/Forge mods.toml or a fabric.mod.json.
+/// Display name, version and authors from a NeoForge/Forge mods.toml or a fabric.mod.json, plus the mods
+/// packed inside it (NeoForge/Forge META-INF/jarjar, Fabric "jars").
 fn read_jar_meta(path: &Path) -> JarMeta {
     let Ok(file) = fs::File::open(path) else { return JarMeta::default() };
     let Ok(mut zip) = zip::ZipArchive::new(file) else { return JarMeta::default() };
+    let mut meta = zip_meta(&mut zip);
+    let nested: Vec<String> = zip.file_names()
+        .filter(|n| n.ends_with(".jar") && (n.starts_with("META-INF/jarjar/") || n.starts_with("META-INF/jars/")))
+        .map(str::to_string).collect();
+    for n in nested {
+        let mut bytes = Vec::new();
+        let Ok(mut f) = zip.by_name(&n) else { continue };
+        if f.size() > 64 << 20 || f.read_to_end(&mut bytes).is_err() { continue }
+        drop(f);
+        let Ok(mut inner) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else { continue };
+        let m = zip_meta(&mut inner);
+        // Plain libraries carry no mod metadata: only real mods are listed.
+        let Some(name) = m.name.filter(|s| !s.trim().is_empty()) else { continue };
+        if meta.bundled.iter().any(|b| b.name == name) || meta.name.as_deref() == Some(name.as_str()) { continue }
+        meta.bundled.push(BundledMod { name, version: m.version.unwrap_or_default(), id: m.id.unwrap_or_default(), url: m.url.unwrap_or_default() });
+    }
+    meta.bundled.sort_by_key(|b| b.name.to_lowercase());
+    meta
+}
+
+fn zip_meta<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> JarMeta {
     let mut read = |name: &str| -> Option<String> {
         let mut s = String::new();
         zip.by_name(name).ok()?.read_to_string(&mut s).ok()?;
@@ -357,7 +399,9 @@ fn read_jar_meta(path: &Path) -> JarMeta {
             let s = |k: &str| m.get(k).and_then(|v| v.as_str()).map(str::to_string);
             let version = s("version").filter(|v| !v.contains("${"));
             let authors = s("authors").or_else(|| doc.get("authors").and_then(|v| v.as_str()).map(str::to_string));
-            return JarMeta { name: s("displayName"), version, authors };
+            let url = s("displayURL").or_else(|| doc.get("displayURL").and_then(|v| v.as_str()).map(str::to_string))
+                .filter(|u| u.starts_with("http"));
+            return JarMeta { name: s("displayName"), version, authors, bundled: vec![], id: s("modId"), url };
         }
     }
     if let Some(text) = read("fabric.mod.json") {
@@ -372,6 +416,9 @@ fn read_jar_meta(path: &Path) -> JarMeta {
                 name: v["name"].as_str().map(str::to_string),
                 version: v["version"].as_str().map(str::to_string),
                 authors,
+                bundled: vec![],
+                id: v["id"].as_str().map(str::to_string),
+                url: v["contact"]["homepage"].as_str().filter(|u| u.starts_with("http")).map(str::to_string),
             };
         }
     }
