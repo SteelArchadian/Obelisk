@@ -722,6 +722,22 @@ fn jvm_props(args: &Value) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// patch_module: one JDK class patch jar for test runs (Optimal's Resolver fix, 13.7 s -> 0.19 s module graph).
+/// Only jars in the speedloader jdkpatch folder; added as --patch-module=java.base=<jar> on Java 21 only.
+const PATCH_DIR: &str = r"C:\mcw\speedloader\jdkpatch";
+fn patch_module(args: &Value) -> Result<Option<String>, String> {
+    let Some(v) = args.get("patch_module").filter(|v| !v.is_null()) else { return Ok(None) };
+    let p = v.as_str().ok_or("patch_module must be a jar path")?;
+    let dir = std::fs::canonicalize(PATCH_DIR).map_err(|_| format!("{PATCH_DIR} is missing"))?;
+    let jar = std::fs::canonicalize(p).map_err(|_| format!("patch_module: {p} not found"))?;
+    if !jar.starts_with(&dir) || !jar.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar")) || !jar.is_file() {
+        return Err(format!("patch_module: only .jar files in {PATCH_DIR}"));
+    }
+    let s = jar.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+    if s.chars().any(|c| c.is_control() || c == '"' || c == ' ') { return Err("patch_module: path has spaces or quotes".into()) }
+    Ok(Some(s))
+}
+
 /// Is a game running in this instance? Any java whose command line points into it, as benchlock.py swapwait checks
 /// ("/<folder name>" then /, quote, space or the end), so a game Prism started (natives, gameDir) counts too.
 fn game_running_in(dir: &Path) -> bool {
@@ -2101,6 +2117,7 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     let timeout = num(args, "timeout", MAX_TIMEOUT, 60, MAX_TIMEOUT)?;
     // Always in the background (user, 2026-10-24): "park": false is no longer honoured.
     let mut extra = jvm_props(args)?;
+    let patch = patch_module(args)?;
     // camera {pitch, yaw}: the harness holds the player's view there, for aimed screenshots.
     if let Some(cam) = args.get("camera") {
         let deg = |k: &str, lo: f64, hi: f64| -> Result<Option<f64>, String> {
@@ -2270,7 +2287,12 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
             _ => return Err("java must be 21 or 25".into()),
         },
     }
+    if patch.is_some() {
+        let major = prism::java::at(Path::new(&java)).map(|j| j.major);
+        if major != Some(21) { return Err(format!("patch_module is for Java 21 only; this run uses Java {}", major.map_or("?".into(), |m| m.to_string()))) }
+    }
     profile.apply(&mut cmd);
+    if let Some(jar) = &patch { cmd.insert(0, format!("--patch-module=java.base={jar}")); }
     // Tells the game itself not to take the focus when its window appears (Optimal reads it: GLFW focus-on-show off,
     // and iconified right after creation unless it has to draw). Obelisk then touches each window once at most.
     // Always "unfocused", never "minimized": the taskbar preview has to stay live (user, 11-11).
