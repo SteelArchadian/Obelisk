@@ -3,6 +3,7 @@
 
 pub mod configs;
 pub mod crash;
+pub mod devreport;
 pub mod curseforge;
 pub mod dupes;
 pub mod guard;

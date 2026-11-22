@@ -96,6 +96,9 @@ enum Req {
     /// "I just sent a change, pull now" (instead of waiting for the next minute's pull). Older Obelisk answers
     /// "bad request", which is skipped.
     Poke,
+    /// A tester's crash report, game log, mod list or Obelisk errors, for the pack's owner only (devreport).
+    /// kind "ping" is a delivery test: nothing is kept. Older Obelisk answers "bad request".
+    Report(crate::devreport::Report),
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -123,6 +126,8 @@ pub struct Net {
     offers: Offers,
     /// Woken when a member pokes us (Req::Poke): the app's sync loop pulls right away.
     pub poked: Arc<tokio::sync::Notify>,
+    /// Where testers' reports to this PC are kept; None = this PC takes none.
+    reports: Arc<Mutex<Option<PathBuf>>>,
 }
 
 /// A pack offered under a code, until `expires` (unix seconds).
@@ -252,10 +257,12 @@ impl Net {
         let endpoint = Endpoint::builder(presets::N0).secret_key(SecretKey::from_bytes(&key)).bind().await.map_err(|e| e.to_string())?;
         let name = Arc::new(Mutex::new(name));
         let poked: Arc<tokio::sync::Notify> = Default::default();
-        let handler = Handler { instances: instances.clone(), name: name.clone(), me: endpoint.id(), joining: Default::default(), poked: poked.clone() };
+        let reports: Arc<Mutex<Option<PathBuf>>> = Default::default();
+        let handler = Handler { instances: instances.clone(), name: name.clone(), me: endpoint.id(), joining: Default::default(), poked: poked.clone(),
+            reports: reports.clone() };
         let offers: Offers = Default::default();
         let router = Router::builder(endpoint.clone()).accept(ALPN, handler).accept(ALPN_PACK, PackHandler { offers: offers.clone() }).spawn();
-        Ok(Net { endpoint, _router: router, instances, name, offers, poked })
+        Ok(Net { endpoint, _router: router, instances, name, offers, poked, reports })
     }
 
     pub fn id(&self) -> String {
@@ -315,6 +322,32 @@ impl Net {
             }
         }
         told
+    }
+
+    /// Keep testers' reports to this PC (as a pack owner) in `dir`.
+    pub fn take_reports(&self, dir: PathBuf) {
+        *self.reports.lock().unwrap() = Some(dir);
+    }
+
+    /// Send a tester report to this pack's owner. Ok = the owner's reply: who got it ("by") and when ("at").
+    pub async fn report(&self, game: &Path, r: &crate::devreport::Report) -> Result<serde_json::Value, String> {
+        let s = share::get(game).ok_or("This pack isn't shared.")?;
+        let owner = share::owner(game, &s);
+        if owner == self.id() { return Err("You own this pack: reports go to its owner.".into()) }
+        let id = owner.parse::<EndpointId>().map_err(|_| "This pack's owner isn't known yet.")?;
+        let go = async {
+            let (sess, _, _) = self.connect(&s, EndpointAddr::from(id)).await?;
+            let r = sess.call(&Req::Report(r.clone())).await;
+            sess.conn.close(0u32.into(), b"done");
+            r
+        };
+        match tokio::time::timeout(Duration::from_secs(120), go).await {
+            Ok(Ok(v)) if v.get("by").is_some() => Ok(v),
+            Ok(Ok(_)) => Err("The owner's Obelisk is too old to take reports.".into()),
+            Ok(Err(e)) if e.contains("bad request") => Err("The owner's Obelisk is too old to take reports.".into()),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err("The owner's PC didn't answer (offline or Obelisk closed).".into()),
+        }
     }
 
     /// The owner removes someone (signed with this PC's key) and moves the pack to a new secret.
@@ -1004,6 +1037,7 @@ struct Handler {
     /// People who connected without being members yet (joining), and since when.
     joining: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     poked: Arc<tokio::sync::Notify>,
+    reports: Arc<Mutex<Option<PathBuf>>>,
 }
 
 /// Someone who keeps syncing this long after they started joining has the pack, even if their Obelisk is too old to
@@ -1016,7 +1050,9 @@ impl ProtocolHandler for Handler {
         let mut authed: Option<PathBuf> = None;
         let (mut their_name, mut joining) = (String::new(), false);
         while let Ok((mut send, mut recv)) = conn.accept_bi().await {
-            let Ok(bytes) = recv.read_to_end(64 * 1024).await else { break };
+            // Only someone who proved they hold the pack's secret may send a big request (a tester's report).
+            let limit = if authed.is_some() { 16 << 20 } else { 64 * 1024 };
+            let Ok(bytes) = recv.read_to_end(limit).await else { break };
             let (head, body) = match serde_json::from_slice::<Req>(&bytes) {
                 Ok(req) => {
                     match &req {
@@ -1125,6 +1161,32 @@ impl Handler {
                 }
                 self.poked.notify_one();
                 (ok(serde_json::Value::Bool(true)), vec![])
+            }
+            Req::Report(r) => {
+                // Only to the owner, only from members, and only if this PC takes reports.
+                let Some(s) = share::get(game) else { return (err("not shared"), vec![]) };
+                if share::owner(game, &s) != self.me.to_string() {
+                    return (err("reports go to the pack's owner"), vec![]);
+                }
+                if !s.members.iter().any(|m| m.id == peer.to_string()) {
+                    return (err("not a member"), vec![]);
+                }
+                let Some(dir) = self.reports.lock().unwrap().clone() else { return (err("This PC doesn't take reports."), vec![]) };
+                let at = now_ms();
+                let by = self.name.lock().unwrap().clone();
+                if r.kind == "ping" {
+                    let line = serde_json::json!({ "time": at, "kind": "ping", "from": their_name, "pack": s.name, "version": r.version });
+                    let _ = std::fs::create_dir_all(&dir);
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("pings.jsonl")) {
+                        let _ = std::io::Write::write_all(&mut f, format!("{line}
+").as_bytes());
+                    }
+                    return (ok(serde_json::json!({ "by": by, "at": at })), vec![]);
+                }
+                match crate::devreport::store(&dir, their_name, &peer.to_string(), &r, at) {
+                    Ok(_) => (ok(serde_json::json!({ "by": by, "at": at })), vec![]),
+                    Err(e) => (err(&e), vec![]),
+                }
             }
             Req::Joined => {
                 self.joining.lock().unwrap().remove(&peer.to_string());
@@ -1485,5 +1547,46 @@ name=Pack
         assert_eq!(std::fs::read_to_string(gm.join("mods/other.jar")).unwrap(), "other");
         assert!(trace_log().iter().any(|l| l.contains("sent changed files again")), "{:?}", trace_log());
         assert!(share::local_changes(&game).unwrap().is_empty(), "the host's own pack is in step with what it sent");
+    }
+
+    /// Tester reports reach only the pack's owner, only from members; a ping comes back with the owner's name.
+    /// Needs the network: `cargo test --lib -- --ignored tester_reports`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn tester_reports_end_to_end() {
+        use crate::devreport::Report;
+        let t = tempfile::tempdir().unwrap();
+        let inst = |n: &str| t.path().join(n);
+        let game = inst("o").join("Pack/minecraft");
+        std::fs::create_dir_all(game.join("config")).unwrap();
+        std::fs::write(game.join("config/a.toml"), "x=1").unwrap();
+        std::fs::write(inst("o").join("Pack/mmc-pack.json"), "{\"components\":[]}").unwrap();
+        std::fs::write(inst("o").join("Pack/instance.cfg"), "InstanceType=OneSix\nname=Pack\n").unwrap();
+        for n in ["m", "x"] { std::fs::create_dir_all(inst(n)).unwrap(); }
+        let o = Net::start(new_key(), inst("o"), "Olive".into()).await.unwrap();
+        let m = Net::start(new_key(), inst("m"), "Mia".into()).await.unwrap();
+        let x = Net::start(new_key(), inst("x"), "Xan".into()).await.unwrap();
+        let code = o.share(&game, "Pack").await.unwrap();
+        let gm = inst("m").join(m.join(&code).await.unwrap()).join("minecraft");
+        let gx = inst("x").join(x.join(&code).await.unwrap()).join("minecraft");
+        let ping = Report::new("ping", "test", "Pack", "t", "hello");
+        let e = m.report(&gm, &ping).await.unwrap_err();
+        assert!(e.contains("doesn't take reports"), "an owner that never opted in takes nothing: {e}");
+        let dir = t.path().join("reports");
+        o.take_reports(dir.clone());
+        let v = m.report(&gm, &ping).await.unwrap();
+        assert_eq!(v["by"], "Olive", "{v}");
+        assert!(std::fs::read_to_string(dir.join("pings.jsonl")).unwrap().contains("Mia"));
+        m.report(&gm, &Report::new("crash", "crash-1.txt", "Pack", "t", "boom")).await.unwrap();
+        let who = std::fs::read_dir(&dir).unwrap().flatten().find(|e| e.path().is_dir()).unwrap().path();
+        assert!(who.file_name().unwrap().to_string_lossy().starts_with("Mia-"));
+        assert!(std::fs::read_dir(&who).unwrap().flatten().any(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| t == "boom")));
+        // A member never takes reports for a pack they don't own, and the owner can't report to itself.
+        m.take_reports(t.path().join("m-reports"));
+        assert!(o.report(&game, &ping).await.is_err());
+        // Someone removed from the pack can't send any more.
+        o.remove(&game, &x.id()).unwrap();
+        assert!(x.report(&gx, &ping).await.is_err(), "a removed member is refused");
+        assert!(!t.path().join("m-reports").exists());
     }
 }

@@ -12,6 +12,7 @@ mod releases;
 mod watch;
 mod datadir;
 mod devrun;
+mod devmode;
 mod bisect;
 mod game;
 mod mcp;
@@ -518,7 +519,10 @@ async fn share_net<'a>(_app: &tauri::AppHandle, cell: &'a ShareNet) -> Result<&'
             }
         };
         let name = prism::active_account(&prism::data_dir()).map(|a| a.name).unwrap_or_else(|| "Player".into());
-        prism::share_net::Net::start(key, prism::instances_dir(&prism::data_dir()), name).await
+        let n = prism::share_net::Net::start(key, prism::instances_dir(&prism::data_dir()), name).await?;
+        // As a pack's owner, keep testers' reports (Developer settings on their side).
+        n.take_reports(dir.join("buddy-reports"));
+        Ok(n)
     }).await
 }
 
@@ -2370,6 +2374,7 @@ pub fn run() {
                             }
                             // Auto-applied changes may have brought blocked files.
                             for (id, _) in synced.iter().filter(|(_, c)| *c > 0) { announce_held(&handle, id); }
+                            devmode::tick(n, &running).await;
                         }
                     }
                     // A friend who just sent something pokes us: pull right away instead of waiting out the minute.
@@ -2423,7 +2428,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            sandboxed, set_autostart, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, cues::cue_preview, sfx::ui_sfx, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
+            sandboxed, set_autostart, devmode::dev_unlock, devmode::dev_state, devmode::dev_set, devmode::dev_lock, devmode::dev_test_send, bridge::control_reply, mcp::ai_connect, mcp::ai_hookup_line, selfupdate::self_update_check, selfupdate::self_update_install, selfupdate::startup_update, selfupdate::startup_done, selfupdate::whats_new, sound::jingle_preview, cues::cue_preview, sfx::ui_sfx, music::music_track, music::music_files, social::social_use, social::social_status, social::social_friends, social::social_conversations, social::social_history, social::social_send, social::social_request, social::social_invite, social::social_answer_invite, social::social_presence, datadir::data_dir_get, datadir::data_dir_set,
             list_instances, instance_icon, set_instance_icon, list_content, watch::watch_content, content_icons, set_enabled, delete_content,
             list_worlds, list_screenshots, list_logs, read_log, reveal, launch, needed_by,
             mr_search, mr_tags, mr_project, mr_versions, active_account, mr_user, mr_org, resolve_url, mr_members, mr_installed, cf_installed, mr_install, import_pack, open_prism, prism_installed, prism_download,

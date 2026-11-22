@@ -50,6 +50,42 @@
     ["minecraft", "Minecraft & Java"], ["plugins", "Plugins"], ["about", "About"],
   ] as const;
 
+  // Tester settings: hidden until unlocked (About: Ctrl+Shift+right-click "Check for updates").
+  type DevView = { unlocked: boolean; crash: boolean; logs: boolean; mods: boolean; client: boolean; last: string | null };
+  type Sent = { pack: string; ok: boolean; by: string | null; ms: number; error: string | null };
+  let dev = $state<DevView | null>(null);
+  let devAsk = $state(false);
+  let devPw = $state("");
+  let devBusy = $state(false);
+  let devSent = $state<Sent[] | null>(null);
+  invoke<DevView>("dev_state").then((d) => (dev = d)).catch(() => {});
+  const sections = $derived(dev?.unlocked ? [...SECTIONS.slice(0, -1), ["developer", "Developer settings"] as const, SECTIONS[SECTIONS.length - 1]] : SECTIONS);
+  function devMenu(e: MouseEvent) {
+    if (!e.ctrlKey || !e.shiftKey) return;
+    e.preventDefault();
+    devAsk = !devAsk; devPw = "";
+  }
+  async function devUnlock() {
+    devBusy = true;
+    try { dev = await invoke<DevView>("dev_unlock", { pw: devPw }); devAsk = false; devPw = ""; app.settingsSection = "developer"; }
+    catch (e) { devPw = ""; toastError(e); }
+    devBusy = false;
+  }
+  async function devSet(k: "crash" | "logs" | "mods" | "client" | "all", on: boolean) {
+    if (!dev) return;
+    const v = { crash: dev.crash, logs: dev.logs, mods: dev.mods, client: dev.client };
+    if (k === "all") { v.crash = v.logs = v.mods = v.client = on; } else { v[k] = on; }
+    try { dev = await invoke<DevView>("dev_set", v); } catch (e) { toastError(e); }
+  }
+  async function devTest() {
+    devBusy = true; devSent = null;
+    try { devSent = await invoke<Sent[]>("dev_test_send"); dev = await invoke<DevView>("dev_state"); } catch (e) { toastError(e); }
+    devBusy = false;
+  }
+  async function devLock() {
+    try { dev = await invoke<DevView>("dev_lock"); app.settingsSection = "about"; } catch (e) { toastError(e); }
+  }
+
   let mrInput = $state("");
   let mrBusy = $state(false);
   let mrError = $state("");
@@ -200,7 +236,7 @@
 <div class="settings">
   <nav class="side">
     <h2>Settings</h2>
-    {#each SECTIONS as [id, label] (id)}
+    {#each sections as [id, label] (id)}
       <button class:on={app.settingsSection === id} onclick={() => (app.settingsSection = id)}>{label}</button>
     {/each}
   </nav>
@@ -461,10 +497,33 @@
         {#if mrError}<p class="warn">{mrError}</p>{/if}
       {/if}
 
+    {:else if app.settingsSection === "developer" && dev?.unlocked}
+      <h1>Developer settings</h1>
+      <p class="muted">For testers. What's switched on goes to the owner of each shared pack you're in, straight to their Obelisk, after each play session. Sign-in tokens and your Windows user name are removed first.</p>
+      {#each [["all", "Enable all", "Everything below."], ["crash", "Send crash logs", "Crash reports and Java crash files, once each."], ["logs", "Send game logs", "latest.log and debug.log after every play session."], ["mods", "Send mod list", "The pack's mod files, whenever they change."], ["client", "Send Obelisk errors", "Errors from Obelisk itself."]] as [k, label, hint] (k)}
+        {@const on = k === "all" ? dev.crash && dev.logs && dev.mods && dev.client : dev[k as "crash" | "logs" | "mods" | "client"]}
+        <label class="toggle-row">
+          <span>{label}<small>{hint}</small></span>
+          <button class="switch" class:on role="switch" aria-checked={on} aria-label={label}
+            onclick={() => devSet(k as "crash" | "logs" | "mods" | "client" | "all", !on)}><i></i></button>
+        </label>
+      {/each}
+      <div class="row-buttons">
+        <button class="primary" disabled={devBusy} onclick={devTest}>{devBusy ? "Sending…" : "Send test"}</button>
+        <button class="ghost" onclick={devLock}>Hide developer settings</button>
+      </div>
+      {#if devSent}
+        {#each devSent as s (s.pack)}
+          <p class={s.ok ? "" : "warn"}>{s.pack}: {s.ok ? `reached ${s.by ?? "the owner"} in ${s.ms} ms` : s.error}</p>
+        {/each}
+      {/if}
+      {#if dev.last}<p class="muted small">Last: {dev.last}</p>{/if}
+
     {:else}
       <h1>About</h1>
       <p><strong>Obelisk</strong>{#if version} {version}{/if}: a fast front end for Prism Launcher.</p>
-      <div class="row-buttons update-row">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="row-buttons update-row" oncontextmenu={devMenu}>
         {#if found}
           <button class="primary" disabled={updateState === "installing"} onclick={installUpdate}>{updateState === "installing" ? "Updating…" : `Update to ${found.version}`}</button>
           <span class="muted">{found.notes}</span>
@@ -473,6 +532,11 @@
           {#if updateState === "current"}<span class="muted">You have the newest Obelisk.</span>{/if}
         {/if}
       </div>
+      {#if devAsk}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="dev-pw" type="password" autocomplete="off" spellcheck="false" autofocus disabled={devBusy} bind:value={devPw}
+          onkeydown={(e) => { if (e.key === "Enter" && devPw) devUnlock(); if (e.key === "Escape") { devAsk = false; devPw = ""; } }} />
+      {/if}
       <p class="muted">Not affiliated with CurseForge, Overwolf, Modrinth or Mojang. Prism Launcher handles accounts, Java and launching.</p>
     {/if}
   </div>
@@ -493,6 +557,7 @@
   .field { display: flex; flex-direction: column; gap: 8px; font-weight: 600; }
   .field .select { width: 260px; max-width: 100%; font-weight: 400; }
   .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; background: var(--panel); padding: 12px 14px; border-radius: 8px; }
+  .dev-pw { width: 220px; }
   .toggle-row small { display: block; color: var(--muted); font-weight: 400; }
   .switch { flex: none; width: 40px; height: 22px; border-radius: 999px; border: 0; padding: 0; position: relative; background: var(--switch-off); transition: background 0.15s; }
   .switch i { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s; }

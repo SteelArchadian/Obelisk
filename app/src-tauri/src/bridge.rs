@@ -78,7 +78,7 @@ fn names() -> Vec<String> {
     let Some(start) = lib.find("generate_handler![").map(|i| i + "generate_handler![".len()) else { return vec![] };
     let end = lib[start..].find(']').map(|i| start + i).unwrap_or(start);
     lib[start..end].split(',').map(|n| n.trim().rsplit("::").next().unwrap_or("").to_string())
-        .filter(|n| !n.is_empty() && !DENY.contains(&n.as_str())).collect()
+        .filter(|n| !n.is_empty() && !DENY.contains(&n.as_str()) && !n.starts_with("dev_")).collect()
 }
 
 pub fn commands() -> Value {
@@ -130,5 +130,11 @@ mod tests {
         assert_eq!(set["args"], serde_json::json!(["dir: String"]));
         assert!(set["doc"].as_str().unwrap().starts_with("Move every modpack"));
         assert_eq!(get("delete_content").unwrap()["args"][0], "instanceId: String");
+    }
+
+    #[test]
+    fn tester_commands_stay_hidden() {
+        assert!(super::names().iter().all(|n| !n.starts_with("dev_")));
+        assert!(!super::commands().to_string().contains("dev_"));
     }
 }
