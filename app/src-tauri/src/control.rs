@@ -733,7 +733,9 @@ fn patch_module(args: &Value) -> Result<Option<String>, String> {
     if !jar.starts_with(&dir) || !jar.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar")) || !jar.is_file() {
         return Err(format!("patch_module: only .jar files in {PATCH_DIR}"));
     }
-    let s = jar.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+    // Pass it under PATCH_DIR, not the resolved path: the folder is a junction into a path with spaces.
+    let rel = jar.strip_prefix(&dir).map_err(|_| format!("patch_module: only .jar files in {PATCH_DIR}"))?;
+    let s = Path::new(PATCH_DIR).join(rel).to_string_lossy().to_string();
     if s.chars().any(|c| c.is_control() || c == '"' || c == ' ') { return Err("patch_module: path has spaces or quotes".into()) }
     Ok(Some(s))
 }
