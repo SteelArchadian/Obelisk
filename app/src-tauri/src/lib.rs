@@ -2022,7 +2022,7 @@ async fn window_mode_common() -> Result<Option<prism::window::Mode>, String> {
 }
 
 /// Running games by profile id: Java processes whose command line points into a Prism instance.
-fn running_java() -> Vec<(String, sysinfo::Pid)> {
+pub(crate) fn running_java() -> Vec<(String, sysinfo::Pid)> {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always));
     let mut out = Vec::new();

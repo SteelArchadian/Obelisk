@@ -55,6 +55,10 @@ pub async fn self_update_check(app: tauri::AppHandle) -> Option<Available> {
 /// Download the newer release, check its signature, and install it; Obelisk closes and the new one starts.
 #[tauri::command]
 pub async fn self_update_install(app: tauri::AppHandle) -> Result<(), String> {
+    // Restarting mid-run kills a chat's test game and loses its job (2026-11-22: an update cut a gate run short).
+    if super::control::busy() || !super::running_java().is_empty() {
+        return Err("a test or game is running in Obelisk; install once it finishes".into());
+    }
     let u = find(&app).await?.ok_or("Obelisk is up to date")?;
     install(&app, u).await
 }
