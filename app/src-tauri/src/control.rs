@@ -101,8 +101,8 @@ fn play_dir() -> PathBuf {
     prism::instances_dir(&prism::data_dir()).join(&tb().play).join("minecraft")
 }
 const DEFAULT_VERSION: &str = "neoforge-21.1.252";
-/// The pack test copies are made from unless said otherwise (Test Dummy is the only target, user 2026-11-05).
-const TARGET_PACK: &str = "Test Dummy";
+/// The pack test copies are made from unless said otherwise (Odyssey; Test Dummy retired, user 2026-11-22, KB #219).
+const TARGET_PACK: &str = "Odyssey";
 /// Folders under the bench root that hold tools, not game copies.
 const NOT_COPIES: &[&str] = &["scripts", "backups", "gate-template", "obelisk", "tools", "status", "maps", "mcsrc"];
 /// Skipped when copying a pack (same list as gate.py).

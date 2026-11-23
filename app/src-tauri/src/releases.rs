@@ -1,8 +1,8 @@
 //! Release lines for the mods built on this PC (user rule 00, 2026-10-30).
 //!
 //! A chat submits a build as a fix or a feature. Fixes are stable and go into every pack that has the mod;
-//! features are test builds and go into TEST DUMMY only, until promoted (the user played it, or three clean
-//! TEST DUMMY sessions). Each install waits for its pack to be closed, passes a 2-cycle gate in that pack's own
+//! features are test builds and go into ODYSSEY only (Test Dummy retired, KB #219), until promoted (the user played it, or three clean
+//! Odyssey sessions). Each install waits for its pack to be closed, passes a 2-cycle gate in that pack's own
 //! copy first, takes a safety backup and keeps the old jar, and is rolled back when a later crash in that pack
 //! names the new build as the code that was running. Play packs are never launched: gates run in copies.
 
@@ -14,16 +14,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// TEST DUMMY's display name in Prism. Its folder is found by that name, so renaming the folder doesn't lose it.
-const TEST_NAME: &str = "TEST DUMMY";
+/// The test-build pack's display name in Prism. Its folder is found by that name, so renaming the folder doesn't lose it.
+const TEST_NAME: &str = "Odyssey";
 /// The folder used when no pack shows that name.
-const TEST_FOLDER: &str = "Test Dummy";
+const TEST_FOLDER: &str = "Odyssey";
 
-/// TEST DUMMY's folder in the instances folder.
+/// The test-build pack's folder in the instances folder.
 fn test_pack_id() -> String {
     packs().into_iter().find(|p| p.name.eq_ignore_ascii_case(TEST_NAME)).map(|p| p.id).unwrap_or_else(|| TEST_FOLDER.to_string())
 }
-/// Clean TEST DUMMY sessions that prove a test build.
+/// Clean Odyssey sessions that prove a test build.
 const PROVEN_SESSIONS: usize = 3;
 /// How long after an install a crash naming the build rolls it back.
 const WATCH_SECS: u64 = 14 * 86_400;
@@ -212,7 +212,7 @@ fn submit(args: &Value) -> Result<Value, String> {
     let jar = c::bench_jar(c::arg(args, "jar")?)?;
     let kind = c::arg(args, "kind")?;
     if !matches!(kind, "fix" | "feature") {
-        return Err("\"kind\" is fix (a bug fix: stable, goes into every pack) or feature (a test build: TEST DUMMY only)".into());
+        return Err("\"kind\" is fix (a bug fix: stable, goes into every pack) or feature (a test build: Odyssey only)".into());
     }
     let owner = c::arg(args, "owner")?.chars().take(60).collect::<String>();
     let notes = c::opt(args, "notes").unwrap_or("").chars().take(500).collect::<String>();
@@ -287,7 +287,7 @@ fn promote(args: &Value) -> Result<Value, String> {
     let v = c::arg(args, "version")?;
     let reason = c::arg(args, "reason")?;
     if !matches!(reason, "user-played" | "proven-in-td") {
-        return Err("\"reason\" is user-played (the user played it and it works) or proven-in-td (3 clean TEST DUMMY sessions; checked)".into());
+        return Err("\"reason\" is user-played (the user played it and it works) or proven-in-td (3 clean Odyssey sessions; checked)".into());
     }
     with(|r| {
         let i = r.builds.iter().position(|b| b.mod_id == m && b.version == v).ok_or_else(|| format!("no build {m} {v}"))?;
@@ -303,10 +303,10 @@ fn promote(args: &Value) -> Result<Value, String> {
     })
 }
 
-/// Three TEST DUMMY sessions since the build went in, and no crash there that names it.
+/// Three Odyssey sessions since the build went in, and no crash there that names it.
 fn proven(r: &Registry, b: &Build) -> Result<String, String> {
     let o = r.rollouts.iter().rev().find(|o| o.mod_id == b.mod_id && o.version == b.version && o.pack == test_pack_id() && o.state == "installed")
-        .ok_or("this build isn't installed in TEST DUMMY")?;
+        .ok_or("this build isn't installed in Odyssey")?;
     let p = pack(&test_pack_id())?;
     let since = std::time::UNIX_EPOCH + Duration::from_secs(o.installed_at);
     // Each session leaves one log: latest.log while it's the newest, then a dated .log.gz.
@@ -315,12 +315,12 @@ fn proven(r: &Registry, b: &Build) -> Result<String, String> {
         (n == "latest.log" || n.ends_with(".log.gz")) && e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t > since)
     }).count();
     if let Some(name) = crash_naming(&p.game, b, o.installed_at).into_iter().next() {
-        return Err(format!("{name} in TEST DUMMY names this build as what was running"));
+        return Err(format!("{name} in Odyssey names this build as what was running"));
     }
     if sessions < PROVEN_SESSIONS {
-        return Err(format!("{sessions} TEST DUMMY session(s) since it went in; {PROVEN_SESSIONS} are needed"));
+        return Err(format!("{sessions} Odyssey session(s) since it went in; {PROVEN_SESSIONS} are needed"));
     }
-    Ok(format!("{sessions} TEST DUMMY sessions since it went in, no crash naming it"))
+    Ok(format!("{sessions} Odyssey sessions since it went in, no crash naming it"))
 }
 
 /// Crash reports in a pack since `after` whose diagnosis says this mod's code was running.

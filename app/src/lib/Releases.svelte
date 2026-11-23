@@ -52,7 +52,7 @@
 {#if st && st.mods.length}
   <section class="rel">
     <h2>Mod releases</h2>
-    <p class="muted small">Builds made on this PC. Fixes are stable and go into every pack that has the mod; features are test builds and go into TEST DUMMY first. Every install waits until the pack is closed, passes a 2-cycle safety test in a copy of that pack, and keeps the old jar. A crash caused by a new build puts the old one back by itself.</p>
+    <p class="muted small">Builds made on this PC. Fixes are stable and go into every pack that has the mod; features are test builds and go into Odyssey first. Every install waits until the pack is closed, passes a 2-cycle safety test in a copy of that pack, and keeps the old jar. A crash caused by a new build puts the old one back by itself.</p>
 
     <table>
       <thead><tr><th>Mod</th><th>Stable</th><th>Test</th>{#each st.packs as p}<th>{p.name}</th>{/each}</tr></thead>
