@@ -566,23 +566,29 @@ pub(crate) fn test_copy(name: &str) -> Result<PathBuf, String> {
 
 /// Somewhere to read from: a test copy, or "play" for the play instance (read-only commands only).
 fn readable(name: &str) -> Result<PathBuf, String> {
-    if name == "play" { Ok(play_dir()) } else { test_copy(name) }
+    if name == "play" { return Ok(play_dir()) }
+    if let Some(d) = main_pack(name) { return Ok(d) }
+    test_copy(name)
+}
+
+/// The main pack by name ("odyssey", KB #213/#219): readable and changeable like play, with the same backups, never launched.
+fn main_pack(name: &str) -> Option<PathBuf> {
+    if !name.eq_ignore_ascii_case(TARGET_PACK) { return None }
+    let d = prism::instances_dir(&prism::data_dir()).join(TARGET_PACK).join("minecraft");
+    d.join("mods").is_dir().then_some(d)
 }
 
 /// Somewhere to change mods: a test copy, or "play" (user, 2026-10-24: experimental updates are fine there
 /// while backups run), after a safety backup so every change can be tracked and undone in Obelisk's Backups.
 fn changeable(name: &str, what: &str) -> Result<PathBuf, String> {
-    if name != "play" {
-        return test_copy(name);
-    }
-    let dir = play_dir();
+    let dir = if name == "play" { play_dir() } else if let Some(d) = main_pack(name) { d } else { return test_copy(name) };
     prism::history::create(&dir, "safety", &format!("Before {what} (chat via Obelisk MCP)"), true)?;
     Ok(dir)
 }
 
 /// After a change to the play instance: back up the new state, so the changelog says which chat change it was.
 fn changed(dir: &Path, what: &str) {
-    if *dir == play_dir() {
+    if *dir == play_dir() || main_pack(TARGET_PACK).as_deref() == Some(dir) {
         let _ = prism::history::create(dir, "safety", &format!("{what} (chat via Obelisk MCP)"), true);
     }
 }
@@ -723,7 +729,7 @@ fn jvm_props(args: &Value) -> Result<Vec<String>, String> {
 }
 
 /// patch_module: one JDK class patch jar for test runs (Optimal's Resolver fix, 13.7 s -> 0.19 s module graph).
-/// Only jars in the speedloader jdkpatch folder; added as --patch-module=java.base=<jar> on Java 21 only.
+/// Only jars in the speedloader jdkpatch folder; added as --patch-module=java.base=<jar> on Java 21, or Java 25 for jars named *-25.jar.
 const PATCH_DIR: &str = r"C:\mcw\speedloader\jdkpatch";
 fn patch_module(args: &Value) -> Result<Option<String>, String> {
     let Some(v) = args.get("patch_module").filter(|v| !v.is_null()) else { return Ok(None) };
@@ -1083,7 +1089,8 @@ fn copies() -> Result<Value, String> {
             out.push(json!({ "copy": name, "running": game_running_in(&e.path()) }));
         }
     }
-    Ok(json!({ "copies": out, "play": "readable as \"play\" (logs, diagnose, mods list, copy-pack source); never launched or changed" }))
+    Ok(json!({ "copies": out, "play": "readable as \"play\" (logs, diagnose, mods list, copy-pack source); mod changes backed up first; never launched",
+        "odyssey": if main_pack(TARGET_PACK).is_some() { "the main pack as \"odyssey\": same as play (reads, mod_add/mod_set/mod_update/mods, backed up first), never launched" } else { "Odyssey pack not found" } }))
 }
 
 fn newest_named(dir: &Path, file: &str, n: usize) -> Vec<PathBuf> {
@@ -2291,7 +2298,14 @@ fn launch(args: &Value, jobs: &Shared) -> Result<Value, String> {
     }
     if patch.is_some() {
         let major = prism::java::at(Path::new(&java)).map(|j| j.major);
-        if major != Some(21) { return Err(format!("patch_module is for Java 21 only; this run uses Java {}", major.map_or("?".into(), |m| m.to_string()))) }
+        // A java.base patch only fits the JDK it was built against: Java 25 takes jars named *-25.jar, Java 21 the others.
+        let for25 = patch.as_deref().is_some_and(|j| j.to_ascii_lowercase().ends_with("-25.jar"));
+        match (major, for25) {
+            (Some(21), false) | (Some(25), true) => {}
+            (Some(21), true) => return Err("this patch jar is for Java 25 (name ends -25.jar); this run uses Java 21".into()),
+            (Some(25), false) => return Err("this run uses Java 25; pass a patch jar built for it (name ends -25.jar)".into()),
+            _ => return Err(format!("patch_module is for Java 21 or 25; this run uses Java {}", major.map_or("?".into(), |m| m.to_string()))),
+        }
     }
     profile.apply(&mut cmd);
     if let Some(jar) = &patch { cmd.insert(0, format!("--patch-module=java.base={jar}")); }

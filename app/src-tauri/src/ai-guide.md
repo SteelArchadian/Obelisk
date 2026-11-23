@@ -2,10 +2,11 @@
 
 Obelisk manages the user's Minecraft modpacks (Prism instances) and runs a test bench of throwaway copies for you. Games
 run outside your sandbox at normal speed, muted, with the window off-screen. The user's own pack ("play") is never
-launched: you can read it, and change its mods (each change takes a safety backup first). Every test runs in a copy.
+launched: you can read it, and change its mods (each change takes a safety backup first). The main pack, Odyssey, works
+the same way as copy "odyssey" (mods, mod_add, mod_set, mod_update, logs, copy_pack source). Every test runs in a copy.
 
 ## Rules
-- Make a test copy with copy_pack {from: "play", to: "<name>"}; list copies with copies.
+- Make a test copy with copy_pack {from: "odyssey", to: "<name>"}; list copies with copies.
 - Launches share one bench lock and queue. Comparisons (perf, a GC A/B, or ab: true for before/after) take the bench
   alone: they wait until the user has been away for 10 minutes and end "invalid" if they come back. Other runs whose
   result is a number (fps, Lightning captures) share the PC with at most one other game. Hold <=120 s for every run; a non-perf run is killed 120 s after reaching the world, a perf run 600 s after starting (split longer work into several runs);

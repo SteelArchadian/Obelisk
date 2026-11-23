@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
 
 fn copy_arg() -> Value {
-    json!({ "type": "string", "description": "Test copy folder (see copies); \"play\" = the play instance (reads and mod changes only, backed up first, never launched)" })
+    json!({ "type": "string", "description": "Test copy folder (see copies); \"play\" = the play instance, \"odyssey\" = the main Odyssey pack (both: reads and mod changes only, backed up first, never launched)" })
 }
 
 // Kept short on purpose: every chat carries this list in its context on every turn (user, 2026-11-03).
@@ -31,7 +31,7 @@ pub(crate) fn tools() -> Value {
                 "new_world": { "type": ["string", "integer"], "description": "Seed for a fresh world, deleted after" },
                 "test_world": { "type": "object", "description": "Custom world: layers [{block,height}] (bottom first; [] = void), terrain flat|normal, seed, biome, border, platform {y,size,block}, spawn {x,y,z}, hold, game_mode, setup [cmds], events [{at,every,command}] (seconds after arrival); frozen at noon unless setup sets the time or night: true" },
                 "jvm": { "type": "array", "items": { "type": "string" }, "description": "-Dmod.key=value" },
-                "patch_module": { "type": "string", "description": "JDK patch jar from C:/mcw/speedloader/jdkpatch (Java 21 test runs only)" },
+                "patch_module": { "type": "string", "description": "JDK patch jar from C:/mcw/speedloader/jdkpatch (Java 21 runs; Java 25 runs take *-25.jar)" },
                 "timeout": int(),
                 "camera": { "type": "object", "description": "{pitch,yaw} held for screenshots" },
                 "jfr": { "type": "boolean" }, "jfr_roots": { "type": "boolean" },
@@ -227,7 +227,7 @@ pub fn call_cli(args: Vec<String>) -> i32 {
     }
 }
 
-const INSTRUCTIONS: &str = "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management). If these tools ever stop answering (Obelisk was updated or reinstalled), run the same tool from a shell: \"<this exe> --call <tool> <json args>\" (path in your MCP config), then reconnect.";
+const INSTRUCTIONS: &str = "Obelisk runs Minecraft test copies in the test bench for you, outside your sandbox, so games load at normal speed. The play instance (\"play\") and the main Odyssey pack (\"odyssey\") can be read (logs, diagnose, mods, copy_pack source) and its mods changed for experimental updates; each change takes a safety backup first, restorable in Obelisk's Backups. It is never launched: test in a copy. Every launch waits for the shared bench lock. Use wait instead of polling status. Call the guide tool first: it lists everything Obelisk can do (scripted simulations, tests, screenshots, finding the mod behind a behaviour, profiling, mod management). If these tools ever stop answering (Obelisk was updated or reinstalled), run the same tool from a shell: \"<this exe> --call <tool> <json args>\" (path in your MCP config), then reconnect.";
 
 /// Answers one tools/call: the merged tool routed to the control API's own command, the answer as MCP content.
 fn tool_call(msg: &Value) -> Value {
