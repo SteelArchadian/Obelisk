@@ -12,7 +12,7 @@
   import Diagnosis from "./Diagnosis.svelte";
   import Icon from "./Icon.svelte";
   import { app, openBrowseTyping, pushOverlay, toast, toastError } from "./state.svelte";
-  import { nameKey, openProjectById, refreshInstalled, setTarget } from "./install";
+  import { isInstalled, nameKey, openProjectById, refreshInstalled, setTarget } from "./install";
   import { cfToHit } from "./cf";
   import { openLink } from "./account.svelte";
   import { manualDownload } from "./cf";
@@ -36,7 +36,8 @@
 
   let current = $derived(app.current!);
   let co = $derived(collab[current.id]);
-  let wishCount = $derived(new Set(Object.values(co?.wishes ?? {}).flatMap((w) => w.items.map((i) => i.hit.project_id))).size);
+  let wishCount = $derived(new Set(Object.values(co?.wishes ?? {}).flatMap((w) => w.items
+    .filter((i) => app.installedFor !== current.id || !isInstalled(i.hit)).map((i) => i.hit.project_id))).size);
   // Who's in a collaborative pack, or the note that its owner removed us: re-read when the pack opens or shares change.
   $effect(() => { void app.shareIncoming; loadCollab(current.id); });
   async function dismissEnded() {

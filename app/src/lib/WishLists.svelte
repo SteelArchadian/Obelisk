@@ -1,15 +1,21 @@
 <script lang="ts">
   // A collaborative pack's Wish lists tab: what each person would like added, to talk over before anyone installs
   // it. Everyone sees everyone's lists; only your own can be changed (the star on a project page, or here).
-  import { pushOverlay } from "./state.svelte";
+  import { app, pushOverlay } from "./state.svelte";
   import { typeName } from "./api";
   import InstallButton from "./InstallButton.svelte";
   import NoIcon from "./NoIcon.svelte";
-  import { collab, loadCollab, toggleWish, type Wish } from "./collab.svelte";
+  import { isInstalled } from "./install";
+  import { collab, dropInstalledWishes, loadCollab, toggleWish, type Wish } from "./collab.svelte";
 
   let { instId }: { instId: string } = $props();
 
   $effect(() => { loadCollab(instId); });
+
+  // A wished-for mod that's now in the pack is done: it leaves the lists (and my own list for good).
+  let ready = $derived(app.installedFor === instId);
+  const inPack = (h: Wish["hit"]) => ready && !!isInstalled(h);
+  $effect(() => { if (ready && collab[instId]) { app.installed; dropInstalledWishes(instId, inPack); } });
 
   let c = $derived(collab[instId]);
   let who = $state<string>("all");
@@ -17,7 +23,8 @@
 
   const nameOf = (id: string) => (id === c?.me ? "You" : c?.members?.find((m) => m.id === id)?.name || c?.wishes?.[id]?.name || "Friend");
   // People with a list, you first, then by name.
-  let people = $derived(Object.entries(c?.wishes ?? {}).filter(([, w]) => w.items.length)
+  let people = $derived(Object.entries(c?.wishes ?? {}).map(([id, w]) => [id, { ...w, items: w.items.filter((i) => !inPack(i.hit)) }] as const)
+    .filter(([, w]) => w.items.length)
     .sort(([a], [b]) => (a === c?.me ? -1 : b === c?.me ? 1 : nameOf(a).localeCompare(nameOf(b)))));
 
   // "Everyone" merges the lists: one row per project, with everyone who wished for it.
@@ -26,6 +33,7 @@
     for (const [id, w] of people) {
       if (who !== "all" && who !== id) continue;
       for (const wish of w.items) {
+        if (inPack(wish.hit)) continue;
         const r = out.get(wish.hit.project_id);
         if (r) { r.by.push(id); if (wish.addedMs > r.wish.addedMs) r.wish = wish; }
         else out.set(wish.hit.project_id, { wish, by: [id] });

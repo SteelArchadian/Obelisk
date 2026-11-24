@@ -36,3 +36,15 @@ export async function toggleWish(instId: string, hit: Hit) {
   c.wishes = { ...(c.wishes ?? {}), [c.me]: { name, updatedMs: Date.now(), items } };
   await invoke("share_set_wishes", { instanceId: instId, items }).catch(() => {});
 }
+
+/** Take mods that are now in the pack off my wish list (each member's Obelisk tidies its own list). */
+export async function dropInstalledWishes(instId: string, installed: (h: Hit) => unknown) {
+  const c = collab[instId];
+  if (!c?.me) return;
+  const mine = myWishes(instId);
+  const items = mine.filter((w) => !installed(w.hit));
+  if (items.length === mine.length) return;
+  const name = c.members?.find((m) => m.id === c.me)?.name ?? "";
+  c.wishes = { ...(c.wishes ?? {}), [c.me]: { name, updatedMs: Date.now(), items } };
+  await invoke("share_set_wishes", { instanceId: instId, items }).catch(() => {});
+}
