@@ -2311,7 +2311,9 @@ pub fn run() {
             // Its saved place first: after an update the window shows straight away (resume_window), and a window
             // shown at the default place got snapped to a zone by the window manager and saved there (user, 11-10).
             winplace::restore(app.handle());
-            if !hidden && !selfupdate::resume_window(app.handle()) {
+            // An update's relaunch gets the old process's arguments back (the updater's /ARGS), so a copy started
+            // with Windows came back with --hidden and always landed in the tray: the saved state wins (user, 11-25).
+            if !selfupdate::resume_window(app.handle()) && !hidden {
                 selfupdate::start_window(app.handle());
             }
             // Local control API for the user's Minecraft chats (see control.rs).

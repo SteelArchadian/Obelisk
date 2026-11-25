@@ -194,10 +194,20 @@ pub fn resume_window(app: &tauri::AppHandle) -> bool {
         #[link(name = "user32")]
         unsafe extern "system" {
             fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+            fn GetForegroundWindow() -> isize;
+            fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
         }
         if let Some(Ok(h)) = app.get_webview_window("main").map(|w| w.hwnd()) {
             crate::winplace::shown();
-            unsafe { ShowWindow(h.0 as isize, cmd) };
+            let h = h.0 as isize;
+            unsafe {
+                ShowWindow(h, cmd);
+                // Shown without focus it still lands on top of everything: put it back under the app in front.
+                let front = GetForegroundWindow();
+                if cmd == 4 && front != 0 && front != h {
+                    SetWindowPos(h, front, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); // NOSIZE | NOMOVE | NOACTIVATE
+                }
+            }
         }
     };
     match v["state"].as_str().unwrap_or("") {
