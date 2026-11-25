@@ -1279,7 +1279,10 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // What the camera shows is the test (scene, shots, recordings): no AFK or respawn cinematic camera taking over
     // an idle player, no teleport fly-in after each tp step, no Dynamic FPS slowing the unfocused window, no chat
     // over the picture. Off for this run only.
-    let visual = scene || steps.iter().any(|s| ["shot", "punch", "record"].iter().any(|k| s.get(*k).is_some()));
+    // title_shot: a picture of the title screen (pack logo, menu) before the world opens; Speed Loader waits on the menu.
+    let title_shot = o.remove("title_shot").and_then(|v| v.as_bool()).unwrap_or(false);
+    if title_shot && !has(&jvm, "menuWait=") { jvm.push(json!("-Dspeedloader.menuWait=12")); }
+    let visual = scene || title_shot || steps.iter().any(|s| ["shot", "punch", "record"].iter().any(|k| s.get(*k).is_some()));
     if visual {
         if o.get("visual").is_none() { o.insert("visual".into(), json!(true)); }
         let mut off = o.get("disable_mods").and_then(|a| a.as_array().cloned()).unwrap_or_default();
@@ -1316,7 +1319,7 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     super::game::progress(id, |p| { p.phase = "launching".into(); p.steps = steps.len(); });
     let jobs2 = jobs.clone();
     let run = move || {
-        let result = run_test(id, steps, scenario_timeout, dyno, &jobs2, &dir).unwrap_or_else(|e| json!({ "job": id, "error": e }));
+        let result = run_test(id, steps, scenario_timeout, dyno, title_shot, &jobs2, &dir).unwrap_or_else(|e| json!({ "job": id, "error": e }));
         if let Some(f) = &bridge { let _ = std::fs::remove_file(f); }
         super::game::progress(id, |p| { p.phase = "done".into(); p.result = Some(result.clone()); });
         result
@@ -1329,11 +1332,32 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     Ok(run())
 }
 
-fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, jobs: &Shared, dir: &Path) -> Result<Value, String> {
+fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, title_shot: bool, jobs: &Shared, dir: &Path) -> Result<Value, String> {
     let t_of = |jobs: &Shared| -> f64 {
         let (m, _) = &**jobs;
         m.lock().unwrap().list.get(&id).and_then(|j| j.now["t"].as_f64()).unwrap_or(0.0)
     };
+    let mut title = Value::Null;
+    if title_shot {
+        let w = loop {
+            let w = wait(&json!({ "job": id, "until": "titleScreen", "timeout": 3600 }), jobs)?;
+            if w["state"] != "queued" { break w }
+        };
+        title = if w["events"].as_array().is_some_and(|e| e.iter().any(|e| e["event"] == "titleScreen")) {
+            super::game::progress(id, |p| p.phase = "title screen".into());
+            let (_, gdir, started) = game_of(&json!({ "job": id }), jobs)?;
+            // The logo and panorama fade in; the probe may still be starting.
+            std::thread::sleep(Duration::from_secs(3));
+            let t0 = Instant::now();
+            loop {
+                match super::game::ask(&gdir, started, json!({ "op": "shot", "name": format!("obt-{started}-title"), "hud": true })) {
+                    Ok(r) => break json!({ "ok": true, "file": r["file"] }),
+                    Err(e) if t0.elapsed() > Duration::from_secs(8) => break json!({ "ok": false, "error": e }),
+                    Err(_) => std::thread::sleep(Duration::from_secs(1)),
+                }
+            }
+        } else { json!({ "ok": false, "error": "the game never reached the title screen" }) };
+    }
     // A measured run may sit in the queue for hours (until the user is away).
     let waited = loop {
         let w = wait(&json!({ "job": id, "until": "inWorld", "timeout": 3600 }), jobs)?;
@@ -1363,7 +1387,7 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, jobs:
         t_steps_end = Some(t_of(jobs));
         // Taken over: the chat drives the game from here and ends it itself.
         if super::game::progress_of(id).is_some_and(|p| p.stop) {
-            return Ok(json!({ "job": id, "takenOver": true, "scenario": scenario }));
+            return Ok(json!({ "job": id, "takenOver": true, "titleShot": title, "scenario": scenario }));
         }
         super::game::progress(id, |p| p.phase = "quitting".into());
         t_quit = Some(t_of(jobs));
@@ -1422,7 +1446,7 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, jobs:
     let lightning = prism::lightning::runs(dir, 1).into_iter().next().map(|r| json!(r)).unwrap_or(Value::Null);
     if dyno { scenario = dyno_result(dir, done["started"].as_u64().unwrap_or(0)) }
     Ok(json!({ "job": id, "state": done["state"], "detail": done["detail"], "stages": stages, "profile": profile,
-        "scenario": scenario, "log": log, "lightning": lightning }))
+        "titleShot": title, "scenario": scenario, "log": log, "lightning": lightning }))
 }
 
 /// Block Dyno's newest result from this run, per phase in short (its full result.json and summary.md stay on disk).
