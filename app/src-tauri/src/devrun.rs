@@ -147,10 +147,11 @@ pub fn jcmd_for(java: &str) -> Result<PathBuf, String> {
 
 /// (used, committed) heap in MB from `jcmd GC.heap_info` (ZGC: "used 1234M, capacity 2048M"; G1: "total 524288K, used 123456K").
 fn heap_info(jcmd: &Path, pid: u32) -> Option<(f64, f64)> {
-    use super::NoWindow;
-    let o = std::process::Command::new(jcmd).args([&pid.to_string(), "GC.heap_info"]).creation_flags_no_window().output().ok()?;
-    parse_heap_info(&String::from_utf8_lossy(&o.stdout))
+    let (_, out) = jcmd_run(jcmd, pid, &["GC.heap_info"], Duration::from_secs(5)).ok()?;
+    parse_heap_info(&out)
 }
+
+pub use prism::jcmd::jcmd_run;
 
 fn parse_heap_info(text: &str) -> Option<(f64, f64)> {
     let size = |s: &str, key: &str| -> Option<f64> {

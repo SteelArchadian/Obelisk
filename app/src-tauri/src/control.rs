@@ -1586,9 +1586,10 @@ fn heap(args: &Value, jobs: &Shared) -> Result<Value, String> {
 fn snapshot(jcmd: &Path, pid: u32, out: &Path, kind: &str) -> Result<Value, String> {
     std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let run = |a: &[&str]| -> Result<String, String> {
-        let o = Command::new(jcmd).arg(pid.to_string()).args(a).creation_flags_no_window().output().map_err(|e| format!("jcmd: {e}"))?;
-        let text = String::from_utf8_lossy(&o.stdout).into_owned();
-        if o.status.success() { Ok(text) } else { Err(format!("jcmd failed: {}", text.lines().last().unwrap_or(""))) }
+        // A heap dump writes the whole heap; everything else answers in seconds unless the game is frozen.
+        let limit = Duration::from_secs(if a.first() == Some(&"GC.heap_dump") { 180 } else { 30 });
+        let (ok, text) = super::devrun::jcmd_run(jcmd, pid, a, limit)?;
+        if ok { Ok(text) } else { Err(format!("jcmd failed: {}", text.lines().last().unwrap_or(""))) }
     };
     match kind {
         "histogram" => {

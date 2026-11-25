@@ -1,6 +1,7 @@
 //! Read-only view of Prism Launcher's data folder: instances, their settings and content.
 //! Prism stays the engine (accounts, Java, launching); Obelisk is the face.
 
+pub mod jcmd;
 pub mod configs;
 pub mod crash;
 pub mod devreport;
