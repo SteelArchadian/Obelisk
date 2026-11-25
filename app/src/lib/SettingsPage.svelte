@@ -18,7 +18,7 @@
   type SelfUpdate = { version: string; notes: string };
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
-  let updateState = $state<"" | "checking" | "current" | "installing">("");
+  let updateState = $state<"" | "checking" | "current" | "installing" | "queued">("");
   let found = $state<SelfUpdate | null>(null);
   async function checkUpdates() {
     updateState = "checking";
@@ -34,7 +34,10 @@
   async function installUpdate() {
     updateState = "installing";
     try {
-      await invoke("self_update_install");
+      if ((await invoke<string>("self_update_install")) === "queued") {
+        updateState = "queued";
+        toast("Update queued: it installs when the running test or game ends.");
+      }
     } catch (e) {
       updateState = "";
       toastError(e);
@@ -525,7 +528,7 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="row-buttons update-row" oncontextmenu={devMenu}>
         {#if found}
-          <button class="primary" disabled={updateState === "installing"} onclick={installUpdate}>{updateState === "installing" ? "Updating…" : `Update to ${found.version}`}</button>
+          <button class="primary" disabled={updateState === "installing" || updateState === "queued"} onclick={installUpdate}>{updateState === "queued" ? "Update queued" : updateState === "installing" ? "Updating…" : `Update to ${found.version}`}</button>
           <span class="muted">{found.notes}</span>
         {:else}
           <button class="ghost" disabled={updateState === "checking"} onclick={checkUpdates}>{updateState === "checking" ? "Checking…" : "Check for updates"}</button>

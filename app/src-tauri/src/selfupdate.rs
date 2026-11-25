@@ -52,15 +52,49 @@ pub async fn self_update_check(app: tauri::AppHandle) -> Option<Available> {
     find(&app).await.ok().flatten().map(|u| Available::from(&u))
 }
 
+/// An update waits for the running test or game to end (Update was pressed meanwhile).
+static QUEUED: AtomicBool = AtomicBool::new(false);
+
+fn idle() -> bool {
+    !super::control::busy() && super::running_java().is_empty()
+}
+
 /// Download the newer release, check its signature, and install it; Obelisk closes and the new one starts.
+/// While a test or game runs, the update is queued instead ("queued"): it installs once Obelisk has been idle
+/// for a little while (so a chain of tests isn't cut between two runs).
 #[tauri::command]
-pub async fn self_update_install(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn self_update_install(app: tauri::AppHandle) -> Result<String, String> {
     // Restarting mid-run kills a chat's test game and loses its job (2026-11-22: an update cut a gate run short).
-    if super::control::busy() || !super::running_java().is_empty() {
-        return Err("a test or game is running in Obelisk; install once it finishes".into());
+    if !idle() {
+        if !QUEUED.swap(true, Ordering::SeqCst) {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut calm = 0;
+                while calm < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    calm = if idle() { calm + 1 } else { 0 };
+                }
+                let res = match find(&app).await {
+                    Ok(Some(u)) => install(&app, u).await,
+                    Ok(None) => Ok(()),
+                    Err(e) => Err(e),
+                };
+                QUEUED.store(false, Ordering::SeqCst);
+                if let Err(e) = res {
+                    let _ = app.emit("self-update-failed", e);
+                }
+            });
+        }
+        return Ok("queued".into());
     }
     let u = find(&app).await?.ok_or("Obelisk is up to date")?;
-    install(&app, u).await
+    install(&app, u).await.map(|_| String::new())
+}
+
+/// An update is queued behind a running test or game.
+#[tauri::command]
+pub fn self_update_queued() -> bool {
+    QUEUED.load(Ordering::SeqCst)
 }
 
 async fn install(app: &tauri::AppHandle, u: Update) -> Result<(), String> {

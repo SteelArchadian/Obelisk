@@ -64,10 +64,17 @@
     selfUpdate = (await invoke<SelfUpdate | null>("self_update_check").catch(() => null)) ?? selfUpdate;
   }
   listen<SelfUpdate>("self-update", (e) => (selfUpdate = e.payload));
+  // Pressed while a test or game runs: the update waits for it to end, then installs by itself.
+  let updateQueued = $state(false);
+  invoke<boolean>("self_update_queued").then((q) => { if (q) { updateQueued = updating = true; } }).catch(() => {});
+  listen<string>("self-update-failed", (e) => { updateQueued = updating = false; toastError(e.payload); });
   async function installSelfUpdate() {
     updating = true;
     try {
-      await invoke("self_update_install");
+      if ((await invoke<string>("self_update_install")) === "queued") {
+        updateQueued = true;
+        toast("Update queued: it installs when the running test or game ends.");
+      }
     } catch (e) {
       updating = false;
       toastError(e);
@@ -415,7 +422,7 @@
       {#if selfUpdate}
         <button class="self-update" title={`Obelisk ${selfUpdate.version}${selfUpdate.notes ? ": " + selfUpdate.notes : ""}`} disabled={updating} onclick={installSelfUpdate}>
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-          {updating ? "Updating…" : "Update"}
+          {updateQueued ? "Update queued" : updating ? "Updating…" : "Update"}
         </button>
       {/if}
       <div class="winctl">
