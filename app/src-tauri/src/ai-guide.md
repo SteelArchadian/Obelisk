@@ -37,7 +37,7 @@ Steps, in order, as granular as you need:
   track: false to skip).
 - {track: "last" | false | "zombie" | {mob|tag|uuid|pos: [x,y,z], follow: blocks, height, anchor: "eyes"|"center"}}:
   the camera turns to the target every frame (first person or back view), through shots, punches and records; with
-  follow the player glides to stay that far away (height = eye height above its feet). "last" = newest summon.
+  follow the player glides to stay that far away (level with it; height = eye height above its feet). "last" = newest summon.
   While tracking, every shot first checks the target is really in the picture (waits up to 0.6 s for the camera)
   and its result has frame {inFrame, centerOnScreen, cornersOnScreenPct, screenSharePct, occluded, distance,
   screenX/Y %}; a missed shot gets warning "not in shot: ...". Judge only shots with inFrame true.
