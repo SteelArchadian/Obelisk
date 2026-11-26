@@ -272,6 +272,25 @@ impl Game<'_> {
         if let Some(v) = step.get("track") {
             return self.track(v);
         }
+        // Player actions, done the way the game does them for a real player (the harness's Actor).
+        for op in ["where", "around", "aim", "hit", "break", "place", "replace", "use", "hold", "key", "walk"] {
+            if let Some(v) = step.get(op) {
+                let mut r = match v {
+                    Value::Object(m) => Value::Object(m.clone()),
+                    Value::Array(_) if op == "walk" => json!({ "to": v }),
+                    Value::Array(_) => json!({ "pos": v }),
+                    Value::String(s) if op == "key" => json!({ "key": s }),
+                    Value::String(s) if op == "hold" => json!({ "item": s }),
+                    Value::String(s) if op == "around" => json!({ "find": [s] }),
+                    Value::String(s) => json!({ "tag": s }),
+                    _ => json!({}),
+                };
+                r["op"] = json!(op);
+                let out = self.ask(r)?;
+                if let Some(e) = out.get("error").and_then(|e| e.as_str()) { return Err(format!("{op}: {e}")) }
+                return Ok(out);
+            }
+        }
         if let Some(v) = step.get("punch") {
             return self.punch(n(v, "times", 1.0).clamp(1.0, 50.0) as usize, n(v, "every", 1.0).max(0.1),
                 &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"));
@@ -315,7 +334,7 @@ impl Game<'_> {
         if let Some(v) = step.get("shot") {
             return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"), v["hud"].as_bool().unwrap_or(false));
         }
-        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, track, punch, shot, record or settle"))
+        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, track, punch, shot, record, settle, where, around, aim, hit, break, place, replace, use, hold, key or walk"))
     }
 
     /// A screenshot named for this run and the label, so the same label can be compared across runs. The HUD and hand

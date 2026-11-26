@@ -43,6 +43,20 @@ Steps, in order, as granular as you need:
   screenX/Y %}; a missed shot gets warning "not in shot: ...". Judge only shots with inFrame true.
 - {punch: {times: 5, every: 1.0, shots: [0.5, 0.75, 1.75], label: "z"}}: real player punches (swing, attack,
   cooldown); screenshots at those offsets after each punch. Each reports what was hit and its health.
+- Player actions, done as the game does them for a real player (same calls, swing, reach, tool speed; mods react):
+  {where: true}: position, block, eye, yaw/pitch, facing, standing on, mode, reach, slot, holding, hotbar, and what
+  the crosshair is on (block pos/face/id or mob). {around: {radius: 1-8}}: blocks near the player, nearest first,
+  with pos, rel (offset from the player), distance, reach and per-id counts; {around: "oak_log"} or
+  {around: {find: ["stone", "#minecraft:logs"], radius: up to 24}} finds the nearest. {aim: [x,y,z]} | {aim: {at:
+  [x,y,z]} | {mob|tag|uuid}}: turn to it. {hit: [x,y,z]} | {hit: {mob|tag|uuid}} | {hit: {}} (crosshair): one punch.
+  {break: [x,y,z]} | {break: {pos, seconds: 10}}: hold attack until it breaks (reports time and tool).
+  {hold: "diamond_pickaxe"} | {hold: {item, slot, count}}: picks it from the hotbar or puts it in hand.
+  {place: {pos, item?, face?}}: right-click against a neighbouring block. {replace: {pos, item}}: break then place.
+  {use: {pos | mob|tag|uuid | none, ticks}}: right click (open, eat, draw a bow; ticks holds it).
+  {key: "jump"} | {key: {key: "sneak" or any binding name incl. mods', ticks: 40}} press/hold a key binding;
+  {key: {list: true}} lists bindings. {walk: [x,z]} | {walk: {to, sprint, seconds}}: walks there with the movement
+  keys, jumping steps. Out of reach = error with the distance: tp or walk closer. Each action under 25 s.
+  While an action steers, the camera tracker lets go. Raw keys, GUI clicks and menus: use the bridge step.
 - {shot: "label"}: a screenshot now, HUD and hand hidden (F1); {shot: {name: "label", hud: true}} keeps the HUD.
   Shots land in <copy>/screenshots/obt-<run>-<label>.png; the same labels in two runs give comparable pictures.
   Shots are first person unless a camera step chose another view. Visual runs (scenes, shots, punches, records) use
