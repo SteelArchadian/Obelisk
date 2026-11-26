@@ -33,7 +33,14 @@ the window on their own (AFK and respawn cinematics, teleport fly-ins, Dynamic F
 Steps, in order, as granular as you need:
 - {cmd: "<any command>"} runs as the player (op level). {tp: [x,y,z,(yaw,pitch)]}. {wait: seconds} (fractions work).
 - {summon: {mob: "zombie", distance: 3, ai: false, knockback: false, nbt: "..."}}: in front of the player, who faces
-  it; no AI and no knockback by default, so it stays in frame.
+  it; no AI and no knockback by default, so it stays in frame. The camera then tracks it (follow, anchor as below;
+  track: false to skip).
+- {track: "last" | false | "zombie" | {mob|tag|uuid|pos: [x,y,z], follow: blocks, height, anchor: "eyes"|"center"}}:
+  the camera turns to the target every frame (first person or back view), through shots, punches and records; with
+  follow the player glides to stay that far away (height = eye height above its feet). "last" = newest summon.
+  While tracking, every shot first checks the target is really in the picture (waits up to 0.6 s for the camera)
+  and its result has frame {inFrame, centerOnScreen, cornersOnScreenPct, screenSharePct, occluded, distance,
+  screenX/Y %}; a missed shot gets warning "not in shot: ...". Judge only shots with inFrame true.
 - {punch: {times: 5, every: 1.0, shots: [0.5, 0.75, 1.75], label: "z"}}: real player punches (swing, attack,
   cooldown); screenshots at those offsets after each punch. Each reports what was hit and its health.
 - {shot: "label"}: a screenshot now, HUD and hand hidden (F1); {shot: {name: "label", hud: true}} keeps the HUD.

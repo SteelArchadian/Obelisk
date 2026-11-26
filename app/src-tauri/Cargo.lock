@@ -3441,7 +3441,7 @@ dependencies = [
 
 [[package]]
 name = "obelisk"
-version = "0.2.186"
+version = "0.2.188"
 dependencies = [
  "keyring",
  "notify",

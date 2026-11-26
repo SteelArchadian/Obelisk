@@ -612,10 +612,22 @@ fn is_gc_flag(a: &str) -> bool {
     let exact = ["ConcGCThreads", "ParallelGCThreads", "MaxGCPauseMillis", "GCPauseIntervalMillis", "ParallelRefProcEnabled",
         "UseStringDeduplication", "SoftMaxHeapSize", "InitiatingHeapOccupancyPercent", "GCTimeRatio", "MaxTenuringThreshold",
         "UseDynamicNumberOfGCThreads", "UseAdaptiveSizePolicy",
+        // How long soft-referenced caches survive (Optimal 11-26: ModernFix's structure-template cache).
+        "SoftRefLRUPolicyMSPerMB",
         // Some G1 tuning (G1NewSizePercent, G1MaxNewSizePercent) is experimental and needs this first.
         "UnlockExperimentalVMOptions"];
     (name.starts_with("Use") && name.ends_with("GC")) || name.starts_with("G1") || name.starts_with("Shenandoah")
         || (name.starts_with('Z') && name.len() > 1) || name.starts_with("ClassUnloading") || exact.contains(&name)
+}
+
+/// Free physical memory (GlobalMemoryStatusEx's available bytes), as benchlock measures it.
+fn free_ram_gb() -> Option<f64> {
+    #[repr(C)]
+    struct MemStatus { len: u32, load: u32, total: u64, avail: u64, tp: u64, ap: u64, tv: u64, av: u64, ext: u64 }
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GlobalMemoryStatusEx(m: *mut MemStatus) -> i32; }
+    let mut m = MemStatus { len: std::mem::size_of::<MemStatus>() as u32, load: 0, total: 0, avail: 0, tp: 0, ap: 0, tv: 0, av: 0, ext: 0 };
+    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then(|| m.avail as f64 / (1u64 << 30) as f64)
 }
 
 /// Heap size cap for a GC A/B run: the bench's 6 GB memory budget.
@@ -1282,7 +1294,7 @@ pub(crate) fn game_test(args: &Value, jobs: &Shared) -> Result<Value, String> {
     // title_shot: a picture of the title screen (pack logo, menu) before the world opens; Speed Loader waits on the menu.
     let title_shot = o.remove("title_shot").and_then(|v| v.as_bool()).unwrap_or(false);
     if title_shot && !has(&jvm, "menuWait=") { jvm.push(json!("-Dspeedloader.menuWait=12")); }
-    let visual = scene || title_shot || steps.iter().any(|s| ["shot", "punch", "record"].iter().any(|k| s.get(*k).is_some()));
+    let visual = scene || title_shot || steps.iter().any(|s| ["shot", "punch", "record", "track"].iter().any(|k| s.get(*k).is_some()));
     if visual {
         if o.get("visual").is_none() { o.insert("visual".into(), json!(true)); }
         let mut off = o.get("disable_mods").and_then(|a| a.as_array().cloned()).unwrap_or_default();
@@ -2516,7 +2528,12 @@ fn run_game(jobs: Shared, id: u32, dir: PathBuf, lock: String, eta: u64, timeout
                     let waiting: Vec<&str> = q["waiting"].as_array().into_iter().flatten().filter_map(|w| w["owner"].as_str()).collect();
                     match waiting.iter().position(|o| *o == lock.as_str()) {
                         Some(n) if n > 0 => format!("waiting for the bench lock: {n} run{} queued ahead, first {}", if n == 1 { "" } else { "s" }, waiting[0]),
-                        _ => format!("waiting for the bench lock (checking that no game is running in {copy})"),
+                        // benchlock also waits for free memory (RAM_PER_GAME_GB): say so, not "checking" (Overseer 11-26:
+                        // job 3572 sat 25 min with 6 GB free behind that text).
+                        _ => match free_ram_gb() {
+                            Some(gb) if gb < 10.0 => format!("waiting for free memory: {gb:.1} GB free, a test game needs 10 GB"),
+                            _ => format!("waiting for the bench lock (checking that no game is running in {copy})"),
+                        },
                     }
                 })
             }

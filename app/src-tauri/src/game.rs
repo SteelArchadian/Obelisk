@@ -269,6 +269,9 @@ impl Game<'_> {
         if let Some(v) = step.get("summon") {
             return self.summon(v);
         }
+        if let Some(v) = step.get("track") {
+            return self.track(v);
+        }
         if let Some(v) = step.get("punch") {
             return self.punch(n(v, "times", 1.0).clamp(1.0, 50.0) as usize, n(v, "every", 1.0).max(0.1),
                 &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"));
@@ -312,14 +315,22 @@ impl Game<'_> {
         if let Some(v) = step.get("shot") {
             return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"), v["hud"].as_bool().unwrap_or(false));
         }
-        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, punch, shot, record or settle"))
+        Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, track, punch, shot, record or settle"))
     }
 
     /// A screenshot named for this run and the label, so the same label can be compared across runs. The HUD and hand
     /// are hidden (F1) unless hud is true, so a shot shows the world, not the compass bar.
     fn shot(&self, label: &str, hud: bool) -> Result<Value, String> {
         let label: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(40).collect();
-        self.ask(json!({ "op": "shot", "name": format!("obt-{}-{label}", self.started), "hud": hud }))
+        let mut r = self.ask(json!({ "op": "shot", "name": format!("obt-{}-{label}", self.started), "hud": hud }))?;
+        // With a tracked target, say plainly when the picture missed it, so nobody judges an empty shot.
+        let f = &r["frame"];
+        if f["inFrame"] == false {
+            let why = if f["found"] == false { "the target is gone (dead, despawned or out of range)" }
+                else if f["occluded"] == true { "the target is behind blocks" } else { "the target is off screen" };
+            r["warning"] = json!(format!("not in shot: {why}"));
+        }
+        Ok(r)
     }
 
     /// A mob `distance` blocks in front of the player at its feet height, facing it; no AI by default (it stands still).
@@ -333,7 +344,9 @@ impl Game<'_> {
         let (x, y, z) = (p["x"].as_f64().ok_or("no player in the world")?, p["y"].as_f64().unwrap_or(0.0), p["z"].as_f64().unwrap_or(0.0));
         let yaw = p["yaw"].as_f64().unwrap_or(0.0).to_radians();
         let (mx, mz) = (x - yaw.sin() * dist, z + yaw.cos() * dist);
-        let mut nbt = vec!["PersistenceRequired:1b".to_string()];
+        // The newest summon carries the tag the camera tracks.
+        self.cmd("tag @e[tag=obt_target] remove obt_target".into())?;
+        let mut nbt = vec!["PersistenceRequired:1b".to_string(), "Tags:[\"obt_target\"]".to_string()];
         if !v["ai"].as_bool().unwrap_or(false) { nbt.push("NoAI:1b".into()) }
         // Punches don't push it out of frame unless asked.
         if !v["knockback"].as_bool().unwrap_or(false) { nbt.push("attributes:[{id:\"minecraft:generic.knockback_resistance\",base:1.0d}]".into()) }
@@ -343,7 +356,31 @@ impl Game<'_> {
         // Face its eyes so the punch lands and the shot shows it.
         self.cmd(format!("tp @s {x:.2} {y:.2} {z:.2} facing entity @e[type={mob},limit=1,sort=nearest] eyes"))?;
         (self.pause)(0.25)?;
-        Ok(json!({ "summoned": mob, "at": [mx, y, mz], "output": out["output"] }))
+        let mut r = json!({ "summoned": mob, "at": [mx, y, mz], "output": out["output"] });
+        // The camera stays on it from now on (until another summon or a track step), so shots show it.
+        if v["track"].as_bool() != Some(false) {
+            let mut t = json!({ "op": "track", "tag": "obt_target" });
+            for k in ["follow", "anchor", "height"] { if let Some(x) = v.get(k) { t[k] = x.clone() } }
+            r["tracking"] = self.ask(t).unwrap_or_else(|e| json!({ "error": e }));
+        }
+        Ok(r)
+    }
+
+    /// Keep the camera on a target: "last" (the newest summon), false (stop), or {mob|tag|uuid|pos, follow, anchor, height}.
+    fn track(&self, v: &Value) -> Result<Value, String> {
+        let mut t = json!({ "op": "track" });
+        match v {
+            Value::Bool(false) | Value::Null => t["off"] = json!(true),
+            Value::Bool(true) => t["tag"] = json!("obt_target"),
+            Value::String(s) if s == "last" || s == "off" => { if s == "off" { t["off"] = json!(true) } else { t["tag"] = json!("obt_target") } }
+            Value::String(s) => t["mob"] = json!(s),
+            Value::Object(o) => {
+                for k in ["mob", "tag", "uuid", "pos", "follow", "anchor", "height", "off"] { if let Some(x) = o.get(k) { t[k] = x.clone() } }
+                if ["mob", "tag", "uuid", "pos", "off"].iter().all(|k| o.get(*k).is_none()) { t["tag"] = json!("obt_target") }
+            }
+            _ => return Err("track: \"last\", false, a mob id, or {mob|tag|uuid|pos, follow, anchor}".into()),
+        }
+        self.ask(t)
     }
 
     /// `times` punches `every` seconds apart; after each, screenshots at the given offsets (seconds after that punch).
@@ -364,7 +401,7 @@ impl Game<'_> {
                 None => hits.push(self.ask(json!({ "op": "attack" }))?),
                 Some((i, s)) => {
                     let f = self.shot(&format!("{label}{}-{}ms", i + 1, (s * 1000.0).round()), false)?;
-                    files.push(json!({ "punch": i + 1, "after": s, "file": f["file"], "late_ms": ((t0.elapsed().as_secs_f64() - at) * 1000.0).round() }));
+                    files.push(json!({ "punch": i + 1, "after": s, "file": f["file"], "frame": f["frame"], "late_ms": ((t0.elapsed().as_secs_f64() - at) * 1000.0).round() }));
                 }
             }
         }
