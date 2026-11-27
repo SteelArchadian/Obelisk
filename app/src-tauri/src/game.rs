@@ -293,7 +293,7 @@ impl Game<'_> {
         }
         if let Some(v) = step.get("punch") {
             return self.punch(n(v, "times", 1.0).clamp(1.0, 50.0) as usize, n(v, "every", 1.0).max(0.1),
-                &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"));
+                &v.get("shots").and_then(nums).unwrap_or_default(), v["label"].as_str().unwrap_or("punch"), v["good"] != false);
         }
         if let Some(max) = step.get("settle").and_then(|w| w.as_f64()) {
             // Until the player stays put for 2 s: a world can still move them to its spawn after they arrive.
@@ -332,24 +332,97 @@ impl Game<'_> {
             });
         }
         if let Some(v) = step.get("shot") {
-            return self.shot(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"), v["hud"].as_bool().unwrap_or(false));
+            return self.shot_with(v.as_str().or_else(|| v["name"].as_str()).unwrap_or("shot"), if v.is_object() { v } else { &Value::Null });
         }
         Err(format!("unknown step {step}: use cmd, tp, wait, wait_chunks, fly, sample, query, assert, locate, visit, hop, flyover, mobs, chests, summon, track, punch, shot, record, settle, where, around, aim, hit, break, place, replace, use, hold, key or walk"))
     }
 
     /// A screenshot named for this run and the label, so the same label can be compared across runs. The HUD and hand
-    /// are hidden (F1) unless hud is true, so a shot shows the world, not the compass bar.
-    fn shot(&self, label: &str, hud: bool) -> Result<Value, String> {
+    /// are hidden (F1) unless hud is true, so a shot shows the world, not the compass bar. Good shot (on unless
+    /// good:false): waits until the world is joined, no screen is open and nearby chunks are drawn (ready, default 20 s),
+    /// then rejects blank, all-black, all-sky or near-uniform frames and tries again (tries, default 3); minFill sets
+    /// how much of the picture must be scene (neither sky nor black, default 0.06); expect {block:[ids]} needs one
+    /// within 24 blocks, expect {target:true} needs the tracked target in frame. A frame that never passes is kept
+    /// as <name>-rejected.png and the result says why ("good": {ok, why, tries, retried}).
+    fn shot_with(&self, label: &str, o: &Value) -> Result<Value, String> {
+        let hud = o["hud"].as_bool().unwrap_or(false);
         let label: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(40).collect();
-        let mut r = self.ask(json!({ "op": "shot", "name": format!("obt-{}-{label}", self.started), "hud": hud }))?;
-        // With a tracked target, say plainly when the picture missed it, so nobody judges an empty shot.
-        let f = &r["frame"];
-        if f["inFrame"] == false {
-            let why = if f["found"] == false { "the target is gone (dead, despawned or out of range)" }
-                else if f["occluded"] == true { "the target is behind blocks" } else { "the target is off screen" };
-            r["warning"] = json!(format!("not in shot: {why}"));
+        let name = format!("obt-{}-{label}", self.started);
+        let grab = || -> Result<Value, String> {
+            let mut r = self.ask(json!({ "op": "shot", "name": name, "hud": hud }))?;
+            // With a tracked target, say plainly when the picture missed it, so nobody judges an empty shot.
+            let f = &r["frame"];
+            if f["inFrame"] == false {
+                let why = if f["found"] == false { "the target is gone (dead, despawned or out of range)" }
+                    else if f["occluded"] == true { "the target is behind blocks" } else { "the target is off screen" };
+                r["warning"] = json!(format!("not in shot: {why}"));
+            }
+            Ok(r)
+        };
+        if o["good"] == false { return grab() }
+
+        // 1. Ready: in a world, nothing in front (a hud shot may show a screen on purpose), nearby chunks drawn.
+        let max = o["ready"].as_f64().unwrap_or(20.0).clamp(0.0, 120.0);
+        let t0 = Instant::now();
+        let mut not_ready: Option<String>;
+        loop {
+            let mut q = self.query()?;
+            if hud { q["screen"] = Value::Null }
+            match obelisk_core::goodshot::not_ready(&q) {
+                None => { not_ready = None; break }
+                Some(w) => {
+                    not_ready = Some(w);
+                    if t0.elapsed().as_secs_f64() >= max { break }
+                    (self.pause)(0.5)?;
+                }
+            }
         }
-        Ok(r)
+        let waited = (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0;
+        // 2. Scene check that doesn't depend on the picture: an expected block nearby.
+        let mut need_block = None;
+        if let Some(b) = o["expect"].get("block") {
+            let ids: Vec<Value> = match b { Value::Array(a) => a.clone(), Value::String(_) => vec![b.clone()], _ => vec![] };
+            if !ids.is_empty() {
+                let near = self.ask(json!({ "op": "around", "find": ids, "radius": 24, "limit": 1 }))?;
+                let found = near["total"].as_u64().unwrap_or(0) > 0;
+                if !found { need_block = Some(format!("expected block {} not within 24 blocks", b)) }
+            }
+        }
+        let need_target = o["expect"]["target"] == true;
+        let min_fill = o["minFill"].as_f64().map(|f| f.clamp(0.0, 1.0));
+        let tries = o["tries"].as_u64().unwrap_or(3).clamp(1, 10);
+
+        // 3. Grab, judge, retry.
+        let mut retried = Vec::new();
+        for i in 1..=tries {
+            let mut r = grab()?;
+            let file = r["file"].as_str().map(std::path::PathBuf::from).ok_or("the game didn't say where the screenshot went")?;
+            let v = obelisk_core::goodshot::judge_file(&file, min_fill, 4.0)?;
+            let why = if !v.ok { v.why.clone() }
+                else if let Some(w) = &need_block { w.clone() }
+                else if need_target && r["frame"]["inFrame"] != true { "the tracked target is not in frame".into() }
+                else { String::new() };
+            if why.is_empty() || i == tries {
+                let ok = why.is_empty();
+                let mut g = json!({ "ok": ok, "tries": i, "frame": v.json() });
+                if !ok { g["why"] = json!(why) }
+                if !retried.is_empty() { g["retried"] = json!(retried) }
+                if waited > 0.0 { g["waitedS"] = json!(waited) }
+                if let Some(w) = &not_ready { g["notReady"] = json!(format!("still not ready after {max} s: {w}")) }
+                if !ok {
+                    // Never leave a junk frame under the good name.
+                    let bad = (0..).map(|n| file.with_file_name(if n == 0 { format!("{name}-rejected.png") } else { format!("{name}-rejected-{n}.png") }))
+                        .find(|p| !p.exists()).unwrap();
+                    if std::fs::rename(&file, &bad).is_ok() { r["file"] = json!(bad.to_string_lossy().replace('\\', "/")) }
+                    r["warning"] = json!(format!("bad shot after {i} tries: {why}"));
+                }
+                r["good"] = g;
+                return Ok(r);
+            }
+            retried.push(json!(why));
+            (self.pause)(1.0)?;
+        }
+        unreachable!()
     }
 
     /// A mob `distance` blocks in front of the player at its feet height, facing it; no AI by default (it stands still).
@@ -403,7 +476,7 @@ impl Game<'_> {
     }
 
     /// `times` punches `every` seconds apart; after each, screenshots at the given offsets (seconds after that punch).
-    fn punch(&self, times: usize, every: f64, shots: &[f64], label: &str) -> Result<Value, String> {
+    fn punch(&self, times: usize, every: f64, shots: &[f64], label: &str, good: bool) -> Result<Value, String> {
         let mut plan: Vec<(f64, Option<(usize, f64)>)> = Vec::new(); // (when, None = punch | Some(punch, offset) = shot)
         for i in 0..times {
             let t = i as f64 * every;
@@ -419,8 +492,8 @@ impl Game<'_> {
             match what {
                 None => hits.push(self.ask(json!({ "op": "attack" }))?),
                 Some((i, s)) => {
-                    let f = self.shot(&format!("{label}{}-{}ms", i + 1, (s * 1000.0).round()), false)?;
-                    files.push(json!({ "punch": i + 1, "after": s, "file": f["file"], "frame": f["frame"], "late_ms": ((t0.elapsed().as_secs_f64() - at) * 1000.0).round() }));
+                    let f = self.shot_with(&format!("{label}{}-{}ms", i + 1, (s * 1000.0).round()), &json!({ "tries": 1, "ready": 0, "good": good }))?;
+                    files.push(json!({ "punch": i + 1, "after": s, "file": f["file"], "frame": f["frame"], "good": f["good"], "late_ms": ((t0.elapsed().as_secs_f64() - at) * 1000.0).round() }));
                 }
             }
         }

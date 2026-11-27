@@ -221,7 +221,9 @@ fn note(n: &Value) -> Value {
         .find_map(|k| m[*k].as_str().filter(|t| !t.trim().is_empty())).unwrap_or_default();
     json!({
         "id": format!("site-{}", n["id"]), "siteId": n["id"], "kind": kind, "title": title, "text": text, "label": label,
-        "projectId": m["projectId"], "tab": tab, "url": url,
+        // The project id (a number or a numeric string, under either spelling) and its slug, so a click opens it in Obelisk.
+        "projectId": (["projectId", "projectID", "modId"].iter().find_map(|k| m[*k].as_u64().or_else(|| m[*k].as_str()?.parse::<u64>().ok()))),
+        "slug": ((!s("projectSlug").is_empty()).then(|| s("projectSlug"))), "tab": tab, "url": url,
         "read": n["status"].as_u64() == Some(3), "created": n["dateCreated"].as_str().and_then(iso_ms),
         "key": if file.is_empty() { s("projectName") } else { file.clone() },
     })
@@ -328,6 +330,17 @@ mod tests {
             "links": ["https://legacy.curseforge.com/minecraft/mc-mods/kaleidoscope-compat/files/123"] }), &[]).unwrap();
         assert_eq!((n["kind"].as_str(), n["label"].as_str(), n["slug"].as_str()), (Some("file"), Some("Approved"), Some("kaleidoscope-compat")));
         assert_eq!((n["text"].as_str(), n["read"].as_bool(), n["created"].as_u64()), (Some("Looks good."), Some(false), Some(1790000000000)));
+    }
+
+    /// A comment notice must carry what opens the project's comments in Obelisk, not only a browser link.
+    #[test]
+    fn a_comment_notice_opens_in_obelisk() {
+        let n = super::note(&serde_json::json!({ "id": 7, "notificationType": 2, "status": 1,
+            "metadata": { "projectName": "Kaleidoscope", "projectSlug": "kaleidoscope-compat", "authorName": "Bo", "projectId": "1234" } }));
+        assert_eq!((n["kind"].as_str(), n["tab"].as_str(), n["projectId"].as_u64(), n["slug"].as_str()),
+            (Some("comment"), Some("comments"), Some(1234), Some("kaleidoscope-compat")));
+        let n = super::note(&serde_json::json!({ "id": 8, "notificationType": 9, "metadata": { "projectSlug": "kc" } }));
+        assert_eq!((n["projectId"].is_null(), n["slug"].as_str()), (true, Some("kc")));
     }
 
     #[test]

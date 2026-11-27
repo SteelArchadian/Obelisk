@@ -3441,7 +3441,7 @@ dependencies = [
 
 [[package]]
 name = "obelisk"
-version = "0.2.193"
+version = "0.2.194"
 dependencies = [
  "keyring",
  "notify",
@@ -3472,6 +3472,7 @@ dependencies = [
  "iroh-dns",
  "md-5",
  "native-tls",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "sha1",

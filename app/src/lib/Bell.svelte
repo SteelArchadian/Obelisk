@@ -34,7 +34,9 @@
   async function cfGo(n: CfNotification) {
     cfMarkRead([n.id]);
     open = false;
-    const id = n.projectId ?? (n.slug ? await api.cfIdBySlug(n.slug).catch(() => null) : null);
+    // No id or slug given: take the slug from its curseforge.com/<game>/<class>/<slug> link.
+    const slug = n.slug ?? n.url?.match(/curseforge\.com\/(?!members\/|projects\/|private-messages)[^/]+\/[^/]+\/([^/?#]+)/)?.[1] ?? null;
+    const id = n.projectId ?? (slug ? await api.cfIdBySlug(slug).catch(() => null) : null);
     if (id && n.kind !== "message") openProjectById(`cf:${id}`, n.tab ?? (n.kind ? undefined : "comments"));
     else if (n.url) openLink(n.url);
   }

@@ -1363,7 +1363,16 @@ fn run_test(id: u32, steps: Vec<Value>, scenario_timeout: u64, dyno: bool, title
             let t0 = Instant::now();
             loop {
                 match super::game::ask(&gdir, started, json!({ "op": "shot", "name": format!("obt-{started}-title"), "hud": true })) {
-                    Ok(r) => break json!({ "ok": true, "file": r["file"] }),
+                    Ok(r) => {
+                        // Good shot: a title screen that drew nothing yet (black, flat) is taken again.
+                        let file = r["file"].as_str().unwrap_or_default().to_string();
+                        let v = obelisk_core::goodshot::judge_file(Path::new(&file), None, 4.0);
+                        match v {
+                            Ok(v) if !v.ok && t0.elapsed() <= Duration::from_secs(8) => std::thread::sleep(Duration::from_secs(1)),
+                            Ok(v) => break json!({ "ok": v.ok, "file": file, "good": v.json() }),
+                            Err(e) => break json!({ "ok": true, "file": file, "good": { "ok": false, "why": e } }),
+                        }
+                    }
                     Err(e) if t0.elapsed() > Duration::from_secs(8) => break json!({ "ok": false, "error": e }),
                     Err(_) => std::thread::sleep(Duration::from_secs(1)),
                 }

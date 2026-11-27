@@ -61,6 +61,13 @@ Steps, in order, as granular as you need:
   Shots land in <copy>/screenshots/obt-<run>-<label>.png; the same labels in two runs give comparable pictures.
   Shots are first person unless a camera step chose another view. Visual runs (scenes, shots, punches, records) use
   render distance 12; pass options {renderDistance: N} to size it to the job (nearby 6-10, far 10-18). Plain tests: 2.
+  Good shot (default on every shot): first waits until the world is joined, no screen is open and nearby chunks are
+  drawn (ready: seconds, default 20), then judges the picture and retakes it (tries, default 3, 1 s apart) when it is
+  blank, near one flat colour, all black or all sky. Scene check: minFill (0-1, share that must be neither sky nor
+  black, default 0.06), expect {block: [ids]} (one within 24 blocks) or expect {target: true} (tracked target in
+  frame). Result "good": {ok, why, tries, retried, frame stats}; a frame that never passes is renamed
+  obt-<run>-<label>-rejected.png and the shot gets a warning. Never judge a rejected shot. Opt out: good: false
+  (e.g. underwater or deliberately empty shots). Punch shots and the title shot are judged but not delayed or retried.
 - {record: {seconds: 10, label: "x"}} (max 30): watches every frame and reports what you would otherwise have to stare
   at: flicker (spots that change for one frame and snap back), sudden colour or brightness jumps, stutters, and how
   often each part of the screen really updates (an animation stepping at 12/s while the game draws 60). Frames
