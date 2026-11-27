@@ -255,8 +255,8 @@
             onclick={() => toggleWish(wishPack!.id, hit)}>{isWished(wishPack.id, hit.project_id) ? "★" : "☆"}</button>
         {/if}
         <button class="follow fav" class:on={isFavorite(hit.project_id)} aria-pressed={isFavorite(hit.project_id)}
-          title={isFavorite(hit.project_id) ? "In your favorites (click to remove)" : "Save to your favorites, to decide on later from any pack's Favorites tab"}
-          onclick={() => toggleFavorite(hit)}>{isFavorite(hit.project_id) ? "♥" : "♡"}</button>
+          title={isFavorite(hit.project_id) ? "Saved for later (click to remove)" : "Save for later, to decide on from any pack's Saved tab"}
+          aria-label="Save for later" onclick={() => toggleFavorite(hit)}><svg class="bm" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z" fill={isFavorite(hit.project_id) ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
         <InstallButton {hit} big />
       </div>
       <p class="desc">{hit.description}</p>
@@ -429,6 +429,8 @@
   .follow:hover { color: var(--text); }
   .follow.on { color: #ff5c7a; border-color: color-mix(in srgb, #ff5c7a 50%, var(--line)); }
   .follow.wish.on { color: #f5c542; border-color: color-mix(in srgb, #f5c542 50%, var(--line)); }
+  .follow.fav { display: grid; place-items: center; }
+  .follow.fav.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
   .mr-follow { height: 40px; flex: none; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-weight: 600; }
   .mr-follow:hover { color: var(--text); }
   .mr-follow.on { color: var(--accent); }

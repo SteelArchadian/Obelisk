@@ -34,7 +34,7 @@
       <button role="tab" class:on={!showRemoved} onclick={() => (showRemoved = false)}>Saved ({favorites.saved.length})</button>
       <button role="tab" class:on={showRemoved} onclick={() => (showRemoved = true)}>Removed ({favorites.removed.length})</button>
     </div>
-    <input class="search" type="search" placeholder="Search favorites" bind:value={query} />
+    <input class="search" type="search" placeholder="Search saved" bind:value={query} />
   </div>
 
   <div class="list">
@@ -47,10 +47,10 @@
         <span class="chip">{typeName(f.hit.project_type)}</span>
         {#if !showRemoved}<InstallButton hit={f.hit} />{/if}
         <button class="heart" class:on={!showRemoved} onclick={() => toggleFavorite(f.hit)}
-          title={showRemoved ? "Put it back in favorites" : "Remove from favorites"} aria-label={showRemoved ? "Restore" : "Remove"}>{showRemoved ? "♡" : "♥"}</button>
+          title={showRemoved ? "Save it again" : "Remove from saved"} aria-label={showRemoved ? "Restore" : "Remove"}><svg class="bm" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z" fill={!showRemoved ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
       </div>
     {:else}
-      <p class="empty">{query ? "Nothing matches your search." : showRemoved ? "Nothing removed in the last 24 hours." : "No favorites yet. Click the ♡ on a mod, resource pack or shader's page to save it here for later."}</p>
+      <p class="empty">{query ? "Nothing matches your search." : showRemoved ? "Nothing removed in the last 24 hours." : "Nothing saved yet. Click the bookmark on a mod, resource pack or shader's page to save it here for later."}</p>
     {/each}
   </div>
 </div>
@@ -74,6 +74,7 @@
   .chip { flex: none; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); color: var(--text-2); }
   .heart { width: 34px; height: 34px; flex: none; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 18px; line-height: 1; }
   .heart:hover { color: var(--text); }
-  .heart.on { color: #ff5c7a; border-color: color-mix(in srgb, #ff5c7a 50%, var(--line)); }
+  .heart.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+  .heart { display: grid; place-items: center; }
   @media (max-width: 700px) { .chip { display: none; } }
 </style>

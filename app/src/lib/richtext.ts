@@ -3,9 +3,7 @@ import { marked } from "marked";
 
 const YT = /^(?:https?:)?\/\/(?:www\.)?(?:youtube\.com|youtube-nocookie\.com)\/embed\/([\w-]{6,})/;
 
-/** Markdown/HTML project body -> sanitized HTML. Only YouTube iframes survive, rewritten for the player API. */
-export function renderBody(body: string): string {
-  const html = marked.parse(body ?? "", { async: false, gfm: true, breaks: false }) as string;
+function hooks(forPlayer = true) {
   DOMPurify.removeAllHooks();
   DOMPurify.addHook("uponSanitizeElement", (node, data) => {
     if (data.tagName !== "iframe") return;
@@ -15,6 +13,7 @@ export function renderBody(body: string): string {
       el.parentNode?.removeChild(el);
       return;
     }
+    if (!forPlayer) return el.setAttribute("src", `https://www.youtube.com/embed/${m[1]}`);
     el.setAttribute("src", `https://www.youtube-nocookie.com/embed/${m[1]}?enablejsapi=1&rel=0`);
     el.setAttribute("data-yt", "1");
   });
@@ -28,16 +27,43 @@ export function renderBody(body: string): string {
       node.setAttribute("decoding", "async");
     }
   });
-  return DOMPurify.sanitize(html, {
-    ADD_TAGS: ["iframe"],
-    ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "data-yt"],
-  });
 }
 
-/** HTML someone wrote (a comment) -> sanitized HTML, no embeds. */
+const EMBED = { ADD_TAGS: ["iframe"], ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "data-yt"] };
+
+/** Markdown/HTML project body -> sanitized HTML. Only YouTube iframes survive, rewritten for the player API. */
+export function renderBody(body: string): string {
+  const html = marked.parse(body ?? "", { async: false, gfm: true, breaks: false }) as string;
+  hooks();
+  return DOMPurify.sanitize(html, EMBED);
+}
+
+/** A comment's HTML (legacy CurseForge or new) -> sanitized HTML: formatting, quotes, spoilers, pictures and YouTube
+ *  videos kept; scripts, forms and other embeds dropped. */
 export function cleanHtml(html: string): string {
-  DOMPurify.removeAllHooks();
-  return DOMPurify.sanitize(html ?? "", { FORBID_TAGS: ["iframe", "style", "form", "input"] });
+  hooks();
+  return DOMPurify.sanitize(html ?? "", { ...EMBED, FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select"] });
+}
+
+const YT_URL = /^(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{6,})\S*$/;
+const IMG_URL = /^https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp)(?:\?\S*)?$/i;
+
+/** What the user typed in a comment box (Markdown, plus ||spoiler|| and raw <u>) -> the HTML CurseForge stores.
+ *  A picture or YouTube link alone on a line becomes the picture / the video. */
+export function composeHtml(text: string): string {
+  const lines = (text ?? "").replace(/\r\n?/g, "\n").split("\n").map((l) => {
+    const t = l.trim();
+    const yt = YT_URL.exec(t);
+    if (yt) return `\n<iframe src="https://www.youtube.com/embed/${yt[1]}" width="560" height="315" frameborder="0" allowfullscreen></iframe>\n`;
+    if (IMG_URL.test(t)) return `![](${t})`;
+    return l;
+  });
+  let md = lines.join("\n");
+  // ||spoiler|| -> a click-to-show span.
+  md = md.replace(/\|\|([^|\n][^\n]*?)\|\|/g, '<span class="spoiler">$1</span>');
+  const html = marked.parse(md, { async: false, gfm: true, breaks: true }) as string;
+  hooks(false);
+  return DOMPurify.sanitize(html, EMBED).trim();
 }
 
 // ---- YouTube volume memory ----

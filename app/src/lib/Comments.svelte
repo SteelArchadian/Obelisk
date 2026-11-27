@@ -3,7 +3,8 @@
   // bell), the user can comment and reply here; threads they're in are watched for replies (the bell).
   import { invoke } from "@tauri-apps/api/core";
   import { ago } from "./api";
-  import { cleanHtml } from "./richtext";
+  import { cleanHtml, wireYouTube } from "./richtext";
+  import CommentBox from "./CommentBox.svelte";
   import { cf, cfSignIn } from "./account.svelte";
   import { toastError } from "./state.svelte";
 
@@ -44,10 +45,10 @@
     load(0);
   });
 
-  async function post(text: string, parentId: number | null) {
+  async function post(html: string, parentId: number | null) {
     posting = true;
     try {
-      await invoke("cf_comment_post", { projectId, projectName, text, parentId });
+      await invoke("cf_comment_post", { projectId, projectName, html, parentId });
       if (parentId === null) draft = "";
       else { replyDraft = ""; replyTo = null; }
       await load(0);
@@ -57,21 +58,36 @@
     posting = false;
   }
 
-  const focus = (el: HTMLElement) => el.focus();
+  // Quote a comment into the box (the reply box under its thread, or the main box).
+  function quote(c: Comment, threadId: number | null) {
+    const text = (new DOMParser().parseFromString(cleanHtml(c.html), "text/html").body.innerText || "").trim();
+    const who = c.author?.name || c.author?.username || "someone";
+    const q = `> *Quote from **${who}**:*\n` + text.split("\n").map((l) => "> " + l).join("\n") + "\n\n";
+    if (threadId === null) draft = q + draft;
+    else { if (replyTo !== threadId) replyDraft = ""; replyTo = threadId; replyDraft = q + replyDraft; }
+  }
+
+  // Spoilers stay hidden until clicked; videos keep the remembered volume.
+  function bodyClick(e: MouseEvent) {
+    const sp = (e.target as HTMLElement).closest(".spoiler");
+    if (sp && !sp.classList.contains("shown")) { e.preventDefault(); e.stopPropagation(); sp.classList.add("shown"); }
+  }
+  let listEl = $state<HTMLElement>();
+  $effect(() => {
+    comments;
+    if (listEl) queueMicrotask(() => wireYouTube(listEl!));
+  });
   // Pictures that didn't load; those authors (and ones with none) get their first letter instead.
   let broken = $state(new Set<string>());
   const hue = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
   const mine = (c: Comment) => !!cf.account && c.author?.id === cf.account.id;
 </script>
 
-<section class="comments">
+<section class="comments" bind:this={listEl} onclickcapture={bodyClick}>
   {#if enabled === false}
     <p class="muted">Comments are turned off for this project.</p>
   {:else if cf.account}
-    <div class="compose">
-      <textarea rows="3" placeholder={`Comment on ${projectName} as ${cf.account.displayName || cf.account.username}`} bind:value={draft} disabled={posting}></textarea>
-      <button class="primary" disabled={!draft.trim() || posting} onclick={() => post(draft, null)}>{posting && replyTo === null ? "Posting…" : "Post"}</button>
-    </div>
+    <CommentBox bind:value={draft} busy={posting} placeholder={`Comment on ${projectName} as ${cf.account.displayName || cf.account.username}`} onsubmit={(html) => post(html, null)} />
   {:else}
     <div class="signin">
       <span class="muted">Sign in to CurseForge to comment and reply here.</span>
@@ -90,14 +106,13 @@
       {#if cf.account}
         {#if replyTo === c.id}
           <div class="compose reply">
-            <textarea rows="2" placeholder="Write a reply" bind:value={replyDraft} disabled={posting} use:focus></textarea>
-            <div class="row">
-              <button class="ghost" onclick={() => { replyTo = null; replyDraft = ""; }}>Cancel</button>
-              <button class="primary" disabled={!replyDraft.trim() || posting} onclick={() => post(replyDraft, c.id)}>{posting ? "Posting…" : "Reply"}</button>
-            </div>
+            <CommentBox bind:value={replyDraft} busy={posting} rows={2} label="Reply" placeholder="Write a reply" autofocus onsubmit={(html) => post(html, c.id)} oncancel={() => { replyTo = null; replyDraft = ""; }} />
           </div>
         {:else}
-          <button class="link reply-btn" onclick={() => { replyTo = c.id; replyDraft = ""; }}>Reply</button>
+          <div class="acts">
+            <button class="link" onclick={() => { replyTo = c.id; replyDraft = ""; }}>Reply</button>
+            <button class="link" onclick={() => quote(c, c.id)}>Quote</button>
+          </div>
         {/if}
       {/if}
     </article>
@@ -132,9 +147,6 @@
 <style>
   .comments { display: flex; flex-direction: column; gap: 14px; padding-top: 6px; }
   .compose { display: flex; flex-direction: column; gap: 8px; }
-  .compose textarea { width: 100%; resize: vertical; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; }
-  .compose > .primary { align-self: flex-end; }
-  .row { display: flex; gap: 8px; justify-content: flex-end; }
   .signin { display: flex; align-items: center; gap: 12px; background: var(--panel); padding: 10px 12px; border-radius: 8px; }
   .thread { display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
   .comment { display: flex; gap: 10px; }
@@ -145,15 +157,25 @@
   .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--panel); color: var(--muted); }
   .body { margin-top: 2px; overflow-wrap: anywhere; }
-  .body :global(p) { margin: 4px 0; }
-  .body :global(img) { max-width: 100%; }
+  .comments :global(.body p) { margin: 4px 0; }
+  .comments :global(.body img) { max-width: 100%; height: auto; }
+  .comments :global(.body iframe) { width: 100%; max-width: 560px; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 6px; }
+  .comments :global(.body blockquote) { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--line); background: var(--panel); border-radius: 4px; }
+  .comments :global(.body .quote-source) { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .comments :global(.body pre) { background: var(--panel); padding: 8px 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; }
+  .comments :global(.body code) { background: var(--panel); padding: 1px 4px; border-radius: 3px; font-size: 0.92em; }
+  .comments :global(.body pre code) { background: none; padding: 0; }
+  .comments :global(.body ul), .comments :global(.body ol) { margin: 4px 0; padding-left: 22px; }
+  .comments :global(.body h1), .comments :global(.body h2), .comments :global(.body h3), .comments :global(.body h4) { margin: 8px 0 4px; font-size: 1.05em; }
+  .comments :global(.body table) { border-collapse: collapse; }
+  .comments :global(.body td), .comments :global(.body th) { border: 1px solid var(--line); padding: 3px 6px; }
+  .comments :global(.body .spoiler:not(.shown)) { background: var(--muted); color: transparent; border-radius: 3px; cursor: pointer; user-select: none; }
+  .comments :global(.body .spoiler:not(.shown) *) { visibility: hidden; }
   .reply { margin-left: 42px; }
-  .reply-btn { align-self: flex-start; margin-left: 42px; font-size: 13px; }
+  .acts { display: flex; gap: 14px; margin-left: 42px; font-size: 13px; }
   .more { align-self: center; }
   .muted { color: var(--muted); }
   .warn { color: var(--warn, #e0a040); }
-  .primary { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 7px 14px; font-weight: 600; }
-  .primary:disabled { opacity: 0.6; }
   .ghost { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 7px 12px; color: inherit; }
   .link { background: none; border: 0; color: var(--accent); padding: 0; }
 </style>

@@ -86,12 +86,15 @@ pub fn text_html(text: &str) -> String {
         .map(|p| format!("<p>{}</p>", esc(p.trim()).replace('\n', "<br>"))).collect()
 }
 
-/// Post a comment on a project, or a reply under comment `parent`.
-pub fn post_comment(cookie: &str, project_id: u64, text: &str, parent: Option<u64>) -> Result<(), String> {
-    if text.trim().is_empty() {
+/// Post a comment on a project, or a reply under comment `parent`. `body` is the formatted HTML the app's comment box
+/// made (already sanitized there); anything not starting with a tag is treated as plain text.
+pub fn post_comment(cookie: &str, project_id: u64, body: &str, parent: Option<u64>) -> Result<(), String> {
+    let body = body.trim();
+    if body.is_empty() {
         return Err("write something first".into());
     }
-    let body = json!({ "entityId": project_id, "body": text_html(text), "parentId": parent, "bodyType": "RawHtml" });
+    let html = if body.starts_with('<') { body.to_string() } else { text_html(body) };
+    let body = json!({ "entityId": project_id, "body": html, "parentId": parent, "bodyType": "RawHtml" });
     match call("POST", "/comments", Some(cookie), Some(body))?.0 {
         200..=299 => Ok(()),
         401 | 403 => Err("CurseForge says you're not signed in; sign in again".into()),

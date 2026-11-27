@@ -166,7 +166,8 @@ export function installDevMock() {
       ];
       case "cf_notifications_read": return null;
       case "cf_comment_post": return null;
-      case "cf_comments": return { total: 2, me: null, comments: [
+      case "cf_comments": return { total: 3, me: null, comments: [
+        { id: 8, html: '<blockquote class="source-quote"><div class="quote-source">Quote from <a class="quote-author" href="/members/sam">Sam</a></div>Love the stoves!</blockquote><div><strong>Bold</strong> <em>italic</em> <span style="text-decoration:underline">under</span> <span class="spoiler">secret ending</span></div><pre>code block<br>  indented</pre><img src="http://i.imgur.com/quXJZzx.png"><br><iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ?wmode=transparent"></iframe><a href="/linkout?remoteUrl=https%253a%252f%252fexample.com">link</a>', posted: now - 2 * 86400_000, pinned: false, author: { id: 11, username: "old", name: "Legacy" }, replies: [] },
         { id: 5, html: "<p>Does this work with <b>Farmer's Delight</b>?</p>", posted: now - 86400_000, pinned: false, author: { id: 7, username: "steel", name: "SteelArchadian" },
           replies: [{ id: 6, html: "<p>Try the 1.2 build, it fixes that.</p>", posted: now - 3600_000, pinned: false, author: { id: 9, username: "alex", name: "Alex" } }] },
         { id: 4, html: "<p>Love the stoves!<script>alert(1)</script></p>", posted: now - 5 * 86400_000, pinned: true, author: { id: 10, username: "sam", name: "Sam" }, replies: [] },

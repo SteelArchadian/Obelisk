@@ -806,7 +806,7 @@
         <button role="tab" class:on={sub === k.kind} onclick={() => setSub(k.kind)}>{k.label} ({content[k.kind].length})</button>
       {/each}
       <button role="tab" class:on={sub === "worlds"} onclick={() => setSub("worlds")}>Worlds ({worlds.length})</button>
-      <button role="tab" class:on={sub === "favorites"} onclick={() => setSub("favorites")}>♥ Favorites ({favorites.saved.length})</button>
+      <button role="tab" class:on={sub === "favorites"} onclick={() => setSub("favorites")}>Saved for later ({favorites.saved.length})</button>
       {#if co?.shared}<button role="tab" class:on={sub === "wishes"} onclick={() => setSub("wishes")}>★ Wish lists ({wishCount})</button>{/if}
     </div>
     {#if KINDS.some((k) => k.kind === sub) && !viewTrash}

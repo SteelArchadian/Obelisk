@@ -155,10 +155,10 @@ pub async fn cf_comments(app: tauri::AppHandle, project_id: u64, project_name: S
 
 /// Post a comment (or a reply under `parent_id`); its thread is watched for replies from then on.
 #[tauri::command]
-pub async fn cf_comment_post(app: tauri::AppHandle, project_id: u64, project_name: String, text: String, parent_id: Option<u64>) -> Result<(), String> {
+pub async fn cf_comment_post(app: tauri::AppHandle, project_id: u64, project_name: String, html: String, parent_id: Option<u64>) -> Result<(), String> {
     blocking(move || {
         let (c, me) = signed_in(&app)?;
-        cfsite::post_comment(&c, project_id, &text, parent_id)?;
+        cfsite::post_comment(&c, project_id, &html, parent_id)?;
         // The new comment's thread: the parent's, or (a new comment) the newest of this user's on the first page.
         if let Ok(v) = cfsite::comments(project_id, 0, Some(&c)) {
             let mut st = load();
