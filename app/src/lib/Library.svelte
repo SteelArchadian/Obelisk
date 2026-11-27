@@ -141,16 +141,16 @@
 
 <div class="library">
   <div class="toolbar">
-    <button class="icon" title="Create a new profile (opens Prism's New Instance window)" aria-label="Create a profile" onclick={createProfile}>
+    <button class="icon" title="New profile" aria-label="Create a profile" onclick={createProfile}>
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" /></svg>
     </button>
-    <button class="icon" title="Import a modpack: a friend's share code, or a .zip / .mrpack file" aria-label="Import a modpack" onclick={() => (app.packImport = "")}>
+    <button class="icon" title="Import a modpack" aria-label="Import a modpack" onclick={() => (app.packImport = "")}>
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>
-    <button class="icon" title="Join a friend's shared pack (paste their invite code)" aria-label="Join a shared pack" onclick={() => (joining = joining === null ? "" : null)}>
+    <button class="icon" title="Join a shared pack" aria-label="Join a shared pack" onclick={() => (joining = joining === null ? "" : null)}>
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="9" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M3 19c.8-3.2 3.2-5 6-5s5.2 1.8 6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /><path d="M18 8v6M15 11h6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg>
     </button>
-    <button class="icon" title="Sync profiles from CurseForge and other launchers" aria-label="Sync profiles" onclick={() => { app.settingsSection = "sync"; app.page = "settings"; }}>
+    <button class="icon" title="Sync profiles" aria-label="Sync profiles" onclick={() => { app.settingsSection = "sync"; app.page = "settings"; }}>
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M20 12a8 8 0 0 1-14.3 4.9M4 12a8 8 0 0 1 14.3-4.9M18 3v4h-4M6 21v-4h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>
     <div class="spacer"></div>
@@ -202,7 +202,7 @@
       </div>
     {/if}
 
-    <button class="icon" class:on={trash !== null} title="Modpack trash: deleted modpacks" aria-label="Modpack trash"
+    <button class="icon" class:on={trash !== null} title="Trash" aria-label="Modpack trash"
       onclick={() => (trash === null ? loadTrash() : (trash = null))}>
       <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>

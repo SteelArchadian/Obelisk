@@ -275,8 +275,7 @@
       </section>
     </div>
     <footer>
-      <button class="ghost" disabled={!path || defaults === null || defaults === text} onclick={restoreDefault}
-        title="Back to how this file was before Obelisk first opened it">Restore default</button>
+      <button class="ghost" disabled={!path || defaults === null || defaults === text} onclick={restoreDefault}>Restore default</button>
       <span class="muted small grow">{invalid.size ? "" : dirty ? "Unsaved changes" : "Changes apply the next time the game starts."}</span>
       {#if invalid.size}<span class="err small grow">{invalid.size} invalid value{invalid.size === 1 ? "" : "s"}</span>{/if}
       <button class="ghost" disabled={!dirty} onclick={() => { text = saved; invalid = new Map(); }}>Revert</button>

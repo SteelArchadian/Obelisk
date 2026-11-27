@@ -39,7 +39,7 @@
 {#if app.packMenu}
   {@const m = app.packMenu}
   <div class="ctx" style:left="{m.x}px" style:top="{m.y}px" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
-    {#if running[m.inst.id]}<button class="danger" onclick={() => act(kill)} title="Force-close the game (for when it's frozen)">■ Kill instance</button>{:else}<button onclick={() => act(play)}>▶ Play</button>{/if}
+    {#if running[m.inst.id]}<button class="danger" onclick={() => act(kill)} title="Force-close">■ Kill instance</button>{:else}<button onclick={() => act(play)}>▶ Play</button>{/if}
     <button onclick={() => act((i) => { setTarget(i); app.current = i; openBrowse("mod"); })}>＋ Add Content</button>
     <hr />
     <button onclick={() => act((i) => invoke("reveal", { instanceId: i.id, sub: "" }))}>Open Folder ↗</button>

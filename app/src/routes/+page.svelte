@@ -109,6 +109,7 @@
 
   let showWelcome = $state(false);
   let resizeTimer: ReturnType<typeof setTimeout>;
+  let winW = $state(1200);
   let searchEl = $state<HTMLInputElement>();
   // Block themes paint a pixel cave behind the app (redrawn when the window size or theme changes).
   let sceneEl = $state<HTMLCanvasElement>();
@@ -357,7 +358,7 @@
 </script>
 
 <!-- Re-read Prism's instances when the window regains focus, so packs imported or changed in Prism show up. -->
-<svelte:window onresize={() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => size++, 150); }} onmouseup={onMouseUp} onkeydown={onKey} oncontextmenu={onContextMenu} onclick={() => (accountMenu = false)} onfocus={() => { syncInstances(); refreshInstalled(); loadAccounts(); refreshRunning(); checkSelfUpdate(); }} />
+<svelte:window bind:innerWidth={winW} onresize={() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => size++, 150); }} onmouseup={onMouseUp} onkeydown={onKey} oncontextmenu={onContextMenu} onclick={() => (accountMenu = false)} onfocus={() => { syncInstances(); refreshInstalled(); loadAccounts(); refreshRunning(); checkSelfUpdate(); }} />
 <svelte:document onmousedown={(e) => (e.button === 3 || e.button === 4) && e.preventDefault()} />
 
 <canvas class="scene" bind:this={sceneEl} aria-hidden="true"></canvas>
@@ -410,7 +411,7 @@
       <span class="brand" data-tauri-drag-region>OBELISK</span>
       <nav class="nav">
         {#each NAV as n (n.page)}
-          <button class:on={app.page === n.page} title={n.label} onclick={() => go(n.page)}><Icon name={n.icon} /> <span class="nav-label">{n.label}</span></button>
+          <button class:on={app.page === n.page} title={winW <= 900 ? n.label : undefined} onclick={() => go(n.page)}><Icon name={n.icon} /> <span class="nav-label">{n.label}</span></button>
         {/each}
       </nav>
       <form class="searchbox" class:filled={!!app.browseQuery} onsubmit={submitSearch}>

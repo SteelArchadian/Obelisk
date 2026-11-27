@@ -41,7 +41,7 @@
 
 {#if settings.music.on}
   <button class="note" class:paused={music.paused} aria-label={music.paused ? "Resume music" : "Pause music"}
-    title={music.error || (music.paused ? "Music paused: click to resume" : `${music.title ? `Playing ${music.title}. ` : ""}Click to pause`)}
+    title={music.error || (music.paused ? "Music paused" : (music.title ? `Playing ${music.title}` : "Music"))}
     onclick={() => (music.paused = !music.paused)} oncontextmenu={(e) => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); at = { x: r.right + 8, y: innerHeight - r.bottom }; menu = !menu; }}>
     <svg viewBox="0 0 24 24" width="20" height="20"><path d="M9 18V6l10-2v12M9 18a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM19 16a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg>
     {#if music.paused}<i></i>{/if}

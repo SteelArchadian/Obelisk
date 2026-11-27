@@ -712,19 +712,19 @@
             <p class="collab-with">
               <span class="muted">Collaborating with</span>
               {#each co.members.filter((m) => m.id !== co.me) as m (m.id)}<span class="who">{m.name || "Friend"}{m.id === co.owner ? " (owner)" : ""}</span>{:else}<span class="muted">nobody yet</span>{/each}
-              {#if co.owner === co.me}<button class="gear" title="Collaboration: invite people, see who's in, remove someone" aria-label="Collaboration settings" onclick={() => (app.sharePack = current)}>⚙</button>{/if}
+              {#if co.owner === co.me}<button class="gear" title="Collaboration" aria-label="Collaboration settings" onclick={() => (app.sharePack = current)}>⚙</button>{/if}
             </p>
           {/if}
         </div>
         <div class="hero-actions">
-          <button class="ghost" title="Share this pack: a code for a friend, or a zip" onclick={() => (app.packShare = current)}>⇪ Share</button>
-          <button class="ghost" title="Profile options" onclick={() => (app.profileDialog = { kind: "options", inst: current })}>⚙ Options</button>
-          {#if heldCount}<button class="ghost" style:color="var(--err-text)" title="Files Obelisk kept out of this pack, and why" onclick={() => window.dispatchEvent(new CustomEvent("held-review", { detail: current.id }))}>⚠ {heldCount} blocked</button>{/if}
+          <button class="ghost" onclick={() => (app.packShare = current)}>⇪ Share</button>
+          <button class="ghost" onclick={() => (app.profileDialog = { kind: "options", inst: current })}>⚙ Options</button>
+          {#if heldCount}<button class="ghost" style:color="var(--err-text)" title="Files kept out of this pack" onclick={() => window.dispatchEvent(new CustomEvent("held-review", { detail: current.id }))}>⚠ {heldCount} blocked</button>{/if}
           {#if running[current.id]}
-            <button class="play stop" onclick={stop} title="Force-close the game (for when it's frozen)">{confirmKill ? "Click again to force-close" : "■ Stop"}</button>
+            <button class="play stop" onclick={stop} title="Force-close">{confirmKill ? "Click again to force-close" : "■ Stop"}</button>
           {:else}
             {#if starting[current.id]}
-              <button class="play stop" onclick={() => cancel(current)} title="Stop it loading (nothing is lost)">■ Abort</button>
+              <button class="play stop" onclick={() => cancel(current)}>■ Abort</button>
             {:else}
               <button class="play" onclick={play}>Play</button>
             {/if}
@@ -806,11 +806,11 @@
         <button role="tab" class:on={sub === k.kind} onclick={() => setSub(k.kind)}>{k.label} ({content[k.kind].length})</button>
       {/each}
       <button role="tab" class:on={sub === "worlds"} onclick={() => setSub("worlds")}>Worlds ({worlds.length})</button>
-      <button role="tab" class:on={sub === "favorites"} onclick={() => setSub("favorites")}>Saved for later ({favorites.saved.length})</button>
+      <button role="tab" class:on={sub === "favorites"} onclick={() => setSub("favorites")}>Bookmarks ({favorites.saved.length})</button>
       {#if co?.shared}<button role="tab" class:on={sub === "wishes"} onclick={() => setSub("wishes")}>★ Wish lists ({wishCount})</button>{/if}
     </div>
     {#if KINDS.some((k) => k.kind === sub) && !viewTrash}
-      <button class="ghost trash-btn" onclick={() => { viewTrash = true; selected = new Set(); }} title="Trash: recently deleted content" aria-label="Trash">
+      <button class="ghost trash-btn" onclick={() => { viewTrash = true; selected = new Set(); }} title="Trash" aria-label="Trash">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
         {#if trash.length}<span class="fcount">{trash.length}</span>{/if}
       </button>
@@ -1006,7 +1006,7 @@
               {@const hit = !!query.trim() && b.name.toLowerCase().includes(query.trim().toLowerCase())}
               <div class="nested" class:hit role="row" title="Packed inside {item.name}: it comes and goes with it">
                 <span></span>
-                <div class="nname"><span class="elbow" aria-hidden="true"></span><span class="ntag">Bundled</span><button class="nlink" title="Open {b.name}'s page to look it over" onclick={() => openBundled(b, item)}>{b.name}</button>{#if b.version}<small>{b.version}</small>{/if}</div>
+                <div class="nname"><span class="elbow" aria-hidden="true"></span><span class="ntag">Bundled</span><button class="nlink" title="Open {b.name}" onclick={() => openBundled(b, item)}>{b.name}</button>{#if b.version}<small>{b.version}</small>{/if}</div>
               </div>
             {/each}
           {:else}

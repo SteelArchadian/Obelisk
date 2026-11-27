@@ -242,21 +242,21 @@
         <SourceBadges hit={siteHit} big links={siteLinks} />
         <div class="spacer"></div>
         {#if mr.account && mrId}
-          <button class="mr-follow mrb" class:on={mr.follows.has(mrId!)} title={mr.follows.has(mrId!) ? "Following on Modrinth (click to unfollow)" : "Follow on Modrinth"}
+          <button class="mr-follow mrb" class:on={mr.follows.has(mrId!)} title="Modrinth follow"
             aria-pressed={mr.follows.has(mrId!)} onclick={() => toggleFollow(mrId!)}>{mr.follows.has(mrId!) ? "✓ Following" : "+ Follow"}</button>
         {/if}
         {#if cf.account && cfId}
-          <button class="mr-follow heart cfb" class:on={cf.favorites.has(Number(cfId))} title={cf.favorites.has(Number(cfId)) ? "In your CurseForge favorites (click to remove)" : "Add to your CurseForge favorites"}
+          <button class="mr-follow heart cfb" class:on={cf.favorites.has(Number(cfId))} title="CurseForge favorite"
             aria-pressed={cf.favorites.has(Number(cfId))} aria-label="CurseForge favorite" onclick={() => toggleCfFavorite(Number(cfId))}>{cf.favorites.has(Number(cfId)) ? "♥" : "♡"}</button>
         {/if}
         {#if wishPack}
           <button class="follow wish" class:on={isWished(wishPack.id, hit.project_id)} aria-pressed={isWished(wishPack.id, hit.project_id)}
-            title={isWished(wishPack.id, hit.project_id) ? `On your wish list for ${wishPack.name} (click to take it off)` : `Wish-list it for ${wishPack.name}, so everyone in the pack can talk it over`}
+            title="Wish list" aria-label="Wish list"
             onclick={() => toggleWish(wishPack!.id, hit)}>{isWished(wishPack.id, hit.project_id) ? "★" : "☆"}</button>
         {/if}
         <button class="follow fav" class:on={isFavorite(hit.project_id)} aria-pressed={isFavorite(hit.project_id)}
-          title={isFavorite(hit.project_id) ? "Saved for later (click to remove)" : "Save for later, to decide on from any pack's Saved tab"}
-          aria-label="Save for later" onclick={() => toggleFavorite(hit)}><svg class="bm" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z" fill={isFavorite(hit.project_id) ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+          title="Bookmark"
+          aria-label="Bookmark" onclick={() => toggleFavorite(hit)}><svg class="bm" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z" fill={isFavorite(hit.project_id) ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
         <InstallButton {hit} big />
       </div>
       <p class="desc">{hit.description}</p>

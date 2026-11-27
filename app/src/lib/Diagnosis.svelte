@@ -205,10 +205,10 @@
     <div class="lhead">
       <h4>Crashes and logs</h4>
       <span class="spacer"></span>
-      <button class="copy" title="Re-read crashes and logs (Ctrl+R)" aria-label="Refresh" onclick={() => load(instanceId, true)}>
+      <button class="copy" title="Refresh (Ctrl+R)" aria-label="Refresh" onclick={() => load(instanceId, true)}>
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
       </button>
-      <button class="copy" title="Copy this diagnosis (summary, findings and the log lines behind them)" aria-label="Copy diagnosis" disabled={!diag || pick?.type !== "report"} onclick={copySynopsis}>
+      <button class="copy" title="Copy diagnosis" aria-label="Copy diagnosis" disabled={!diag || pick?.type !== "report"} onclick={copySynopsis}>
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg>
       </button>
     </div>
@@ -269,7 +269,7 @@
             {#if f.action && (f.action !== "disable" || itemFor(f.target)?.enabled)}
               <button class="primary" onclick={() => act(f)}>{f.action === "disable" ? `Disable ${itemFor(f.target)?.name ?? "mod"}` : ACTION_LABEL[f.action]}</button>
             {/if}
-            <button class="copy one" title="Copy just this issue, with its log lines" aria-label="Copy this issue" onclick={() => copyOne(f)}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg></button>
+            <button class="copy one" title="Copy issue" aria-label="Copy this issue" onclick={() => copyOne(f)}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg></button>
           </article>
         {/each}
 
@@ -319,7 +319,7 @@
             {#each t.byMod as m (m.who)}
               {@const s = t.steps.find((x) => x.who === m.who && x.note)}
               {#if s}
-                <article class="finding info"><div class="ftext"><strong>Why {m.who} took {secs(m.seconds)}</strong><p>{s.note}</p></div><button class="copy one" title="Copy just this issue, with its log lines" aria-label="Copy this issue" onclick={() => copyOne({ title: `Why ${m.who} took ${secs(m.seconds)}`, detail: s.note, lines: t.steps.filter((x) => x.who === m.who).flatMap((x) => [`${secs(x.seconds)} wait:`, x.before, x.after]) })}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg></button></article>
+                <article class="finding info"><div class="ftext"><strong>Why {m.who} took {secs(m.seconds)}</strong><p>{s.note}</p></div><button class="copy one" title="Copy issue" aria-label="Copy this issue" onclick={() => copyOne({ title: `Why ${m.who} took ${secs(m.seconds)}`, detail: s.note, lines: t.steps.filter((x) => x.who === m.who).flatMap((x) => [`${secs(x.seconds)} wait:`, x.before, x.after]) })}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg></button></article>
               {/if}
             {/each}
             <details class="raw">
@@ -337,7 +337,7 @@
               <div class="group">
                 <div class="stext"><strong>{it?.name ?? g.who} <span class="muted">×{g.count}</span></strong><small class="sample">{g.sample}</small></div>
                 {#if it}<button class="ghost" onclick={() => onOpen(it)}>Page</button>{/if}
-                <button class="copy one" title="Copy just this issue, with its log lines" aria-label="Copy this issue" onclick={() => copyOne({ title: `${it?.name ?? g.who}: ${g.count} error line${g.count === 1 ? "" : "s"}`, lines: [g.sample, ...diag!.excerpt.filter((l) => l.includes(g.who)).slice(0, 10)] })}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg></button>
+                <button class="copy one" title="Copy issue" aria-label="Copy this issue" onclick={() => copyOne({ title: `${it?.name ?? g.who}: ${g.count} error line${g.count === 1 ? "" : "s"}`, lines: [g.sample, ...diag!.excerpt.filter((l) => l.includes(g.who)).slice(0, 10)] })}><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" /></svg></button>
               </div>
             {/each}
           </div>

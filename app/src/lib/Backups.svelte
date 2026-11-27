@@ -124,7 +124,7 @@
                     {#each list as c (c.path)}
                       <li>
                         <span class="k {c.kind}">{VERB[c.kind]}</span> <span class="lbl" title={c.path}>{c.label}</span>
-                        <button class="link" disabled={busy} onclick={() => undo(b, c)} title="Put this back the way it was before this backup">{UNDO[c.kind]}</button>
+                        <button class="link" disabled={busy} onclick={() => undo(b, c)}>{UNDO[c.kind]}</button>
                       </li>
                       {#if c.details?.length}<li class="det"><ul>{#each c.details as d, i (i)}<li>{d}</li>{/each}</ul></li>{/if}
                     {/each}

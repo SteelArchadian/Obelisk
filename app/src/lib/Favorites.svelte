@@ -34,23 +34,23 @@
       <button role="tab" class:on={!showRemoved} onclick={() => (showRemoved = false)}>Saved ({favorites.saved.length})</button>
       <button role="tab" class:on={showRemoved} onclick={() => (showRemoved = true)}>Removed ({favorites.removed.length})</button>
     </div>
-    <input class="search" type="search" placeholder="Search saved" bind:value={query} />
+    <input class="search" type="search" placeholder="Search bookmarks" bind:value={query} />
   </div>
 
   <div class="list">
     {#each list as f (f.hit.project_id)}
       <div class="item">
-        <button class="open" onclick={() => pushOverlay({ kind: "project", hit: f.hit })} title="Open its page">
+        <button class="open" onclick={() => pushOverlay({ kind: "project", hit: f.hit })}>
           <span class="ic">{#if f.hit.icon_url}<img src={f.hit.icon_url} alt="" loading="lazy" />{:else}<NoIcon />{/if}</span>
           <span class="txt"><strong data-link={projectUrl(f.hit)} data-link-label="link">{f.hit.title}</strong><small>{#if f.hit.author}<span data-link={authorUrl(f.hit)} data-link-label="author link">by {f.hit.author}</span> · {/if}{showRemoved ? `removed ${since(f.removedMs ?? 0)}` : `saved ${since(f.addedMs)}`}</small></span>
         </button>
         <span class="chip">{typeName(f.hit.project_type)}</span>
         {#if !showRemoved}<InstallButton hit={f.hit} />{/if}
         <button class="heart" class:on={!showRemoved} onclick={() => toggleFavorite(f.hit)}
-          title={showRemoved ? "Save it again" : "Remove from saved"} aria-label={showRemoved ? "Restore" : "Remove"}><svg class="bm" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z" fill={!showRemoved ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+          title={showRemoved ? "Bookmark" : "Remove bookmark"} aria-label={showRemoved ? "Restore" : "Remove"}><svg class="bm" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z" fill={!showRemoved ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
       </div>
     {:else}
-      <p class="empty">{query ? "Nothing matches your search." : showRemoved ? "Nothing removed in the last 24 hours." : "Nothing saved yet. Click the bookmark on a mod, resource pack or shader's page to save it here for later."}</p>
+      <p class="empty">{query ? "Nothing matches your search." : showRemoved ? "Nothing removed in the last 24 hours." : "No bookmarks yet."}</p>
     {/each}
   </div>
 </div>
