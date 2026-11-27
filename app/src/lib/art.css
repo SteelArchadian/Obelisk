@@ -85,6 +85,7 @@
   padding: 1px 10px !important;
   min-height: 40px;
 }
+:root[data-art][data-skin="block"] .tools .tool { border-width: 6px !important; border-image-width: 6px !important; padding: 0 7px !important; min-height: 34px; }
 :root[data-art][data-skin="block"] :is(.ghost, .tool, .hopper, .trash-btn, .add-content, .nav button, [role="tab"], .subtabs button, .toolbar button.icon, .top .winctl button):hover:not(:disabled) {
   filter: drop-shadow(0 3px 3px rgb(0 0 0 / 0.4)) brightness(1.08);
 }

@@ -161,7 +161,7 @@
 <style>
   .box { display: flex; flex-direction: column; gap: 6px; }
   .tools { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
-  .tool { background: none; border: 1px solid transparent; border-radius: 4px; color: inherit; min-width: 28px; height: 26px; padding: 0 6px; font-size: 13px; }
+  .tool { background: none; border: 1px solid transparent; border-radius: 4px; color: inherit; min-width: 28px; min-height: 26px; padding: 0 6px; line-height: 1; font-size: 13px; }
   .tool:hover:not(:disabled) { background: var(--panel); border-color: var(--line); }
   .tool.b { font-weight: 800; }
   .tool.i { font-style: italic; }

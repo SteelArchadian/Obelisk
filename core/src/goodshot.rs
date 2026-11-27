@@ -30,9 +30,12 @@ impl Verdict {
     }
 }
 
-/// Sky: bright-ish and blue-dominant (day sky), or the pale grey-white of fog/overcast at the top edge of the world.
+/// Sky: bright-ish and blue-dominant (day sky), dark navy (night sky, also under night vision), or the pale
+/// grey-white of fog/overcast at the top edge of the world.
 fn is_sky(r: f64, g: f64, b: f64) -> bool {
-    (b > r + 18.0 && b >= g - 4.0 && b > 90.0) || (r > 200.0 && g > 200.0 && b > 200.0 && (r - b).abs() < 12.0)
+    (b > r + 18.0 && b >= g - 4.0 && b > 90.0)
+        || (b <= 130.0 && b > 22.0 && b > r * 1.6 && b > g * 1.2)
+        || (r > 200.0 && g > 200.0 && b > 200.0 && (r - b).abs() < 12.0)
 }
 
 /// Judge RGBA (or RGB with `ch` = 3) pixels. Samples a grid of about 40k pixels, so a 4K frame costs the same as a small one.
@@ -137,6 +140,22 @@ mod tests {
         let grad: Vec<u8> = (0..h).flat_map(|y| (0..w).flat_map(move |_| [90 + (y / 4) as u8, 140 + (y / 6) as u8, 255, 255])).collect();
         let v = judge(&grad, w, h, 4, None);
         assert!(!v.ok && v.why.contains("sky"), "sky gradient: {v:?}");
+        // Night sky looking straight up: dark navy stripes (moire) with near-black between, and a tiny moon.
+        let night: Vec<u8> = (0..h).flat_map(|y| (0..w).flat_map(move |x| {
+            let k = ((x + y) % 6) as u8;
+            if (150..170).contains(&x) && (80..100).contains(&y) { [220, 225, 235, 255] } else { [6 + k * 4, 14 + k * 8, 30 + k * 14, 255] }
+        })).collect();
+        let v = judge(&night, w, h, 4, None);
+        assert!(!v.ok, "night sky: {v:?}");
+    }
+
+    /// Judge real screenshots: OBELISK_JUDGE="a.png;b.png" cargo test judge_real -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn judge_real() {
+        for f in std::env::var("OBELISK_JUDGE").unwrap_or_default().split(';').filter(|f| !f.is_empty()) {
+            println!("{f}: {}", judge_file(Path::new(f), None, 0.0).map(|v| v.json().to_string()).unwrap_or_else(|e| e));
+        }
     }
 
     #[test]

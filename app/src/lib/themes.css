@@ -112,6 +112,7 @@
   color: #fff !important;
 }
 :root[data-skin="block"] :is(.nav, .tabs, .subtabs) { gap: 10px !important; border-bottom: 0 !important; }
+:root[data-skin="block"] .tools .tool { padding: 5px 9px !important; min-height: 28px; }
 :root[data-skin="block"] .nav button { font-size: 16px !important; padding: 8px 16px !important; }
 :root[data-skin="block"] :is(.nav button, [role="tab"]) .icon { width: 20px; height: 20px; color: var(--heading); filter: drop-shadow(0 0 3px var(--glow)); }
 :root[data-skin="block"] .stats .icon, :root[data-skin="block"] .finding .icon { color: var(--accent-hover); filter: drop-shadow(0 0 4px var(--glow)); }
